@@ -7,26 +7,43 @@ decisões e contexto de negócio vivem em `inovatv_central`
 e `DESIGN_DECISIONS.md`, Decisão 050/051) — este repositório não
 duplica esse conteúdo, só a implementação.
 
-## Estado atual: Fase 4 — primeira integração real com o Rocket (código pronto, ainda não testado)
+## Estado atual: Fase 4 — primeira integração real com o Rocket (concluída e validada com evidência real, 2026-08-11)
 
 Implementa as duas únicas chamadas GET aprovadas para esta fase —
 **Cenário B** (`match`) e **Cenário C** (`status`). Deliberadamente,
 nesta fase:
 
 - **Somente leitura.** Nenhum `POST`/`PATCH`/`DELETE` no Rocket, em
-  nenhuma hipótese. Nenhuma criação/edição de cliente.
+  nenhuma hipótese. Nenhuma criação/edição de cliente. Confirmado —
+  só GETs foram executados durante toda a validação.
 - **Nenhum vínculo persistido.** Nenhuma tabela, nenhuma migration.
 - **Nenhum cache/coalescência de requisições** — fica para fase
-  própria.
-- `ROCKET_BASE_URL` e `ROCKET_API_KEY` vêm exclusivamente de secrets
-  destas duas funções — nunca aparecem em código, nunca são
-  devolvidos em nenhuma resposta.
-- **Secrets ainda não configurados nesta sessão.** Só serão
-  configurados quando a URL base real do Rocket e a `X-API-Key` forem
-  fornecidas explicitamente — nenhuma chamada real foi feita ainda.
+  própria (arquitetura já decidida, ver Decisão 051 em
+  `inovatv_central`; implementação fica para a Fase 5).
+- `ROCKET_BASE_URL` (`https://app.rocketgestor.com`, valor não
+  sensível) e `ROCKET_API_KEY` vêm exclusivamente de Edge Function
+  Secrets do projeto Supabase — nunca aparecem em código, nunca são
+  devolvidos em nenhuma resposta. **Secrets configurados.** A
+  `X-API-Key` em uso foi criada em 11/08/2026, validade 90 dias,
+  expira em 09/11/2026 — o valor da chave nunca é registrado em
+  nenhum documento, commit ou log, só essas datas.
 - Nunca repassa `senha` nem `device_key_or_OTP_code` (campos reais do
   Rocket) — só o subconjunto normalizado descrito abaixo. Nunca
-  repassa o `detail` cru de erro do Rocket.
+  repassa o `detail` cru de erro do Rocket. **Confirmado
+  empiricamente**, não só no código: uma função temporária de
+  depuração (`debug-fields`, nunca devolveu valores de campo, só
+  nomes de chave — apagada do projeto e do repositório local logo
+  depois de usada, nunca commitada) rodou contra um cliente real e
+  classificou 34 campos brutos → 5 mantidos, 29 descartados,
+  incluindo `senha` e `device_key_or_OTP_code` confirmados presentes
+  e descartados.
+
+**Evidência real de ponta a ponta (2026-08-11):**
+`/status/{public_id}` e `/match?telefone=...` testados contra um
+cliente real de teste — o `publicId` devolvido pelos dois endpoints é
+idêntico, fechando o ciclo de identificação com prova real. Nenhum
+dado bruto do Rocket (telefone, MAC, e-mail, PIX, senha, device key)
+atravessa a API intermediária.
 
 ### `status` — Cenário C (cliente já vinculado)
 
