@@ -90,6 +90,59 @@ por `paginacao.total` da resposta do Rocket, nunca por
 { "outcome": "invalid_request", "candidates": [] }
 ```
 
+## `export-clientes` — exportação em massa sanitizada (2026-08-14, implementado e testado)
+
+Uso interno da automação Rocket → Google Drive → Meta AI (contexto de
+negócio completo em `inovatv_central`, seção "Frente — IA do WhatsApp
+(Meta Business Agent) + automação Rocket → Google Drive" do
+`CLAUDE.md`) — **nunca exposto à Meta**, que só enxerga o arquivo
+resultante no Google Drive, nunca esta API. Mesmo padrão de código e de
+proteção (verificação JWT padrão das Edge Functions) de `/status` e
+`/match`.
+
+`GET /functions/v1/export-clientes?page=N` → chama `GET
+/gerenciador/api/v1/clientes/?page=N&page_size=100` no Rocket, sem
+nenhum filtro (varre o catálogo inteiro, paginado — busca filtrada
+continua sendo papel do `/match`). `page_size` sempre fixo em 100,
+nunca vindo de quem chama, para manter o comportamento previsível e
+dentro do limite de 60 req/min do Rocket (compartilhado com `/match` e
+`/status`).
+
+```json
+// sucesso
+{ "outcome": "success", "page": 1, "totalPages": 2, "clientes": [ { "publicId": "...", "nome": "...", "telefone": "...", "usuario": "...", "planoNome": "...", "servidorNome": "...", "valor": "...", "vencimento": "...", "telas": 1, "aplicativoNome": "...", "dispositivoNome": "..." } ] }
+
+// pagina invalida (nao inteiro ou < 1)
+{ "outcome": "invalid_request", "page": null, "totalPages": null, "clientes": [] }
+
+// Rocket indisponivel, erro, ou secrets ausentes
+{ "outcome": "unavailable", "page": 1, "totalPages": null, "clientes": [] }
+```
+
+**Nunca repassa `senha` nem `device_key_or_OTP_code`.** `publicId` é
+mantido na resposta — serve só para a lógica de comparação/diff da
+automação (saber que é o mesmo cliente entre uma execução e outra);
+quem gerar `CLIENTES_INOVATV.xlsx` a partir desta resposta **não deve
+incluir `publicId` como coluna do arquivo** (decisão já tomada, ainda
+não implementada — é a Etapa 2 da automação, ver `inovatv_central`).
+
+**Testado com evidência real (2026-08-14):** implantado manualmente via
+editor do painel do Supabase (CLI não instalada neste ambiente) no
+projeto correto (`inovatv-api-intermediaria`, ref
+`nduxsuxkopuvhwugdkqi` — **atenção**: o arquivo local
+`supabase/.temp/linked-project.json` deste repositório está apontando
+para o projeto errado, `InovaTV Platform`/`deovfultywlftlvdzukc`, o do
+Painel; corrigir antes de usar `supabase` CLI para deploy). Chamado
+via painel "Test" do Supabase (`page=1` e `page=2`): `outcome:
+success` nas duas, `totalPages: 2` consistente, paginação devolvendo
+clientes diferentes por página, `planoNome`/`servidorNome` confirmados
+como texto simples (não objeto aninhado), nenhum `senha`/
+`device_key_or_OTP_code` em nenhum registro. Cliente real conferido —
+"Js Informática Rp" (o mesmo usado nos testes da Meta AI):
+`servidorNome: "ChannelTV"`, `valor: "35.0"`, `vencimento:
+"2026-08-31T23:59:00-03:00"` — idêntico ao que a Meta AI já tinha
+reportado antes, fechando o ciclo com evidência cruzada real.
+
 ## Fase 3 — esqueleto mínimo (histórico, preservado)
 
 `fase3-mock` continua implantada, só como registro histórico de que o
@@ -106,6 +159,7 @@ supabase/
     fase3-mock/index.ts   # Fase 3, historico
     status/index.ts       # Fase 4, Cenario C
     match/index.ts         # Fase 4, Cenario B
+    export-clientes/index.ts  # Automacao WhatsApp AI, 2026-08-14
 ```
 
 Projeto Supabase: novo, plano Free, separado do projeto do Painel
