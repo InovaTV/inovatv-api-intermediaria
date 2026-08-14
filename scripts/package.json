@@ -1,0 +1,9 @@
+{
+  "name": "inovatv-api-intermediaria-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Scripts locais de suporte a automacao (Etapa 2: geracao do CLIENTES_INOVATV.xlsx). Nao faz parte das Edge Functions implantadas.",
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
