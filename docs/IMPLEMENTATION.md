@@ -387,7 +387,7 @@ disponível para esse tipo de credencial. Detalhe completo, incluindo a
 consequência aceita de não recapturar um token novo agora:
 `docs/pagamentos/POC_PAGBANK_UNITV_TESTE_013_PONTA_A_PONTA.md`.
 
-## Painel de Atendimento — Fatia 1, checkpoint parcial (2026-08-16, sessão autônoma, aguardando revisão)
+## Painel de Atendimento — Fatia 1, checkpoint parcial (2026-08-16, sessão autônoma, aguardando revisão) — CONCLUÍDA, ver seção de fechamento no fim deste documento
 
 **Contexto desta sessão:** trabalho feito com o usuário fora do
 computador (autorização geral de avançar dada antes, sem revisão
@@ -481,3 +481,72 @@ acima, (2) aplicar manualmente no SQL Editor do Supabase, (3) só
 depois disso testar o código TypeScript acima contra o banco real —
 ele foi escrito pra bater com o schema novo, mas nunca rodou contra
 ele.
+
+## Painel de Atendimento — Fatia 1, fechamento (2026-08-16)
+
+**Status: CONCLUÍDA — schema, RPCs e camada TypeScript aplicados e
+validados contra produção com evidência real.** Revisão em 3 rodadas
+(Claude + GPT + auditoria real do banco, registrada na sessão do
+`inovatv_central`) antes da migration ser escrita em arquivo e
+aplicada — nenhuma etapa pulada.
+
+**Migration aplicada manualmente no SQL Editor do Supabase (mesmo
+processo já usado em toda migration anterior deste repositório).**
+`supabase/migrations/20260816140000_painel_atendimento_fatia1.sql`
+(commit `33ce516`). Auditoria pós-aplicação, real, contra o projeto de
+produção:
+
+- `conversas_episodios`: 2 linhas (as 2 conversas que já estavam
+  `aguardando_humano` antes da migration, ambas migradas corretamente).
+- `mensagens_conversa` (renomeada de `mensagens_atendimento_humano`):
+  11 mensagens preservadas, **0 sem `episodio_id`** — nenhuma mensagem
+  histórica ficou órfã, confirmando o resultado já previsto pela query
+  de verificação rodada antes de aplicar.
+- `conversas_estado`: 2 linhas em `aguardando_humano`, **0** delas sem
+  `episodio_atual_id` preenchido.
+- 3 RPCs existentes (`acionar_transferencia_humana` atualizada,
+  `assumir_atendimento` e `encerrar_atendimento_humano` novas).
+- Tabelas/colunas/índices esperados confirmados existentes; RLS
+  habilitado nas três tabelas (`conversas_estado`,
+  `conversas_episodios`, `mensagens_conversa`), sem policy pública —
+  arquitetura já aprovada (acesso só via Edge Function + `service_role`).
+
+**Camada TypeScript** (`_shared/types.ts`, `_shared/conversas_estado.ts`,
+`_shared/mensagens_atendimento.ts`, `_shared/supabase_client.ts`,
+`orchestrator/index.ts` — commit `d7b33a9`) escrita e revisada **antes**
+da migration existir, pra já bater com o schema novo no momento em que
+ele fosse aplicado. Duas mudanças de comportamento real no Orquestrador:
+log permanente de toda mensagem trocada (antes só durante transferência)
+e re-checagem de `conversas_estado` imediatamente antes de enviar a
+resposta da IA, pra nunca responder por cima de um atendente que
+assumiu manualmente (Componente 1 §15-A).
+
+**Verificação de sintaxe real (2026-08-16, sem suíte de teste
+persistida disponível neste repositório — gap já registrado, não
+resolvido nesta fatia):** não existe `deno` nem qualquer teste
+automatizado commitado neste projeto para rodar contra o código novo.
+Como alternativa real (não apenas releitura manual), os 5 arquivos
+editados foram importados via `npx tsx` (transpila com esbuild antes
+de executar — qualquer erro de sintaxe apareceria aqui). Resultado:
+`types.ts` importou sem nenhum erro; `conversas_estado.ts`,
+`mensagens_atendimento.ts`, `supabase_client.ts` e
+`orchestrator/index.ts` transpilaram corretamente e falharam **só** na
+resolução do import Deno-específico (`npm:@supabase/supabase-js@2`,
+sintaxe que o Node não entende) — a mesma barreira já documentada, não
+um erro introduzido agora. Isso prova sintaxe válida nos 5 arquivos,
+mas **não** é um teste funcional de verdade (não exercitou nenhuma
+lógica real, tipo os ramos de `assumir_atendimento`/branches do
+Orquestrador) — a lacuna de teste automatizado real deste repositório
+continua em aberto, não fechada por esta verificação. **Nota
+honesta:** rodar `npx tsx` sem versão fixada baixou `tsx@4.23.12` da
+internet (a versão `4.21.0` já em cache local de uma sessão anterior
+não foi reaproveitada, diferente do que se assumiu antes de rodar) —
+download inofensivo de ferramenta de desenvolvimento, não é acesso a
+banco/produção/deploy.
+
+**O que fica pra próxima fatia (Fatia 4/5 do Plano de Execução, ainda
+não iniciada):** Edge Functions `painel-atendimento-listar/buscar/
+abrir/assumir/responder/encerrar` — a camada TypeScript desta fatia
+(`assumirAtendimento()`, `encerrarAtendimento()`, `listarMensagens()`,
+`listarEpisodios()`) já existe e está pronta pra ser chamada por elas,
+mas nenhuma rota HTTP nova foi criada ainda.
