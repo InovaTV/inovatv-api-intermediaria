@@ -1,0 +1,58 @@
+// Cliente de envio WhatsApp Cloud API -- Etapa 6, quarta fatia
+// (inovatv_central CLAUDE.md, Componente 1 §16/§16-A). So a
+// capacidade tecnica de enviar uma mensagem de texto livre -- NAO
+// decide quando/pra quem enviar (isso e' do Orquestrador, fatia
+// futura), NAO usa Message Template (fora de escopo desta fatia), NAO
+// esta integrado a orchestrator/index.ts ainda (nem pro cliente, nem
+// pro aviso ao Jose).
+//
+// WHATSAPP_ACCESS_TOKEN e WHATSAPP_PHONE_NUMBER_ID vem exclusivamente
+// de secrets da Edge Function, configurados manualmente no painel do
+// Supabase -- nunca hardcoded aqui, nunca aparecem em commit/log
+// (mesmo padrao de gemini_client.ts).
+
+const TIMEOUT_MS = 10000;
+const GRAPH_API_VERSION = "v21.0";
+
+export type EnvioWhatsAppResultado =
+  | { outcome: "success"; messageId: string }
+  | { outcome: "unavailable" };
+
+export async function enviarMensagemWhatsApp(
+  paraNumero: string,
+  texto: string,
+): Promise<EnvioWhatsAppResultado> {
+  const accessToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+  const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+  if (!accessToken || !phoneNumberId) return { outcome: "unavailable" };
+
+  try {
+    const resp = await fetch(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: paraNumero,
+          type: "text",
+          text: { body: texto },
+        }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+
+    if (!resp.ok) return { outcome: "unavailable" };
+
+    const data = await resp.json();
+    const messageId = data?.messages?.[0]?.id;
+    if (typeof messageId !== "string") return { outcome: "unavailable" };
+
+    return { outcome: "success", messageId };
+  } catch {
+    return { outcome: "unavailable" };
+  }
+}
