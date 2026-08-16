@@ -66,8 +66,8 @@ não faz parte da sequência de implementação atual, não antecipada aqui.
 1. Estrutura base do código novo (_shared)     ✅ concluído
 2. Migrations das tabelas aprovadas             ✅ aplicadas no Supabase (2026-08-15)
 3. Testar as tabelas                            ✅ validado (schema, RLS, FK, insert/rollback)
-4. Núcleo mínimo do Orquestrador                ✅ código criado localmente, ainda não implantado
-5. Integrar /match, /status e Gemini            ainda não iniciado
+4. Núcleo mínimo do Orquestrador                ✅ concluído (2026-08-16, implantado e validado)
+5. Integrar /match, /status e Gemini            ✅ concluído (2026-08-16, implantado e testado com evidência real)
 ```
 
 Um componente por vez, testado e com checkpoint antes de avançar —
@@ -112,14 +112,120 @@ supabase/functions/
     └── index.ts
 ```
 
-**Ainda não implantado no Supabase** — aguardando revisão antes do
-primeiro deploy.
+**Implantado (2026-08-16), como parte do deploy único da Etapa 5** —
+ver seção abaixo. O código da Etapa 4 em si (passo 0) não recebeu um
+deploy próprio isolado; a primeira vez que `orchestrator` foi
+implantado no Supabase já incluía a integração da Etapa 5 no mesmo
+deploy. Validado com evidência real nos 3 cenários de teste da Etapa 5
+(que exercitam o passo 0 indiretamente — nenhum deles caiu em
+`aguardando_humano`, então o branch de passo 0 dedicado a esse estado
+segue coberto só pelos testes originais descritos acima, não por novo
+teste real desta rodada).
 
-## Nada implementado no Supabase além do que está registrado acima
+## Etapa 5 — Integração /match, /status e Gemini (2026-08-16, implementado, implantado e testado com evidência real)
 
-As duas migrations estão aplicadas (etapa 2/3). O código da Edge
-Function `orchestrator` e dos módulos `_shared` existe **só
-localmente** — nenhum deploy de função foi feito ainda. Nenhuma
-credencial nova foi criada ou usada (a função usa
-`SUPABASE_SERVICE_ROLE_KEY`, injetada automaticamente pela plataforma
-em toda Edge Function, não um secret configurado à mão).
+**Escopo aprovado explicitamente pelo usuário (Opção 1, 2026-08-16):**
+no branch `estado === "normal"` do Orquestrador, encadear `/match →
+/status → contexto mínimo → Gemini 3.6 Flash → saída estruturada
+{tipo, texto}`, devolvendo isso só pela resposta HTTP do endpoint de
+teste temporário. **Deliberadamente fora desta etapa:** validador
+determinístico, gravação de `aguardando_humano`/mensagens quando
+`tipo === "transferir"`, envio real por WhatsApp, aviso ao operador,
+Interface Humana Web — ficam para a próxima etapa, sem exceção.
+
+**Dois pontos que pareciam exigir suposição foram resolvidos com
+evidência real**, recuperada do scratchpad de uma sessão anterior que
+continha os artefatos do teste de saída estruturada já registrado no
+Componente 1 §12 (`inovatv_central`):
+
+- **Model ID confirmado:** `gemini-3.6-flash` — aparece literalmente
+  no campo `modelVersion` das respostas reais de API salvas daquele
+  teste. Configurado como secret `GEMINI_MODEL_ID`, não hardcoded.
+- **Formato do bloco de contexto confirmado** (corpo REST real do
+  teste de compatibilidade comportamental, que reaproveitou os casos
+  das Rodadas 3/4): `[DADOS CONECTADOS - CLIENTE]` + `Telefone:` em
+  linha própria + demais campos separados por `·` numa linha —
+  reproduzido tal qual para o caso de 1 acesso; extensão própria (não
+  testada anteriormente, feita de forma deliberada e registrada) para
+  múltiplos acessos, mantendo o mesmo estilo.
+
+### Arquivos novos
+
+```
+supabase/functions/_shared/
+├── rocket_intermediaria.ts   — chamarMatch()/chamarStatus(), fetch para as próprias functions match/status, timeout 5s sem retry
+├── contexto.ts               — montarContextoCliente(), formato acima, distingue no_match (sem bloco) de unavailable (bloco explícito de indisponibilidade)
+└── gemini_client.ts          — chamarGemini(), prompt de sistema CONGELADO (conferido byte a byte contra scratchpad/sysprompt.txt), saída estruturada nativa, timeout 10s + 1 retry
+```
+
+`orchestrator/index.ts` atualizado para encadear os três módulos no
+branch `normal`. Nenhuma alteração em `match/index.ts`,
+`status/index.ts` ou nas migrations já aplicadas.
+
+### Secrets novos
+
+`GEMINI_API_KEY` (chave real, tier pago, conforme decisão de
+privacidade já registrada em `inovatv_central`) e `GEMINI_MODEL_ID`
+(`gemini-3.6-flash`) — configurados manualmente pelo usuário no painel
+do Supabase, projeto confirmado visualmente como
+`nduxsuxkopuvhwugdkqi` antes de qualquer secret/deploy. **Nunca
+colados nesta conversa, nunca em código/commit.**
+
+### Deploy
+
+Manual, via editor multi-arquivo do painel do Supabase (mesmo padrão
+já usado em `match`/`status`/`export-clientes`) — projeto confirmado
+antes do deploy. Um bug real de escape foi encontrado e corrigido
+durante a colagem (uma linha do `fetch(...)` ficou com `` \` `` em vez
+de só a crase); corrigido diretamente no editor via a própria API do
+Monaco, reconferido byte a byte contra o conteúdo pretendido antes do
+deploy — não afetou o prompt de sistema, que permaneceu íntegro.
+
+### Testes — 3/3 cenários cobertos com evidência real, nenhum cliente fabricado
+
+Telefone `17981625486` (número do próprio usuário, autorizado
+nominalmente para este teste — nunca outro cliente real da base) usado
+tanto pra `single_match` quanto, depois que um segundo acesso real foi
+associado a ele, pra `multiple_matches`. Telefone sintético
+`11999990001` (comprovadamente inexistente) usado pra `no_match`.
+
+1. **`single_match`** — `match.outcome: "single_match"`,
+   `status.outcome: "success"`/`linkState: "linked"`, Gemini respondeu
+   corretamente com o vencimento real (`08/10/2026`, batendo com o
+   registro já documentado em `inovatv_central` pra esse mesmo
+   telefone/cliente).
+2. **`no_match`** — `match.outcome: "no_match"`, `status: []` (nenhuma
+   chamada a `/status`), Gemini disse "não encontrei" (nunca "você não
+   tem"), decidiu `tipo: "transferir"` sozinho, sem essa decisão ser
+   executada (fora de escopo desta etapa).
+3. **`multiple_matches`** — `match.outcome: "multiple_matches"`, os 2
+   `/status` chamados em paralelo com sucesso, Gemini listou os 2
+   acessos completos sem escolher um sozinho (regra "MÚLTIPLOS
+   ACESSOS" do prompt congelado).
+
+Em nenhum teste a resposta HTTP devolveu o `cliente` bruto do
+`/status` — só outcomes e o `{tipo, texto}` já sanitizado do Gemini
+(minimização, Componente 1 §19).
+
+**Estado de teste limpo:** as duas linhas criadas em `conversas_estado`
+pelos testes (`17981625486`, `11999990001`) foram removidas por
+exclusão explícita (nunca por condição ampla), confirmado
+`count = 0` depois. Nenhuma outra linha tocada.
+
+### O que fica explicitamente fora desta etapa
+
+Validador determinístico (Componente 4), gravação de
+`aguardando_humano` quando `tipo === "transferir"`, envio real por
+WhatsApp (Cloud API), aviso ao operador, Interface Humana Web. Próxima
+etapa, só quando autorizada — não iniciada automaticamente após esta.
+
+### Achado de segurança separado, não resolvido nesta etapa
+
+Durante a inspeção de `conversas_estado`, uma aba pré-existente do SQL
+Editor (de sessão anterior, não desta implementação) revelou um
+`UNITV_DEALER_TOKEN` em texto puro numa query salva
+(`npx supabase secrets set UNITV_DEALER_TOKEN=... --project-ref
+nduxsuxkopuvhwugdkqi`), provável resíduo da investigação
+PagBank/UniTV. Não foi executada, não foi apagada, não foi alterada —
+tratamento (rotação do token, limpeza da query salva) fica para uma
+sessão separada, por decisão do usuário.
