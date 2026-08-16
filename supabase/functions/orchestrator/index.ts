@@ -7,11 +7,13 @@
 // registrar mensagem (aguardando_humano, para ali) ou seguir fluxo
 // normal.
 //
-// Fluxo normal (Etapa 5, escopo aprovado 2026-08-16): encadeia
-// /match -> /status -> contexto minimo -> Gemini, devolvendo so a
-// decisao estruturada {tipo, texto}. Deliberadamente NAO grava
-// aguardando_humano quando tipo === "transferir", NAO roda validador,
-// NAO envia WhatsApp -- proxima etapa, sem excecao.
+// Fluxo normal: encadeia /match -> /status -> contexto minimo ->
+// Gemini (Etapa 5, 2026-08-16) -> Validador Deterministico (Etapa 6,
+// segunda fatia, 2026-08-16) antes de liberar a resposta. Reprovado
+// => resposta original nunca sai, so o motivo (gemini vira
+// {outcome:"bloqueado"}). Deliberadamente NAO grava aguardando_humano
+// (nem em reprovacao, nem quando tipo === "transferir"), NAO envia
+// WhatsApp -- proxima fatia, sem excecao.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
 // 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
@@ -28,6 +30,7 @@ import {
 } from "../_shared/rocket_intermediaria.ts";
 import { montarContextoCliente } from "../_shared/contexto.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
+import { validarResposta } from "../_shared/validador.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -79,11 +82,10 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // estado === 'normal' (Etapa 5): encadeia /match, /status, contexto
-  // minimo e Gemini, devolvendo so a decisao estruturada. NAO grava
-  // aguardando_humano, NAO roda validador, NAO envia WhatsApp -- isso
-  // fica deliberadamente para a proxima etapa (escopo aprovado
-  // 2026-08-16).
+  // estado === 'normal': encadeia /match, /status, contexto minimo,
+  // Gemini (Etapa 5) e validador (Etapa 6, segunda fatia). NAO grava
+  // aguardando_humano em nenhum caso, NAO envia WhatsApp -- proxima
+  // fatia, deliberadamente fora de escopo aqui.
   const matchResult = await chamarMatch(telefone);
 
   let statusResults: StatusResult[] = [];
@@ -109,6 +111,23 @@ Deno.serve(async (req: Request) => {
 
   const geminiResult = await chamarGemini(conteudo, contextoCliente);
 
+  // Etapa 6, segunda fatia (escopo aprovado): valida a saida do Gemini
+  // antes de liberar. Reprovado => resposta original NUNCA sai, so o
+  // motivo. Ainda NAO grava aguardando_humano, NAO envia WhatsApp --
+  // proxima fatia.
+  let geminiSaida: unknown = { outcome: "unavailable" };
+  let validacaoResultado: { aprovado: boolean; motivo?: string } | undefined;
+
+  if (geminiResult.outcome === "success") {
+    const validacao = validarResposta(geminiResult.data, contextoCliente);
+    validacaoResultado = validacao.aprovado
+      ? { aprovado: true }
+      : { aprovado: false, motivo: validacao.motivo };
+    geminiSaida = validacao.aprovado
+      ? geminiResult.data
+      : { outcome: "bloqueado" };
+  }
+
   return jsonResponse({
     outcome: "normal",
     conversation_id: conversa.conversation_id,
@@ -121,9 +140,7 @@ Deno.serve(async (req: Request) => {
       outcome: s.outcome,
       linkState: s.linkState,
     })),
-    gemini:
-      geminiResult.outcome === "success"
-        ? geminiResult.data
-        : { outcome: "unavailable" },
+    gemini: geminiSaida,
+    ...(validacaoResultado ? { validacao: validacaoResultado } : {}),
   });
 });
