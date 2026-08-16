@@ -45,14 +45,28 @@ export async function enviarMensagemWhatsApp(
       },
     );
 
-    if (!resp.ok) return { outcome: "unavailable" };
+    const data = await resp.json().catch(() => null);
 
-    const data = await resp.json();
+    if (!resp.ok) {
+      console.log(
+        "[whatsapp_client] envio falhou",
+        JSON.stringify({ status: resp.status, statusText: resp.statusText, body: data }),
+      );
+      return { outcome: "unavailable" };
+    }
+
     const messageId = data?.messages?.[0]?.id;
-    if (typeof messageId !== "string") return { outcome: "unavailable" };
+    if (typeof messageId !== "string") {
+      console.log(
+        "[whatsapp_client] resposta 200 sem messageId",
+        JSON.stringify({ body: data }),
+      );
+      return { outcome: "unavailable" };
+    }
 
     return { outcome: "success", messageId };
-  } catch {
+  } catch (erro) {
+    console.log("[whatsapp_client] excecao ao enviar", String(erro));
     return { outcome: "unavailable" };
   }
 }
