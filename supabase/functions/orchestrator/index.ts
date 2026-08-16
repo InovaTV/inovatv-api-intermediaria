@@ -11,9 +11,16 @@
 // Gemini (Etapa 5, 2026-08-16) -> Validador Deterministico (Etapa 6,
 // segunda fatia, 2026-08-16) antes de liberar a resposta. Reprovado
 // => resposta original nunca sai, so o motivo (gemini vira
-// {outcome:"bloqueado"}). Deliberadamente NAO grava aguardando_humano
-// (nem em reprovacao, nem quando tipo === "transferir"), NAO envia
-// WhatsApp -- proxima fatia, sem excecao.
+// {outcome:"bloqueado"}).
+//
+// Etapa 6, terceira fatia (2026-08-16, Componente 1 §16, so' a parte
+// de ESTADO): valida => reprova, OU aprova mas tipo==="transferir" =>
+// marca aguardando_humano de verdade + registra mensagem do cliente e
+// o texto estruturado do Gemini em mensagens_atendimento_humano.
+// Aprovado + tipo==="responder" segue liberando normalmente. Gemini
+// indisponivel mantem o comportamento anterior, sem transferencia.
+// Deliberadamente NAO envia WhatsApp, NAO envia aviso ao Jose, NAO
+// implementa Webhook/Interface Humana Web -- fatias futuras.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
 // 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
@@ -21,7 +28,10 @@
 //   POST { telefone: string, conteudo: string }
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
-import { buscarOuCriarConversa } from "../_shared/conversas_estado.ts";
+import {
+  buscarOuCriarConversa,
+  acionarTransferenciaHumana,
+} from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import {
   chamarMatch,
@@ -83,9 +93,10 @@ Deno.serve(async (req: Request) => {
   }
 
   // estado === 'normal': encadeia /match, /status, contexto minimo,
-  // Gemini (Etapa 5) e validador (Etapa 6, segunda fatia). NAO grava
-  // aguardando_humano em nenhum caso, NAO envia WhatsApp -- proxima
-  // fatia, deliberadamente fora de escopo aqui.
+  // Gemini (Etapa 5), validador (Etapa 6, segunda fatia) e, se
+  // reprovado ou tipo==="transferir", marca aguardando_humano (Etapa
+  // 6, terceira fatia). NAO envia WhatsApp, NAO envia aviso ao Jose --
+  // fatias futuras.
   const matchResult = await chamarMatch(telefone);
 
   let statusResults: StatusResult[] = [];
@@ -111,21 +122,45 @@ Deno.serve(async (req: Request) => {
 
   const geminiResult = await chamarGemini(conteudo, contextoCliente);
 
-  // Etapa 6, segunda fatia (escopo aprovado): valida a saida do Gemini
-  // antes de liberar. Reprovado => resposta original NUNCA sai, so o
-  // motivo. Ainda NAO grava aguardando_humano, NAO envia WhatsApp --
-  // proxima fatia.
   let geminiSaida: unknown = { outcome: "unavailable" };
   let validacaoResultado: { aprovado: boolean; motivo?: string } | undefined;
+  let transferenciaResultado: { acionada: boolean; motivo: string } | undefined;
 
   if (geminiResult.outcome === "success") {
-    const validacao = validarResposta(geminiResult.data, contextoCliente);
+    const geminiData = geminiResult.data;
+    const validacao = validarResposta(geminiData, contextoCliente);
     validacaoResultado = validacao.aprovado
       ? { aprovado: true }
       : { aprovado: false, motivo: validacao.motivo };
     geminiSaida = validacao.aprovado
-      ? geminiResult.data
+      ? geminiData
       : { outcome: "bloqueado" };
+
+    // Etapa 6, terceira fatia: reprovado, OU aprovado mas o Gemini
+    // decidiu transferir -- marca aguardando_humano de verdade e
+    // registra as duas mensagens (Componente 1 §16, Componente 5
+    // §12). Aprovado + tipo==="responder" nunca entra aqui.
+    const deveTransferir = !validacao.aprovado || geminiData.tipo === "transferir";
+
+    if (deveTransferir) {
+      const motivoTransferencia = validacao.aprovado
+        ? "gemini:transferir"
+        : validacao.motivo;
+      try {
+        const resultado = await acionarTransferenciaHumana(
+          conversa.conversation_id,
+          motivoTransferencia,
+          conteudo,
+          geminiData.texto,
+        );
+        transferenciaResultado =
+          resultado.outcome === "acionada"
+            ? { acionada: true, motivo: motivoTransferencia }
+            : { acionada: false, motivo: "ja_transferida_por_outra_requisicao" };
+      } catch {
+        transferenciaResultado = { acionada: false, motivo: "falha_ao_registrar" };
+      }
+    }
   }
 
   return jsonResponse({
@@ -142,5 +177,6 @@ Deno.serve(async (req: Request) => {
     })),
     gemini: geminiSaida,
     ...(validacaoResultado ? { validacao: validacaoResultado } : {}),
+    ...(transferenciaResultado ? { transferencia: transferenciaResultado } : {}),
   });
 });
