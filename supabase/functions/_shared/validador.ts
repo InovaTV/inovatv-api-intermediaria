@@ -99,8 +99,14 @@ const NUMERAIS: Record<string, number> = {
   cinco: 5,
 };
 const NUMERAL_ALT = [...Object.keys(NUMERAIS), "\\d+"].join("|");
+// So o ramo "numeral antes de acesso(s)" (ex.: "2 acessos", "dois
+// acessos") -- e' a unica ordem que corresponde a uma declaracao de
+// CONTAGEM TOTAL (Componente 4 §7). A ordem inversa ("acesso 1",
+// "Acesso 1/2", "acesso: 1") e' o formato de IDENTIFICACAO individual
+// que o proprio contexto.ts produz e que o Componente 1 §8 espera ser
+// ecoado -- nunca deve ser lida como afirmacao de quantidade.
 const REGEX_CONTAGEM_ACESSOS = new RegExp(
-  `\\b(${NUMERAL_ALT})\\s+acessos?\\b|\\bacessos?\\s*:?\\s*(${NUMERAL_ALT})\\b`,
+  `\\b(${NUMERAL_ALT})\\s+acessos?\\b`,
   "gi",
 );
 
