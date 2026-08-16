@@ -230,19 +230,46 @@ function validarDatas(
   return null;
 }
 
+// Janela de caracteres (mesmo estilo de JANELA_NEGACAO) usada para
+// decidir se um numeral "1" e' descricao de UM item individual (ex.:
+// "1 acesso no servidor ChannelTV") em vez de uma declaracao de total.
+// So o valor 1 e' elegivel -- gramaticalmente, um item unico so pode
+// ser descrito no singular; qualquer outro valor so pode ser total ou
+// contradicao genuina (Componente 4 §7). A ancora exigida e' o nome
+// real de um servidor do contexto (Componente 1 §8: cada acesso e'
+// descrito com seu servidorNome) -- plano NAO e' usado como ancora por
+// ser generico demais (ex. "Mensal" aparece em quase todo cliente).
+const JANELA_ITEM_INDIVIDUAL = 60;
+
+function numeralIndicaItemIndividual(
+  texto: string,
+  indice: number,
+  valor: number,
+  servidoresContexto: string[],
+): boolean {
+  if (valor !== 1) return false;
+  const inicio = Math.max(0, indice - JANELA_ITEM_INDIVIDUAL);
+  const fim = Math.min(texto.length, indice + JANELA_ITEM_INDIVIDUAL);
+  const janela = texto.slice(inicio, fim).toLowerCase();
+  return servidoresContexto.some((s) => janela.includes(s));
+}
+
 function validarContagemAcessos(
   texto: string,
   contexto: ContextoParseado,
 ): ValidacaoResultado | null {
+  const servidoresContexto = contexto.acessos.map((a) => a.servidor.toLowerCase());
   const encontrados = new Set<number>();
   for (const m of texto.matchAll(REGEX_CONTAGEM_ACESSOS)) {
-    const numeralTexto = (m[1] ?? m[2] ?? "").toLowerCase();
+    const numeralTexto = (m[1] ?? "").toLowerCase();
     const valor = numeralTexto in NUMERAIS
       ? NUMERAIS[numeralTexto]
       : /^\d+$/.test(numeralTexto)
         ? Number(numeralTexto)
         : null;
-    if (valor !== null) encontrados.add(valor);
+    if (valor === null) continue;
+    if (numeralIndicaItemIndividual(texto, m.index!, valor, servidoresContexto)) continue;
+    encontrados.add(valor);
   }
 
   if (encontrados.size === 0) return null; // nada checavel
