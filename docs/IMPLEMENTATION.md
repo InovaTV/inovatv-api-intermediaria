@@ -550,3 +550,94 @@ abrir/assumir/responder/encerrar` — a camada TypeScript desta fatia
 (`assumirAtendimento()`, `encerrarAtendimento()`, `listarMensagens()`,
 `listarEpisodios()`) já existe e está pronta pra ser chamada por elas,
 mas nenhuma rota HTTP nova foi criada ainda.
+
+## Painel de Atendimento — Bloco 2 + 3 (2026-08-16, código pronto, nada implantado)
+
+**Status: código completo e verificado localmente. Nada deployado no
+Supabase, nada publicado no Vercel, nenhum push feito ainda** (todos
+excluídos deste bloco por instrução explícita — ficam pra checkpoint
+próprio).
+
+### Edge Functions novas (5), todas usando `_shared/auth_painel.ts`
+
+`_shared/auth_painel.ts` — `verificarOperador(req)`: extrai o Bearer
+token, reaproveita `getServiceClient()` (não precisa de
+`SUPABASE_ANON_KEY` como secret novo) pra validar o JWT via
+`auth.getUser(token)`, e confere o e-mail contra o secret
+`PAINEL_EMAIL_AUTORIZADO` (ainda não configurado — precisa ser
+adicionado manualmente antes do primeiro deploy real, mesmo padrão de
+`GEMINI_API_KEY`/`WHATSAPP_*` já usados neste projeto).
+
+- **`painel-atendimento-listar`** — pagina todas as conversas
+  (`listarConversas()`, nova em `_shared/conversas_estado.ts`),
+  qualquer estado, mais recente primeiro.
+- **`painel-atendimento-abrir`** — histórico completo (episódios +
+  mensagens, `buscarConversaPorId()` nova) + dado do cliente
+  reconsultado ao vivo via `/match`+`/status` nesta mesma chamada
+  (nunca salvo em tabela nova — Componente 5 §8). Nunca assume o
+  atendimento sozinho.
+- **`painel-atendimento-assumir`** — chama `assumirAtendimento()`
+  (já existia desde a Fatia 1). Operador vem do e-mail do token
+  autenticado, nunca de campo livre do corpo da requisição.
+- **`painel-atendimento-responder`** — reaproveita
+  `enviarMensagemWhatsApp()` já existente (zero código novo de envio),
+  só funciona se a conversa estiver `aguardando_humano`.
+- **`painel-atendimento-encerrar`** — chama `encerrarAtendimento()`
+  (já existia desde a Fatia 1).
+
+### Frontend — Next.js, diretório `painel/` neste mesmo repositório
+
+**Decisão de estrutura, não de arquitetura:** criado como subdiretório
+deste repositório (monorepo), não um repositório novo no GitHub — não
+havia repositório próprio decidido em nenhum documento pra ele.
+Reversível a qualquer momento (é só uma pasta). Sinalizando
+explicitamente pra revisão, não uma decisão tomada por conta própria.
+
+`next@16` (não `15` — auditoria do `npm` encontrou 3 vulnerabilidades
+altas herdadas do `postcss`/`sharp` internos do Next 15; corrigido
+subindo de versão antes de seguir, projeto novo, sem custo de migração
+real). `@supabase/supabase-js` só pra autenticação (login/sessão) —
+**nenhuma tabela é consultada direto pelo navegador**, tudo passa
+pelas Edge Functions acima (Componente 5 §5, "nunca acesso direto de
+tabela via RLS solto para o cliente").
+
+Telas: `/login` (e-mail+senha via `signInWithPassword`) → `/conversas`
+(lista) → `/conversas/[id]` (histórico completo + assumir/responder/
+encerrar). Guarda de sessão só client-side (`AuthGuard`, sem
+middleware/SSR — V1 funcional, mesmo espírito da Fase 1 antes da Fase
+2 já usado no resto do projeto).
+
+**Bug real encontrado e corrigido durante o build:** `lib/supabase.ts`
+lançava erro direto no escopo do módulo se as variáveis de ambiente
+estivessem ausentes — isso quebrava a pré-renderização estática do
+Next mesmo em página que nenhum usuário tinha aberto ainda. Corrigido
+com inicialização preguiçosa (`Proxy`, só cria o cliente real no
+primeiro uso de verdade, nunca no carregamento do módulo).
+
+### Verificação real feita
+
+- **Backend:** os 7 arquivos novos/alterados foram importados via
+  `npx tsx` (transpila com esbuild antes de rodar) — todos falharam
+  exatamente na mesma barreira já conhecida (`npm:@supabase/
+  supabase-js@2`, sintaxe Deno-only que o Node não entende), nunca em
+  erro de sintaxe. Prova sintaxe válida, não é teste funcional (mesma
+  ressalva já registrada na Fatia 1).
+- **Frontend:** `npm run build` completo, real, `next build` com
+  Turbopack — **compilação TypeScript com zero erros**, as 5 rotas
+  geradas com sucesso (`/`, `/login`, `/conversas`, `/conversas/[id]`,
+  `/_not-found`). Essa é uma verificação mais forte que a do backend —
+  é checagem de tipo real, não só sintaxe.
+- **Não testado:** fluxo de login/sessão de ponta a ponta (precisa de
+  credencial real do Supabase Auth, que não existe nesta sessão) e as
+  5 Edge Functions contra o banco real (precisam de deploy, fora de
+  escopo deste bloco).
+
+### Secrets/config pendentes antes de qualquer deploy real
+
+- `PAINEL_EMAIL_AUTORIZADO` (Edge Functions, Supabase Secrets) — ainda
+  não configurado.
+- `painel/.env.local` (Vercel/local) — `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  precisa da chave real do projeto (`NEXT_PUBLIC_SUPABASE_URL` já
+  preenchido com a URL pública conhecida, não é segredo).
+- Nenhum dos dois foi tocado nesta sessão — só referenciados em código,
+  igual ao padrão já usado com `GEMINI_API_KEY` etc.

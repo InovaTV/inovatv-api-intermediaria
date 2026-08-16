@@ -84,6 +84,45 @@ export async function buscarOuCriarConversa(
   return criada as ConversaEstado;
 }
 
+// Busca uma conversa por conversation_id (nunca cria) -- usado pelo
+// Painel (Componente 5 §8), diferente de buscarOuCriarConversa() que
+// e' por telefone e sempre cria se faltar (uso do Orquestrador).
+// Retorna null se nao existir, nunca lanca so por isso.
+export async function buscarConversaPorId(
+  conversationId: string,
+): Promise<ConversaEstado | null> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("conversas_estado")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as ConversaEstado) ?? null;
+}
+
+// Lista todas as conversas, paginada, mais recente primeiro
+// (Componente 5 §8) -- qualquer estado, nao so aguardando_humano.
+export async function listarConversas(
+  pagina: number,
+  porPagina = 20,
+): Promise<{ conversas: ConversaEstado[]; total: number }> {
+  const client = getServiceClient();
+  const inicio = (pagina - 1) * porPagina;
+  const fim = inicio + porPagina - 1;
+
+  const { data, error, count } = await client
+    .from("conversas_estado")
+    .select("*", { count: "exact" })
+    .order("atualizado_em", { ascending: false })
+    .range(inicio, fim);
+
+  if (error) throw error;
+  return { conversas: (data ?? []) as ConversaEstado[], total: count ?? 0 };
+}
+
 // Componente 5 §9 -- RPC unificada, cobre os 2 casos (assumir a partir
 // de 'normal', ou a partir de 'aguardando_humano' com episodio ja
 // aberto pela IA e ninguem assumido ainda). "ja_assumida" cobre os 2
