@@ -1,0 +1,89 @@
+/* V1 funcional -- sem design polido de proposito (mesmo espirito da
+   Fase 1 antes de Fase 2 ja usado no resto do projeto InovaTV). */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.card {
+  background: #1a1d24;
+  border: 1px solid #2a2e38;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-normal {
+  background: #1e3a2e;
+  color: #6fd89a;
+}
+
+.badge-aguardando {
+  background: #3a2e1e;
+  color: #e0a95a;
+}
+
+.msg {
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  max-width: 80%;
+  white-space: pre-wrap;
+}
+
+.msg-cliente {
+  background: #1a1d24;
+  border: 1px solid #2a2e38;
+}
+
+.msg-ia {
+  background: #16233a;
+  margin-left: auto;
+}
+
+.msg-humano {
+  background: #1e3a2e;
+  margin-left: auto;
+}
+
+.msg-sistema {
+  background: transparent;
+  border: 1px dashed #3a3e48;
+  color: #8a8f9a;
+  font-size: 13px;
+  max-width: 100%;
+  text-align: center;
+}
