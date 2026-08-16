@@ -338,6 +338,40 @@ Webhook real, Interface Humana Web ou Camada de Conhecimento Empresarial
 enquanto isso. O número oficial `17996242415` nunca foi tocado durante
 toda a Etapa 6.
 
+### Aviso ao José via Message Template (Componente 1 §16-A) — implementado, aguardando aprovação da Meta
+
+Commit `3f8e2d2`, mesmo dia do checkpoint de espera acima —
+implementado enquanto se aguarda a Meta concluir a revisão do nome
+("InovaTV"), sem exigir nenhuma ação nova na conta. `_shared/
+whatsapp_client.ts` ganhou `enviarTemplateWhatsApp` (extraído de um
+`enviarPayloadWhatsApp` compartilhado com `enviarMensagemWhatsApp`, sem
+mudar o comportamento desta última); `_shared/mensagens_fixas.ts`
+registrou `NOME_TEMPLATE_NOVA_TRANSFERENCIA`/
+`IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA` (`nova_transferencia_humana`/
+`pt_BR`, corpo já submetido à Meta em 2026-08-16, ainda "Em análise").
+No Orquestrador: dentro do mesmo bloco que já envia a mensagem fixa ao
+cliente (só quando a RPC realmente aciona a transferência agora, nunca
+em `ja_transferida`/erro), se o secret `WHATSAPP_JOSE_NUMERO` estiver
+configurado, dispara o template ao José — best-effort, uma falha aqui
+nunca desfaz a transferência nem o envio ao cliente, ambos já
+concluídos antes deste passo. Resposta ganha o campo opcional
+`avisoJose: {enviado: boolean}`. 22/22 testes locais (mockando
+`fetch`/`Deno.env`/a RPC), cobrindo: aviso disparado com o payload
+correto quando configurado; nenhum disparo sem `WHATSAPP_JOSE_NUMERO`;
+nenhum disparo em `ja_transferida` ou erro de RPC; falha do template
+(ex.: ainda não aprovado) não desfaz a transferência nem o envio ao
+cliente; nenhum disparo no caso normal de resposta sem transferência.
+
+**Implantado via deploy manual no dashboard** (mesmo método das fatias
+anteriores — injeção de conteúdo no editor Monaco com verificação de
+hash antes de cada arquivo, depois "Deploy updates"), confirmado pelo
+timestamp "a few seconds ago" e pelos três arquivos sem marcador de
+alteração pendente. **Sem teste real** — `WHATSAPP_JOSE_NUMERO` não foi
+configurado como secret ainda, e o template segue "Em análise" na
+Meta; até lá, `enviarTemplateWhatsApp` retorna `unavailable` como
+qualquer outra falha da Graph API (mesmo contrato, nunca lança
+exceção), sem efeito nenhum sobre o restante do fluxo.
+
 ### Achado de segurança separado — fechado em 2026-08-16
 
 Durante a inspeção de `conversas_estado`, uma aba pré-existente do SQL
