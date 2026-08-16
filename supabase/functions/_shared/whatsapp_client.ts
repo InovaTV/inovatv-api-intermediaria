@@ -18,9 +18,8 @@ export type EnvioWhatsAppResultado =
   | { outcome: "success"; messageId: string }
   | { outcome: "unavailable" };
 
-export async function enviarMensagemWhatsApp(
-  paraNumero: string,
-  texto: string,
+async function enviarPayloadWhatsApp(
+  payload: Record<string, unknown>,
 ): Promise<EnvioWhatsAppResultado> {
   const accessToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
   const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
@@ -35,12 +34,7 @@ export async function enviarMensagemWhatsApp(
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: paraNumero,
-          type: "text",
-          text: { body: texto },
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       },
     );
@@ -69,4 +63,48 @@ export async function enviarMensagemWhatsApp(
     console.log("[whatsapp_client] excecao ao enviar", String(erro));
     return { outcome: "unavailable" };
   }
+}
+
+export async function enviarMensagemWhatsApp(
+  paraNumero: string,
+  texto: string,
+): Promise<EnvioWhatsAppResultado> {
+  return enviarPayloadWhatsApp({
+    messaging_product: "whatsapp",
+    to: paraNumero,
+    type: "text",
+    text: { body: texto },
+  });
+}
+
+// Envio via Message Template -- unico formato aceito pela Cloud API
+// pra mensagem iniciada pela empresa fora de uma janela de atendimento
+// ativa (Componente 1 §16-A). O template precisa estar aprovado pela
+// Meta antes de funcionar de verdade -- ate la, retorna "unavailable"
+// como qualquer outra falha da Graph API (mesmo contrato, nunca lanca
+// excecao).
+export async function enviarTemplateWhatsApp(
+  paraNumero: string,
+  nomeTemplate: string,
+  codigoIdioma: string,
+  parametrosCorpo: string[],
+): Promise<EnvioWhatsAppResultado> {
+  return enviarPayloadWhatsApp({
+    messaging_product: "whatsapp",
+    to: paraNumero,
+    type: "template",
+    template: {
+      name: nomeTemplate,
+      language: { code: codigoIdioma },
+      components:
+        parametrosCorpo.length > 0
+          ? [
+              {
+                type: "body",
+                parameters: parametrosCorpo.map((texto) => ({ type: "text", text: texto })),
+              },
+            ]
+          : [],
+    },
+  });
 }

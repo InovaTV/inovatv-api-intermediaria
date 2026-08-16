@@ -27,9 +27,15 @@
 // mensagem fixa MENSAGEM_TRANSFERENCIA_CLIENTE (nunca o texto do
 // Gemini sobre a transferencia). "ja_transferida"/erro na RPC ->
 // NAO envia de novo (mesma disciplina do aviso ao Jose, §16-A).
-// Deliberadamente NAO envia aviso ao Jose (exige Message Template
-// aprovada pela Meta, ainda pendente), NAO implementa Webhook/
-// Interface Humana Web -- fatias futuras.
+//
+// Componente 1 §16-A (2026-08-16, implementado tecnicamente,
+// aguardando aprovacao do Message Template pela Meta): mesmo bloco
+// "acionou agora" acima -- se WHATSAPP_JOSE_NUMERO estiver
+// configurado, envia o template nova_transferencia_humana ao Jose.
+// Best-effort: falha no aviso nunca desfaz a transferencia nem afeta
+// o envio ao cliente, ja concluidos antes deste passo. NAO implementa
+// Webhook (Componente 3) nem Interface Humana Web (Componente 5) --
+// fatias/frentes futuras.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
 // 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
@@ -50,8 +56,12 @@ import {
 import { montarContextoCliente } from "../_shared/contexto.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
-import { MENSAGEM_TRANSFERENCIA_CLIENTE } from "../_shared/mensagens_fixas.ts";
+import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import {
+  MENSAGEM_TRANSFERENCIA_CLIENTE,
+  NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+  IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+} from "../_shared/mensagens_fixas.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -138,6 +148,7 @@ Deno.serve(async (req: Request) => {
   let validacaoResultado: { aprovado: boolean; motivo?: string } | undefined;
   let transferenciaResultado: { acionada: boolean; motivo: string } | undefined;
   let envioResultado: { enviado: boolean } | undefined;
+  let avisoJoseResultado: { enviado: boolean } | undefined;
 
   if (geminiResult.outcome === "success") {
     const geminiData = geminiResult.data;
@@ -189,6 +200,21 @@ Deno.serve(async (req: Request) => {
         MENSAGEM_TRANSFERENCIA_CLIENTE,
       );
       envioResultado = { enviado: envio.outcome === "success" };
+
+      // Aviso ao Jose (Componente 1 §16-A) -- so' quando a RPC
+      // realmente acionou agora (nunca em "ja_transferida"/erro, ja
+      // garantido por estar dentro deste mesmo bloco). Best-effort:
+      // falha aqui nunca desfaz a transferencia ja confirmada acima.
+      const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
+      if (numeroJose) {
+        const aviso = await enviarTemplateWhatsApp(
+          numeroJose,
+          NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+          IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+          [transferenciaResultado.motivo],
+        );
+        avisoJoseResultado = { enviado: aviso.outcome === "success" };
+      }
     }
   }
 
@@ -208,5 +234,6 @@ Deno.serve(async (req: Request) => {
     ...(validacaoResultado ? { validacao: validacaoResultado } : {}),
     ...(transferenciaResultado ? { transferencia: transferenciaResultado } : {}),
     ...(envioResultado ? { envio: envioResultado } : {}),
+    ...(avisoJoseResultado ? { avisoJose: avisoJoseResultado } : {}),
   });
 });
