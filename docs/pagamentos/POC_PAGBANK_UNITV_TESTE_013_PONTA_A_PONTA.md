@@ -107,10 +107,31 @@ comprovado antes de ser escrito. Decisão de transição da PoC para a
 arquitetura definitiva: **não tomada ainda**, fica para um próximo
 passo deliberado.
 
-Pendência de segurança conhecida, não tratada por este documento: o
-`dealer_token` real usado nesta PoC ficou exposto em texto puro numa
-query salva do SQL Editor do Supabase durante a investigação de causa
-raiz de uma falha anterior. Apagar a query não invalida o valor já
-exposto — a correção completa exige rotacionar o token, não só
-remover a query. Ação adiada deliberadamente para um próximo passo,
-por decisão do usuário.
+**Pendência de segurança — fechada em 2026-08-16.** O `dealer_token`
+real usado nesta PoC tinha ficado exposto em texto puro numa query
+salva do SQL Editor do Supabase, desde a investigação de causa raiz de
+uma falha anterior. Duas ações tomadas:
+
+1. A query exposta foi localizada (confirmada por hash SHA-256 contra
+   o digest do Secret ativo, não por suposição) e seu conteúdo
+   substituído por um comentário explicativo, salvo — o valor não
+   aparece mais em nenhuma aba do SQL Editor.
+2. O usuário trocou a **senha de administrador do painel de revenda**
+   (`panel-web.revenda.site`). Investigação prévia
+   (`docs/unitv/UNITV_RENOVACAO_TESTE_REAL.md`) já tinha estabelecido
+   que o `dealer_token` não vem de uma tela própria de API key — é um
+   valor que o painel envia embutido durante uma sessão logada,
+   capturado passivamente numa ação real. Trocar a senha é a única
+   alavanca de rotação disponível nesse painel; **não foi
+   reconfirmado por captura nova** que isso de fato invalidou o valor
+   antigo (decisão deliberada do usuário, ver abaixo).
+
+**Consequência aceita conscientemente:** o Secret `UNITV_DEALER_TOKEN`
+no Supabase **não foi atualizado** — continua com o valor antigo, que
+pode já estar inválido depois da troca de senha. Isso significa que
+`poc-pagbank-unitv-renew`, se invocada agora, provavelmente falha ao
+chamar o UniTV. **Aceitável**: é uma PoC descartável, sem automação
+real em produção (seção acima). Recapturar um `dealer_token` novo —
+mesma técnica passiva já documentada — fica para quando/se a decisão
+de transição desta PoC para a arquitetura definitiva for tomada, não
+antes.

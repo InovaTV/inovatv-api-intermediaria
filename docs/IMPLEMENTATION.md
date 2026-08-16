@@ -219,13 +219,17 @@ Validador determinístico (Componente 4), gravação de
 WhatsApp (Cloud API), aviso ao operador, Interface Humana Web. Próxima
 etapa, só quando autorizada — não iniciada automaticamente após esta.
 
-### Achado de segurança separado, não resolvido nesta etapa
+### Achado de segurança separado — fechado em 2026-08-16
 
 Durante a inspeção de `conversas_estado`, uma aba pré-existente do SQL
 Editor (de sessão anterior, não desta implementação) revelou um
 `UNITV_DEALER_TOKEN` em texto puro numa query salva
 (`npx supabase secrets set UNITV_DEALER_TOKEN=... --project-ref
 nduxsuxkopuvhwugdkqi`), provável resíduo da investigação
-PagBank/UniTV. Não foi executada, não foi apagada, não foi alterada —
-tratamento (rotação do token, limpeza da query salva) fica para uma
-sessão separada, por decisão do usuário.
+PagBank/UniTV. Tratamento concluído nesta sessão: a query foi
+localizada (confirmada por hash SHA-256 contra o digest do Secret
+ativo), limpa e salva; o usuário trocou a senha de administrador do
+painel de revenda (`panel-web.revenda.site`), única forma de rotação
+disponível para esse tipo de credencial. Detalhe completo, incluindo a
+consequência aceita de não recapturar um token novo agora:
+`docs/pagamentos/POC_PAGBANK_UNITV_TESTE_013_PONTA_A_PONTA.md`.
