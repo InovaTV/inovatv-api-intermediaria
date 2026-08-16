@@ -68,6 +68,9 @@ não faz parte da sequência de implementação atual, não antecipada aqui.
 3. Testar as tabelas                            ✅ validado (schema, RLS, FK, insert/rollback)
 4. Núcleo mínimo do Orquestrador                ✅ concluído (2026-08-16, implantado e validado)
 5. Integrar /match, /status e Gemini            ✅ concluído (2026-08-16, implantado e testado com evidência real)
+6. Validador + transferência atômica + envio    ✅ código concluído e implantado (2026-08-16);
+   real ao WhatsApp                                envio real bloqueado externamente pela Meta
+                                                     (ver seção "Etapa 6" abaixo) — não é código pendente
 ```
 
 Um componente por vez, testado e com checkpoint antes de avançar —
@@ -218,6 +221,122 @@ Validador determinístico (Componente 4), gravação de
 `aguardando_humano` quando `tipo === "transferir"`, envio real por
 WhatsApp (Cloud API), aviso ao operador, Interface Humana Web. Próxima
 etapa, só quando autorizada — não iniciada automaticamente após esta.
+
+## Etapa 6 — Validador, transferência atômica, envio real ao WhatsApp (2026-08-16)
+
+Cinco fatias sucessivas, cada uma commitada, testada localmente e
+implantada isoladamente antes da próxima — mesma disciplina das etapas
+anteriores. Detalhe de arquitetura/decisão de produto por trás de cada
+uma: `inovatv_central` `CLAUDE.md`, seção "Implementação da IA própria
+— Etapa 6" (resumo) e as especificações dos Componentes 1/4/5 (detalhe
+completo).
+
+### Primeira fatia — Validador Determinístico (Componente 4)
+
+Commits `6cd1964`, `284a144`, `c0dfa2c`. `_shared/validador.ts`:
+segurança/política (credencial, telefone de outro cliente, valor
+monetário) sempre roda; factual (datas, contagem de acessos, plano/
+servidor rotulado) só roda quando há algo a checar — nunca outra IA,
+só comparação determinística contra o contexto realmente enviado. Duas
+correções reais de falso positivo durante a validação: rótulo de
+identificação de acesso ("Acesso N/M:") sendo lido como contagem
+total, e "1 acesso no servidor X" (item individual) sendo lido como
+contagem total — ambas corrigidas com o menor ajuste possível de
+regex/âncora, nunca removendo a proteção de ambiguidade. 37/37 testes
+locais passando na versão final; testado contra produção com evidência
+real (`validacao.aprovado: true`, Gemini listando corretamente os 2
+acessos reais do telefone `17981625486`).
+
+### Segunda fatia — integração do Validador ao Orquestrador
+
+Commit `ed42274`. No branch `estado === "normal"`, depois de
+`chamarGemini`, a resposta passa por `validarResposta` antes de
+qualquer liberação: aprovado devolve `{tipo, texto}` normalmente,
+reprovado devolve `{outcome:"bloqueado"}` — a resposta original do
+Gemini nunca sai quando reprovada, só o motivo (`validacao.motivo`).
+Deliberadamente fora desta fatia: gravação real de `aguardando_humano`
+quando reprovado ou `tipo==="transferir"` (fatia seguinte).
+
+### Terceira fatia — transferência humana atômica via RPC
+
+Commit `2f84a94`, migration `20260816120000_acionar_transferencia_humana.sql`
+(aplicada diretamente no Supabase via SQL Editor). Substitui a
+primeira implementação (3 chamadas HTTP separadas — `UPDATE` +
+2×`INSERT`) por uma função Postgres `SECURITY INVOKER` que faz tudo
+numa única transação atômica, com guarda `WHERE estado = 'normal'` e
+exceção customizada (`errcode P0001`) quando a conversa já não está
+mais em `normal` — o Orquestrador distingue esse caso (`ja_transferida`,
+concorrência esperada, não é falha) de um erro real da RPC
+(`falha_ao_registrar`). Motivo real da mudança: uma revisão de
+segurança do próprio usuário encontrou o risco real de falha parcial
+na versão anterior (estado marcado sem as mensagens gravadas, se uma
+das 3 chamadas falhasse no meio). Testado localmente (16 checks
+mockando `client.rpc()`) e com evidência real em produção — timestamps
+idênticos entre `conversas_estado` e as duas linhas de
+`mensagens_atendimento_humano`, provando atomicidade de verdade.
+
+### Quarta fatia — cliente WhatsApp Cloud API isolado
+
+Commit `097d634`. `_shared/whatsapp_client.ts` (`enviarMensagemWhatsApp`):
+só a capacidade técnica de enviar uma mensagem de texto livre via
+Graph API — não decide quando/pra quem enviar (isso é do Orquestrador,
+fatia seguinte), não usa Message Template, nunca lança exceção (sempre
+`{outcome:"success", messageId}` ou `{outcome:"unavailable"}`).
+Secrets `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` vêm
+exclusivamente de `Deno.env`, nunca hardcoded, nunca colados na
+conversa. Deliberadamente **não integrado** ao Orquestrador nesta
+fatia — 11/11 testes locais (mockando `fetch`/`Deno.env`).
+
+### Quinta fatia — envio real ao cliente
+
+Commit `e99834b`, mais `_shared/mensagens_fixas.ts`
+(`MENSAGEM_TRANSFERENCIA_CLIENTE`, texto congelado aprovado
+2026-08-16, Componente 1 §16 do `CLAUDE.md`). No Orquestrador: aprovado
++ `tipo==="responder"` envia o texto real do Gemini; `deveTransferir`
+e a RPC realmente acionou agora (nunca em `ja_transferida`/erro) envia
+a mensagem fixa — nunca o texto do Gemini sobre a transferência.
+Resposta ganha o campo `envio: {enviado: boolean}`. 16/16 testes locais
+cobrindo os 7 cenários (incluindo a supressão de reenvio duplicado sob
+concorrência).
+
+### Log de diagnóstico + achado real do bloqueio (`133010`)
+
+Commit `48db7cb`. Dois testes reais consecutivos devolveram
+`envio.enviado: false` sem nenhuma visibilidade da causa — o
+`whatsapp_client.ts` engolia qualquer erro da Graph API silenciosamente
+(gap do Componente 1 §19, logs/auditoria, ainda não implementado no
+resto do Orquestrador). Log temporário adicionado (status/corpo de
+erro da Graph API, corpo 200 sem `messageId`, exceções — nunca o
+access token), sem mudar o contrato de retorno (11/11 testes locais
+continuam passando). Log real capturado em produção:
+```json
+{"status":400,"statusText":"Bad Request","body":{"error":{"message":"(#133010) Account not registered","code":133010,"type":"OAuthException"}}}
+```
+Investigado com uma function temporária descartável (`whatsapp-diag`,
+mesmo padrão já usado antes neste projeto para `debug-fields`) — só
+duas chamadas `GET` de leitura na Graph API, nunca `/register`, nunca
+envia mensagem, nunca expõe o token. Resultado real:
+```json
+{"code_verification_status":"VERIFIED","name_status":"PENDING_REVIEW","verified_name":"InovaTV","platform_type":"NOT_APPLICABLE"}
+```
+`platform_type: NOT_APPLICABLE` bate exatamente com o erro `133010` —
+o número está verificado mas nunca completou o registro próprio da
+Cloud API. `whatsapp-diag` apagada logo depois de usada (confirmado
+"Viewing 6 functions in total", de volta ao número anterior).
+
+### Estado atual — checkpoint de espera, bloqueado externamente pela Meta
+
+Código completo e implantado (commits `6cd1964` até `48db7cb`). O
+envio real ao `17996286135` (número de teste, Cloud API pura, sem
+Coexistence) falha por uma revisão de nome de exibição
+("InovaTV") ainda pendente na Meta desde 15/08 — tentar trocar o nome
+foi explicitamente bloqueado pela própria Meta "porque já existe outra
+verificação em andamento", forte indício (não prova formal) de que é a
+mesma causa do `133010`. Decisão: aguardar a Meta concluir essa
+revisão antes de qualquer nova tentativa de registro — sem abrir
+Webhook real, Interface Humana Web ou Camada de Conhecimento Empresarial
+enquanto isso. O número oficial `17996242415` nunca foi tocado durante
+toda a Etapa 6.
 
 ### Achado de segurança separado — fechado em 2026-08-16
 
