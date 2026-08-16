@@ -19,8 +19,17 @@
 // o texto estruturado do Gemini em mensagens_atendimento_humano.
 // Aprovado + tipo==="responder" segue liberando normalmente. Gemini
 // indisponivel mantem o comportamento anterior, sem transferencia.
-// Deliberadamente NAO envia WhatsApp, NAO envia aviso ao Jose, NAO
-// implementa Webhook/Interface Humana Web -- fatias futuras.
+//
+// Etapa 6, quinta fatia (2026-08-16, Componente 1 §16, a parte de
+// ENVIO): aprovado + tipo==="responder" -> envia o texto real do
+// Gemini ao cliente via WhatsApp Cloud API. deveTransferir E a RPC
+// realmente acionou agora (nao "ja_transferida"/erro) -> envia a
+// mensagem fixa MENSAGEM_TRANSFERENCIA_CLIENTE (nunca o texto do
+// Gemini sobre a transferencia). "ja_transferida"/erro na RPC ->
+// NAO envia de novo (mesma disciplina do aviso ao Jose, §16-A).
+// Deliberadamente NAO envia aviso ao Jose (exige Message Template
+// aprovada pela Meta, ainda pendente), NAO implementa Webhook/
+// Interface Humana Web -- fatias futuras.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
 // 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
@@ -41,6 +50,8 @@ import {
 import { montarContextoCliente } from "../_shared/contexto.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
+import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { MENSAGEM_TRANSFERENCIA_CLIENTE } from "../_shared/mensagens_fixas.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -93,10 +104,11 @@ Deno.serve(async (req: Request) => {
   }
 
   // estado === 'normal': encadeia /match, /status, contexto minimo,
-  // Gemini (Etapa 5), validador (Etapa 6, segunda fatia) e, se
-  // reprovado ou tipo==="transferir", marca aguardando_humano (Etapa
-  // 6, terceira fatia). NAO envia WhatsApp, NAO envia aviso ao Jose --
-  // fatias futuras.
+  // Gemini (Etapa 5), validador (Etapa 6, segunda fatia), se
+  // reprovado ou tipo==="transferir" marca aguardando_humano (Etapa
+  // 6, terceira fatia), e envia a mensagem real ao cliente via
+  // WhatsApp (Etapa 6, quinta fatia). NAO envia aviso ao Jose --
+  // fatia futura.
   const matchResult = await chamarMatch(telefone);
 
   let statusResults: StatusResult[] = [];
@@ -125,6 +137,7 @@ Deno.serve(async (req: Request) => {
   let geminiSaida: unknown = { outcome: "unavailable" };
   let validacaoResultado: { aprovado: boolean; motivo?: string } | undefined;
   let transferenciaResultado: { acionada: boolean; motivo: string } | undefined;
+  let envioResultado: { enviado: boolean } | undefined;
 
   if (geminiResult.outcome === "success") {
     const geminiData = geminiResult.data;
@@ -161,6 +174,22 @@ Deno.serve(async (req: Request) => {
         transferenciaResultado = { acionada: false, motivo: "falha_ao_registrar" };
       }
     }
+
+    // Etapa 6, quinta fatia: envio real ao cliente. Aprovado +
+    // responder -> a resposta de verdade do Gemini. deveTransferir e
+    // a RPC acionou AGORA (nunca em "ja_transferida"/erro, decisao
+    // confirmada 2026-08-16) -> mensagem fixa, nunca o texto do
+    // Gemini sobre a transferencia.
+    if (validacao.aprovado && geminiData.tipo === "responder") {
+      const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
+      envioResultado = { enviado: envio.outcome === "success" };
+    } else if (deveTransferir && transferenciaResultado?.acionada) {
+      const envio = await enviarMensagemWhatsApp(
+        telefone,
+        MENSAGEM_TRANSFERENCIA_CLIENTE,
+      );
+      envioResultado = { enviado: envio.outcome === "success" };
+    }
   }
 
   return jsonResponse({
@@ -178,5 +207,6 @@ Deno.serve(async (req: Request) => {
     gemini: geminiSaida,
     ...(validacaoResultado ? { validacao: validacaoResultado } : {}),
     ...(transferenciaResultado ? { transferencia: transferenciaResultado } : {}),
+    ...(envioResultado ? { envio: envioResultado } : {}),
   });
 });
