@@ -5,10 +5,11 @@
 // match/status).
 //
 // service_role ignora RLS por padrao -- e' exatamente por isso que
-// conversas_estado/mensagens_atendimento_humano nao tem nenhuma policy
-// para anon/authenticated (Componente 1 §17, inovatv_central): o
-// isolamento e' "so quem tem a service_role key acessa", nao uma
-// policy de linha.
+// conversas_estado/conversas_episodios/mensagens_conversa (renomeada
+// de mensagens_atendimento_humano, Painel de Atendimento Fatia 1) nao
+// tem nenhuma policy para anon/authenticated (Componente 1 §17,
+// inovatv_central): o isolamento e' "so quem tem a service_role key
+// acessa", nao uma policy de linha.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 

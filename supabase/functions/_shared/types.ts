@@ -4,22 +4,45 @@
 
 export type EstadoConversa = "normal" | "aguardando_humano";
 
+// Revisao Painel de Atendimento (Componente 5 SS7, inovatv_central,
+// 2026-08-16): motivo/entrou_em_espera/assumido_por/assumido_em
+// deixaram de morar aqui -- viraram uma linha em ConversaEpisodio.
+// conversas_estado agora e' so o ponteiro pro estado atual.
 export interface ConversaEstado {
   conversation_id: string;
   telefone: string;
+  nome_snapshot: string | null;
   estado: EstadoConversa;
-  motivo: string | null;
-  entrou_em_espera: string | null;
-  assumido_por: string | null;
-  assumido_em: string | null;
+  episodio_atual_id: string | null;
   atualizado_em: string;
 }
 
-export type OrigemMensagem = "cliente" | "ia" | "humano";
+// Log permanente de cada periodo de atendimento humano (Componente 5
+// SS7-B). Nunca sobrescrito/apagado -- um telefone pode ter N linhas
+// ao longo do tempo.
+export type OrigemEpisodio = "ia" | "operador";
+
+export interface ConversaEpisodio {
+  id: string;
+  conversation_id: string;
+  origem: OrigemEpisodio;
+  motivo: string | null;
+  iniciado_em: string;
+  assumido_por: string | null;
+  assumido_em: string | null;
+  encerrado_em: string | null;
+  encerrado_por: string | null;
+}
+
+// 'sistema' e' novo (Componente 5 SS12, 2026-08-16) -- eventos como
+// "operador assumiu"/"atendimento encerrado", nunca gerado pelo Gemini
+// nem pelo cliente.
+export type OrigemMensagem = "cliente" | "ia" | "humano" | "sistema";
 
 export interface MensagemAtendimento {
   id: string;
   conversation_id: string;
+  episodio_id: string | null;
   origem: OrigemMensagem;
   texto: string;
   criado_em: string;

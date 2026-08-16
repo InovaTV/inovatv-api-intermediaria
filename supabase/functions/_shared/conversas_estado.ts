@@ -1,7 +1,14 @@
 // Acesso a tabela conversas_estado (Componente 5 §7, inovatv_central).
-// So o minimo necessario para o nucleo do Orquestrador nesta etapa --
-// assumir()/encerrar() chegam quando a Interface Humana Web for
-// especificada em codigo (etapa futura, fora de escopo aqui).
+//
+// Revisao Painel de Atendimento (Fatia 1, 2026-08-16): assumirAtendimento()/
+// encerrarAtendimento() chamam as RPCs novas (assumir_atendimento/
+// encerrar_atendimento_humano, migration 20260816140000). conversas_estado
+// deixou de guardar motivo/entrou_em_espera/assumido_por/assumido_em --
+// esses dados agora vivem em conversas_episodios (ver types.ts,
+// ConversaEpisodio), a RPC e' quem decide onde gravar cada coisa. Esta
+// camada TypeScript so executa, nunca decide QUANDO transferir/assumir/
+// encerrar -- isso continua sendo do Orquestrador (Componente 1 §9) ou
+// do operador via Painel (Componente 5 §5).
 
 import { getServiceClient } from "./supabase_client.ts";
 import type { ConversaEstado } from "./types.ts";
@@ -75,4 +82,63 @@ export async function buscarOuCriarConversa(
 
   if (erroInsert) throw erroInsert;
   return criada as ConversaEstado;
+}
+
+// Componente 5 §9 -- RPC unificada, cobre os 2 casos (assumir a partir
+// de 'normal', ou a partir de 'aguardando_humano' com episodio ja
+// aberto pela IA e ninguem assumido ainda). "ja_assumida" cobre os 2
+// jeitos de a RPC recusar por concorrencia (P0001): outro operador ja
+// assumiu o mesmo episodio, ou tentativa duplicada -- esperado sob
+// concorrencia, nao e' falha. Qualquer outro erro propaga (throw).
+export async function assumirAtendimento(
+  conversationId: string,
+  operador: string,
+): Promise<
+  | { outcome: "assumida"; conversa: ConversaEstado }
+  | { outcome: "ja_assumida" }
+> {
+  const client = getServiceClient();
+
+  const { data, error } = await client.rpc("assumir_atendimento", {
+    p_conversation_id: conversationId,
+    p_operador: operador,
+  });
+
+  if (error) {
+    if (error.code === "P0001") {
+      return { outcome: "ja_assumida" };
+    }
+    throw error;
+  }
+
+  return { outcome: "assumida", conversa: data as ConversaEstado };
+}
+
+// Componente 5 §11 -- fecha o episodio em aberto (nunca apaga a
+// linha), devolve a conversa a 'normal'. "nao_estava_aguardando_humano"
+// cobre tentar encerrar uma conversa que ja nao tem episodio aberto
+// (ex.: dois cliques de "Encerrar" no Painel) -- esperado, nao e'
+// falha. Qualquer outro erro propaga (throw).
+export async function encerrarAtendimento(
+  conversationId: string,
+  operador: string,
+): Promise<
+  | { outcome: "encerrada"; conversa: ConversaEstado }
+  | { outcome: "nao_estava_aguardando_humano" }
+> {
+  const client = getServiceClient();
+
+  const { data, error } = await client.rpc("encerrar_atendimento_humano", {
+    p_conversation_id: conversationId,
+    p_operador: operador,
+  });
+
+  if (error) {
+    if (error.code === "P0001") {
+      return { outcome: "nao_estava_aguardando_humano" };
+    }
+    throw error;
+  }
+
+  return { outcome: "encerrada", conversa: data as ConversaEstado };
 }

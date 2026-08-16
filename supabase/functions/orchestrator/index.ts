@@ -16,7 +16,8 @@
 // Etapa 6, terceira fatia (2026-08-16, Componente 1 §16, so' a parte
 // de ESTADO): valida => reprova, OU aprova mas tipo==="transferir" =>
 // marca aguardando_humano de verdade + registra mensagem do cliente e
-// o texto estruturado do Gemini em mensagens_atendimento_humano.
+// o texto estruturado do Gemini em mensagens_conversa (renomeada de
+// mensagens_atendimento_humano, Painel de Atendimento Fatia 1).
 // Aprovado + tipo==="responder" segue liberando normalmente. Gemini
 // indisponivel mantem o comportamento anterior, sem transferencia.
 //
@@ -34,8 +35,28 @@
 // configurado, envia o template nova_transferencia_humana ao Jose.
 // Best-effort: falha no aviso nunca desfaz a transferencia nem afeta
 // o envio ao cliente, ja concluidos antes deste passo. NAO implementa
-// Webhook (Componente 3) nem Interface Humana Web (Componente 5) --
-// fatias/frentes futuras.
+// Webhook (Componente 3) -- fatia/frente futura.
+//
+// Painel de Atendimento, Fatia 1+2+3 (2026-08-16, Componente 5 §12 e
+// Componente 1 §15-A):
+//   - Passo 0 (aguardando_humano): a mensagem do cliente agora carrega
+//     o episodio_id certo (conversa.episodio_atual_id), nao mais null.
+//   - Fluxo normal, tipo==="responder" sem transferencia: ninguem mais
+//     loga essa troca sozinho -- o Orquestrador grava cliente+ia aqui,
+//     episodio_id=null (fluxo so-IA, fora de qualquer episodio).
+//   - Fluxo normal, deveTransferir: a RPC acionar_transferencia_humana
+//     ja grava cliente+ia com o episodio_id certo -- NAO duplicar aqui.
+//   - Gemini indisponivel: ainda assim loga a mensagem do cliente
+//     (episodio_id=null) -- "sempre, qualquer estado" (Componente 5
+//     §12). Transferencia automatica por indisponibilidade do Gemini
+//     (Componente 1 §11) permanece fora de escopo desta fatia, gap
+//     pre-existente, nao mexido agora.
+//   - Antes de enviar a resposta real da IA (so no caminho
+//     tipo==="responder"), reconsulta conversas_estado -- se um
+//     operador assumiu manualmente enquanto este fluxo estava em
+//     andamento, NAO envia (evita IA e humano respondendo ao mesmo
+//     tempo). A resposta ja computada permanece registrada como
+//     contexto (linha acima), nunca e' descartada de verdade.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
 // 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
@@ -99,6 +120,7 @@ Deno.serve(async (req: Request) => {
         conversa.conversation_id,
         "cliente",
         conteudo,
+        conversa.episodio_atual_id,
       );
       return jsonResponse({
         outcome: "aguardando_humano",
@@ -184,16 +206,43 @@ Deno.serve(async (req: Request) => {
       } catch {
         transferenciaResultado = { acionada: false, motivo: "falha_ao_registrar" };
       }
+      // A RPC acionar_transferencia_humana ja grava cliente+ia com o
+      // episodio_id certo quando aciona de verdade (Componente 5 §12)
+      // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
+      // casos outra requisicao ja gravou, ou nada foi transferido).
+    } else {
+      // Fatia 2 (Painel de Atendimento, 2026-08-16): fluxo normal,
+      // so-IA, sem transferencia -- ninguem mais grava essa troca.
+      // episodio_id=null (nao pertence a nenhum episodio de
+      // atendimento humano). Best-effort: falha ao logar nunca
+      // derruba a resposta ao cliente.
+      try {
+        await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+        await inserirMensagem(conversa.conversation_id, "ia", geminiData.texto, null);
+      } catch {
+        // best-effort, mesma filosofia do aviso ao Jose (§16-A)
+      }
     }
 
-    // Etapa 6, quinta fatia: envio real ao cliente. Aprovado +
-    // responder -> a resposta de verdade do Gemini. deveTransferir e
-    // a RPC acionou AGORA (nunca em "ja_transferida"/erro, decisao
+    // Etapa 6, quinta fatia + Fatia 3 do Painel de Atendimento
+    // (Componente 1 §15-A, 2026-08-16): envio real ao cliente.
+    // Aprovado + responder -> reconsulta o estado imediatamente antes
+    // de enviar -- se um operador assumiu manualmente enquanto este
+    // fluxo estava em andamento (conversa passou pra
+    // aguardando_humano nesse meio-tempo), NAO envia a resposta da IA
+    // por cima do humano; a resposta ja foi registrada como mensagem
+    // de contexto acima, nunca e' descartada de verdade. deveTransferir
+    // e a RPC acionou AGORA (nunca em "ja_transferida"/erro, decisao
     // confirmada 2026-08-16) -> mensagem fixa, nunca o texto do
     // Gemini sobre a transferencia.
     if (validacao.aprovado && geminiData.tipo === "responder") {
-      const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
-      envioResultado = { enviado: envio.outcome === "success" };
+      const conversaAtual = await buscarOuCriarConversa(telefone);
+      if (conversaAtual.estado === "aguardando_humano") {
+        envioResultado = { enviado: false };
+      } else {
+        const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
+        envioResultado = { enviado: envio.outcome === "success" };
+      }
     } else if (deveTransferir && transferenciaResultado?.acionada) {
       const envio = await enviarMensagemWhatsApp(
         telefone,
@@ -215,6 +264,19 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
+    }
+  } else {
+    // Fatia 2 (Painel de Atendimento, 2026-08-16): Gemini indisponivel
+    // (falhou apos retry, Componente 1 §11) -- a mensagem do cliente
+    // ainda precisa ficar registrada ("sempre, qualquer estado",
+    // Componente 5 §12). episodio_id=null: nenhuma transferencia foi
+    // decidida aqui. Transferencia automatica por indisponibilidade do
+    // Gemini (Componente 1 §11) permanece fora de escopo desta fatia,
+    // gap pre-existente, nao mexido agora.
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+    } catch {
+      // best-effort, mesma filosofia acima
     }
   }
 

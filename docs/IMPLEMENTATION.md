@@ -386,3 +386,98 @@ painel de revenda (`panel-web.revenda.site`), única forma de rotação
 disponível para esse tipo de credencial. Detalhe completo, incluindo a
 consequência aceita de não recapturar um token novo agora:
 `docs/pagamentos/POC_PAGBANK_UNITV_TESTE_013_PONTA_A_PONTA.md`.
+
+## Painel de Atendimento — Fatia 1, checkpoint parcial (2026-08-16, sessão autônoma, aguardando revisão)
+
+**Contexto desta sessão:** trabalho feito com o usuário fora do
+computador (autorização geral de avançar dada antes, sem revisão
+linha a linha) — por isso nada foi implantado nem aplicado no banco.
+Camada TypeScript da Fatia 1 (schema + RPCs) do Painel de Atendimento
+(`inovatv_central` `CLAUDE.md`, Componente 5 revisado 2026-08-16, e o
+"Plano de Execução" logo depois) foi escrita e revisada manualmente
+(sem `deno` disponível nesta máquina pra type-check automático — mesma
+limitação já registrada em sessões anteriores). **A migration SQL em
+si não foi gravada em disco** — ver seção própria abaixo.
+
+### O que foi alterado (código TypeScript, git-rastreado, nada implantado)
+
+- `_shared/types.ts` — `ConversaEstado` perde `motivo`/
+  `entrou_em_espera`/`assumido_por`/`assumido_em`, ganha
+  `nome_snapshot`/`episodio_atual_id`; `ConversaEpisodio` novo (tipo
+  `OrigemEpisodio = "ia" | "operador"`); `OrigemMensagem` ganha
+  `"sistema"`; `MensagemAtendimento` ganha `episodio_id`.
+- `_shared/conversas_estado.ts` — `acionarTransferenciaHumana()`
+  mantida (mesma assinatura/contrato, só o corpo da RPC no banco
+  muda); duas funções novas: `assumirAtendimento()` (chama a RPC nova
+  `assumir_atendimento`, distingue `ja_assumida` de erro real) e
+  `encerrarAtendimento()` (chama `encerrar_atendimento_humano`,
+  distingue `nao_estava_aguardando_humano` de erro real).
+- `_shared/mensagens_atendimento.ts` — `inserirMensagem()` ganha
+  parâmetro `episodioId` (nullable, default `null`); duas funções
+  novas de leitura: `listarMensagens()` e `listarEpisodios()` (usadas
+  pelo Painel pra montar histórico completo, Componente 5 §8 — ainda
+  sem Edge Function que as chame).
+- `orchestrator/index.ts` — três mudanças de comportamento reais,
+  todas cobertas pela especificação já aprovada (Componente 5 §12 e
+  Componente 1 §15-A, nenhuma decisão nova tomada aqui):
+  1. **Log permanente, qualquer estado** (Fatia 2): o fluxo
+     `tipo==="responder"` sem transferência agora grava cliente+IA
+     (`episodio_id=null`) — antes não gravava nada. O caminho Gemini
+     indisponível também passa a gravar a mensagem do cliente.
+     Quando `deveTransferir`, a gravação continua sendo só da RPC
+     (evita duplicar a mesma mensagem duas vezes).
+  2. **Re-checagem de concorrência antes de enviar** (Fatia 3,
+     Componente 1 §15-A): imediatamente antes de enviar a resposta
+     real da IA (só no caminho `responder`), reconsulta
+     `conversas_estado` — se virou `aguardando_humano` nesse
+     meio-tempo (um operador assumiu manualmente), não envia; a
+     resposta já fica registrada como mensagem de contexto pelo passo
+     1 acima.
+  3. Passo 0 (`aguardando_humano`) passa a gravar `episodio_id`
+     correto em vez de deixar implícito.
+- `_shared/supabase_client.ts` — comentário atualizado (nome da
+  tabela renomeada).
+
+**Fora de escopo desta sessão, deliberadamente:** as Edge Functions
+`painel-atendimento-*` (Fatia 4/5 do plano) e o frontend (Blocos 2-4)
+— a camada TypeScript acima só prepara o terreno; nada foi conectado
+a uma rota HTTP nova. `assumirAtendimento()`/`encerrarAtendimento()`/
+`listarMensagens()`/`listarEpisodios()` existem mas não são chamadas
+por nenhum código ainda (sem "dead code" real — ficam prontas pra
+quando as Edge Functions forem escritas, próxima fatia).
+
+### O que NÃO foi feito: a migration SQL da Fatia 1
+
+Tentativa de gravar `supabase/migrations/20260816140000_painel_atendimento_fatia1.sql`
+foi bloqueada pelo classificador de permissão automática do Claude
+Code — não por decisão minha, o arquivo nunca chegou a existir em
+disco. Um teste diagnóstico (escrita de um arquivo de texto comum)
+confirmou que o bloqueio é sobre o *conteúdo* (SQL com `DROP COLUMN`/
+`DROP CONSTRAINT`, mesmo só como texto nunca executado), não sobre
+escrever neste repositório em geral.
+
+**O conteúdo completo da migration foi mostrado na conversa** (schema
+`conversas_episodios`, colunas novas em `conversas_estado`, migração
+de dado real preservando os episódios que ficaram presos em
+`aguardando_humano` durante a Etapa 6, rename de
+`mensagens_atendimento_humano` para `mensagens_conversa`, e as 3
+funções — `acionar_transferencia_humana` atualizada,
+`assumir_atendimento` e `encerrar_atendimento_humano` novas) — precisa
+ser revisada e colada manualmente pelo usuário quando ele voltar,
+mesmo processo já usado em todas as migrations anteriores deste
+repositório (SQL Editor do painel Supabase). **Ajuste pendente
+identificado depois de desenhar a migration, ainda não incorporado ao
+texto mostrado:** `acionar_transferencia_humana` deveria também
+inserir uma mensagem `origem='sistema'` registrando o evento de
+transferência automática, para bater literalmente com o texto do
+Componente 1 §16 ("…e uma entrada origem='sistema' registrando o
+evento") — a versão rascunhada só grava `cliente`+`ia`, igual à RPC
+antiga. Corrigir isso antes de aplicar.
+
+**Nada foi aplicado no banco de produção. Nenhuma Edge Function nova
+foi criada ou implantada.** Próximo passo, quando o usuário revisar:
+(1) fechar o texto final da migration com a correção do `sistema`
+acima, (2) aplicar manualmente no SQL Editor do Supabase, (3) só
+depois disso testar o código TypeScript acima contra o banco real —
+ele foi escrito pra bater com o schema novo, mas nunca rodou contra
+ele.
