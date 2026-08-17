@@ -11,9 +11,12 @@ import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel
 import { buscarConversaPorId } from "../_shared/conversas_estado.ts";
 import { listarEpisodios, listarMensagens } from "../_shared/mensagens_atendimento.ts";
 import { chamarMatch, chamarStatus, type StatusResult } from "../_shared/rocket_intermediaria.ts";
-import { jsonResponse, errorResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return corsResponse();
+  }
   if (req.method !== "GET") {
     return errorResponse("Metodo nao suportado, use GET", 405);
   }

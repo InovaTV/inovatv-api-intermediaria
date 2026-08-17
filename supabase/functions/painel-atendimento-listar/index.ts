@@ -8,9 +8,12 @@
 
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
 import { listarConversas } from "../_shared/conversas_estado.ts";
-import { jsonResponse, errorResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return corsResponse();
+  }
   if (req.method !== "GET") {
     return errorResponse("Metodo nao suportado, use GET", 405);
   }
