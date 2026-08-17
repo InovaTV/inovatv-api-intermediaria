@@ -117,7 +117,7 @@ async function chamarOrquestrador(
         "X-Internal-Token": tokenInterno,
       },
       body: JSON.stringify({ telefone, conteudo }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!resp.ok) {
