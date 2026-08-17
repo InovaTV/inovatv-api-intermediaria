@@ -3,3 +3,5 @@ scripts/output/
 scripts/.credentials/
 supabase/.temp/
 supabase/.branches/
+.vercel
+.env*
