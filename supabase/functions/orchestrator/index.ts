@@ -85,6 +85,19 @@ import {
 } from "../_shared/mensagens_fixas.ts";
 
 Deno.serve(async (req: Request) => {
+  // Componente 3, decisao arquitetural 2 (2026-08-17): unica fonte de
+  // autenticacao real desta function -- verify_jwt fica desligado no
+  // deploy (nao e' codigo, e' flag de deploy). Checagem simples e
+  // segura (sem exigir resistencia a timing attack, decisao ja
+  // aprovada), antes de qualquer outra coisa -- inclusive antes do
+  // metodo e de req.json(). Nunca reflete o token recebido/esperado
+  // em log ou resposta, so a decisao (autorizado ou nao).
+  const tokenInterno = Deno.env.get("ORCHESTRATOR_INTERNAL_TOKEN");
+  const tokenRecebido = req.headers.get("X-Internal-Token");
+  if (!tokenInterno || !tokenRecebido || tokenRecebido !== tokenInterno) {
+    return errorResponse("Nao autorizado", 401);
+  }
+
   if (req.method !== "POST") {
     return errorResponse("Metodo nao suportado, use POST", 405);
   }
