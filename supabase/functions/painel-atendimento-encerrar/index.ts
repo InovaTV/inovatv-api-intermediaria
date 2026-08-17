@@ -5,9 +5,12 @@
 
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
 import { encerrarAtendimento } from "../_shared/conversas_estado.ts";
-import { jsonResponse, errorResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return corsResponse();
+  }
   if (req.method !== "POST") {
     return errorResponse("Metodo nao suportado, use POST", 405);
   }
