@@ -3,11 +3,12 @@
 // atendimento (isso e' uma acao separada, dentro da tela de detalhe).
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import AuthGuard from "@/components/AuthGuard";
 import { supabase } from "@/lib/supabase";
 import { listarConversas } from "@/lib/api";
+import { assinarRealtime, mesclarConversa } from "@/lib/realtime";
 import type { ConversaEstado } from "@/lib/types";
 
 function ListaConversas() {
@@ -15,18 +16,39 @@ function ListaConversas() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
-  useEffect(() => {
-    listarConversas(1)
+  const carregar = useCallback(() => {
+    return listarConversas(1)
       .then((resp) => {
         if (resp.outcome !== "success") {
           setErro("Nao foi possivel carregar as conversas agora.");
           return;
         }
         setConversas(resp.conversas);
+        setErro(null);
       })
-      .catch(() => setErro("Nao foi possivel carregar as conversas agora."))
-      .finally(() => setCarregando(false));
+      .catch(() => setErro("Nao foi possivel carregar as conversas agora."));
   }, []);
+
+  useEffect(() => {
+    carregar().finally(() => setCarregando(false));
+  }, [carregar]);
+
+  // Realtime: so sincronizacao visual (Componente 5, etapa aprovada
+  // 2026-08-17) -- nenhuma escrita, nenhuma chamada a Edge Function
+  // daqui. conversas_estado INSERT/UPDATE move a conversa pro topo da
+  // lista local; reconexao dispara um refetch completo (cobre
+  // qualquer evento perdido durante a queda).
+  useEffect(() => {
+    const cancelar = assinarRealtime({
+      onConversaChange: (conversa) => {
+        setConversas((atual) => mesclarConversa(atual, conversa));
+      },
+      onReconectar: () => {
+        carregar();
+      },
+    });
+    return cancelar;
+  }, [carregar]);
 
   async function sair() {
     await supabase.auth.signOut();

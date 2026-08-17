@@ -12,6 +12,10 @@ import {
   encerrarConversa,
   responderConversa,
 } from "@/lib/api";
+import {
+  assinarRealtime,
+  adicionarMensagemSemDuplicar,
+} from "@/lib/realtime";
 import type {
   ConversaEstado,
   ConversaEpisodio,
@@ -66,6 +70,30 @@ function ConversaDetalhe() {
   useEffect(() => {
     carregar();
   }, [carregar]);
+
+  // Realtime: so sincronizacao visual (Componente 5, etapa aprovada
+  // 2026-08-17) -- nenhuma escrita, nenhuma chamada a Edge Function
+  // daqui. Filtra pelo conversation_id da rota atual -- eventos de
+  // outras conversas nao afetam esta tela. mensagens_conversa INSERT
+  // e' dedupado por id (idempotente com o refetch que assumir/
+  // encerrar/responder ja disparam sozinhos). Reconexao dispara
+  // carregar() de novo, cobrindo qualquer evento perdido na queda.
+  useEffect(() => {
+    const cancelar = assinarRealtime({
+      onConversaChange: (atualizada) => {
+        if (atualizada.conversation_id !== conversationId) return;
+        setConversa(atualizada);
+      },
+      onMensagemNova: (mensagem) => {
+        if (mensagem.conversation_id !== conversationId) return;
+        setMensagens((atual) => adicionarMensagemSemDuplicar(atual, mensagem));
+      },
+      onReconectar: () => {
+        carregar();
+      },
+    });
+    return cancelar;
+  }, [conversationId, carregar]);
 
   async function handleAssumir() {
     setAcaoEmAndamento(true);
