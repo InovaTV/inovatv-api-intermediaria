@@ -87,3 +87,45 @@ input, textarea {
   max-width: 100%;
   text-align: center;
 }
+
+/* Etapa 2 -- layout estilo WhatsApp (duas colunas). Desktop: as duas
+   colunas sempre visiveis lado a lado. Telas estreitas: uma coluna
+   por vez, controlada pelas classes -oculta-mobile (aplicadas pelo
+   layout.tsx conforme ha ou nao um id de conversa na URL). */
+.painel-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.painel-lista {
+  width: 360px;
+  min-width: 360px;
+  border-right: 1px solid #2a2e38;
+  overflow-y: auto;
+}
+
+.painel-detalhe {
+  flex: 1;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .painel-lista {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+  }
+
+  .painel-detalhe {
+    width: 100%;
+  }
+
+  .painel-lista-oculta-mobile {
+    display: none;
+  }
+
+  .painel-detalhe-oculta-mobile {
+    display: none;
+  }
+}
