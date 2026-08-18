@@ -11,6 +11,11 @@ export interface ConversaEstado {
   estado: EstadoConversa;
   episodio_atual_id: string | null;
   atualizado_em: string;
+  // Aviso de Novas Mensagens (Fatia 1, migration 20260818000000):
+  // visto_em = ultima vez que um operador abriu esta conversa;
+  // ultima_mensagem_cliente_em = mantido por trigger, so' origem='cliente'.
+  visto_em: string | null;
+  ultima_mensagem_cliente_em: string | null;
 }
 
 export type OrigemEpisodio = "ia" | "operador";

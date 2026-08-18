@@ -91,3 +91,17 @@ export function responderConversa(conversationId: string, texto: string) {
     body: { conversation_id: conversationId, texto },
   });
 }
+
+// Aviso de Novas Mensagens, Fatia 3 -- endpoint dedicado (decisao 3 do
+// planejamento aprovado), nunca chamado como efeito colateral de
+// abrirConversa(). Quem decide QUANDO chamar isso e' quem usa o
+// wrapper (Fatia 5: ao abrir a tela da conversa, e de novo a cada
+// mensagem nova de origem 'cliente' recebida enquanto ela permanece
+// aberta) -- este arquivo so' faz o encanamento HTTP, igual as demais
+// funcoes acima.
+export function marcarVistoConversa(conversationId: string) {
+  return chamarFuncao<AcaoConversaResposta>("painel-atendimento-marcar-visto", {
+    method: "POST",
+    body: { conversation_id: conversationId },
+  });
+}
