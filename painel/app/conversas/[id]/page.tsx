@@ -11,6 +11,7 @@ import {
   assumirConversa,
   encerrarConversa,
   responderConversa,
+  marcarVistoConversa,
 } from "@/lib/api";
 import {
   assinarRealtime,
@@ -60,6 +61,16 @@ function ConversaDetalhe() {
       setMensagens(resp.mensagens ?? []);
       setClienteAoVivo(resp.clienteAoVivo ?? []);
       setErro(null);
+
+      // Aviso de Novas Mensagens, Fatia 5 (decisao 3 do planejamento
+      // aprovado): abrirConversa() e' sempre leitura pura -- marcar
+      // como visto e' uma chamada SEPARADA, explicita, disparada pelo
+      // frontend logo depois do sucesso acima. Best-effort: uma falha
+      // aqui nunca deve impedir o operador de ver a conversa (ja
+      // carregada com sucesso nas linhas anteriores).
+      marcarVistoConversa(conversationId).catch(() => {
+        // silencioso de proposito -- ver comentario acima.
+      });
     } catch {
       setErro("Nao foi possivel carregar esta conversa.");
     } finally {
@@ -87,6 +98,17 @@ function ConversaDetalhe() {
       onMensagemNova: (mensagem) => {
         if (mensagem.conversation_id !== conversationId) return;
         setMensagens((atual) => adicionarMensagemSemDuplicar(atual, mensagem));
+
+        // Fatia 5: a conversa esta aberta nesta tela agora -- toda
+        // mensagem nova do cliente marca como vista de novo, senao um
+        // reload posterior mostraria "nao lida" uma mensagem que o
+        // operador ja viu chegar ao vivo (Componente 5, secao 5 do
+        // planejamento). Best-effort, mesmo padrao de carregar() acima.
+        if (mensagem.origem === "cliente") {
+          marcarVistoConversa(conversationId).catch(() => {
+            // silencioso de proposito.
+          });
+        }
       },
       onReconectar: () => {
         carregar();

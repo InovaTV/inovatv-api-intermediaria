@@ -56,6 +56,26 @@ input, textarea {
   color: #e0a95a;
 }
 
+/* Aviso de Novas Mensagens (Fatia 4) -- contador global de conversas
+   com mensagem nao lida, ao lado do titulo "Conversas". */
+.badge-nao-lida {
+  background: #4a1f1f;
+  color: #f0918f;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Ponto de destaque por linha da lista -- decisao 4.2, indicador
+   booleano, nunca contagem de mensagens. */
+.ponto-nao-lida {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f0918f;
+  flex-shrink: 0;
+}
+
 .msg {
   padding: 8px 12px;
   border-radius: 8px;
