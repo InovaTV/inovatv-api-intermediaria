@@ -81,6 +81,11 @@ input, textarea {
   border-radius: 8px;
   margin-bottom: 8px;
   max-width: 80%;
+  /* Fatia 3 -- sem isso o balao sempre esticava ate max-width mesmo
+     com texto curto (block auto-width preenche o container inteiro
+     ate o teto do max-width). fit-content faz o balao acompanhar o
+     tamanho real do conteudo, respeitando o teto de 80%. */
+  width: fit-content;
   white-space: pre-wrap;
 }
 
@@ -106,6 +111,22 @@ input, textarea {
   font-size: 13px;
   max-width: 100%;
   text-align: center;
+  /* Centraliza o balao (agora fit-content) dentro da coluna, em vez
+     de so' centralizar o texto dentro de um balao que ja ocupava a
+     largura toda. */
+  margin: 0 auto 8px;
+}
+
+/* Fatia 3 -- separador de bloco do dia (Hoje/Ontem/data), entre
+   grupos contiguos de mensagens da mesma data-calendario. */
+.separador-data {
+  text-align: center;
+  color: #6b6f78;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 16px 0 8px;
 }
 
 /* Etapa 2 -- layout estilo WhatsApp (duas colunas). Desktop: as duas

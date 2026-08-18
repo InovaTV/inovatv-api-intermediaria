@@ -13,7 +13,15 @@
 // exatamente como ja estavam.
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import AuthGuard from "@/components/AuthGuard";
@@ -30,6 +38,21 @@ import {
 import type { ConversaEstado } from "@/lib/types";
 
 const TITULO_BASE = "Painel de Atendimento -- InovaTV";
+
+// Fatia 3 -- .painel-detalhe (o elemento com scroll de verdade,
+// flex:1 + overflow-y:auto) e' renderizado aqui no layout, mas quem
+// precisa posicionar o scroll (conversa aberta) e' [id]/page.tsx,
+// renderizado como children. Context e' o mecanismo React correto
+// pra essa comunicacao entre um layout persistente e a rota filha --
+// nunca document.querySelector alcancando DOM de outro componente.
+// Mesmo lugar (arquivo do layout) por ser o dono natural do ref.
+const PainelDetalheRefContext = createContext<React.RefObject<HTMLDivElement | null> | null>(
+  null,
+);
+
+export function usePainelDetalheRef() {
+  return useContext(PainelDetalheRefContext);
+}
 
 type Filtro = "todas" | "nao_lidas" | "aguardando";
 
@@ -354,6 +377,7 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
 export default function ConversasLayout({ children }: { children: React.ReactNode }) {
   const params = useParams<{ id?: string }>();
   const conversationIdAtual = params?.id;
+  const detalheRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="painel-shell">
@@ -361,11 +385,14 @@ export default function ConversasLayout({ children }: { children: React.ReactNod
         <ListaConversas conversationIdAtual={conversationIdAtual} />
       </AuthGuard>
       <div
+        ref={detalheRef}
         className={`painel-detalhe ${
           conversationIdAtual ? "" : "painel-detalhe-oculta-mobile"
         }`}
       >
-        {children}
+        <PainelDetalheRefContext.Provider value={detalheRef}>
+          {children}
+        </PainelDetalheRefContext.Provider>
       </div>
     </div>
   );
