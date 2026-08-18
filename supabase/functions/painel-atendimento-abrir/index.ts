@@ -8,7 +8,7 @@
 // Orquestrador).
 
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
-import { buscarConversaPorId } from "../_shared/conversas_estado.ts";
+import { buscarConversaPorId, atualizarNomeSnapshot } from "../_shared/conversas_estado.ts";
 import { listarEpisodios, listarMensagens } from "../_shared/mensagens_atendimento.ts";
 import { chamarMatch, chamarStatus, type StatusResult } from "../_shared/rocket_intermediaria.ts";
 import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
@@ -69,6 +69,16 @@ Deno.serve(async (req: Request) => {
     }
   } catch {
     statusResults = [];
+  }
+
+  // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
+  // Reforco secundario ao Orquestrador (cobre o caso raro de /match
+  // ter falhado na primeira mensagem, mas funcionar quando o
+  // operador abre depois). Best-effort: nunca atrasa/falha a
+  // resposta que ja vai pro operador.
+  const nomeReal = statusResults.find((s) => s.cliente?.nome)?.cliente?.nome;
+  if (nomeReal) {
+    await atualizarNomeSnapshot(conversationId, nomeReal).catch(() => {});
   }
 
   return jsonResponse({

@@ -15,6 +15,10 @@ export interface ConversaEstado {
   estado: EstadoConversa;
   episodio_atual_id: string | null;
   atualizado_em: string;
+  // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
+  // Mantido por trigger (mensagens_conversa), nunca escrito por
+  // codigo TypeScript -- ver atualizar_conversa_ao_inserir_mensagem.
+  ultima_mensagem_texto: string | null;
 }
 
 // Log permanente de cada periodo de atendimento humano (Componente 5

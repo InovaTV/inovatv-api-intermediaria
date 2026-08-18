@@ -67,6 +67,7 @@ import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
   buscarOuCriarConversa,
   acionarTransferenciaHumana,
+  atualizarNomeSnapshot,
 } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import {
@@ -168,6 +169,15 @@ Deno.serve(async (req: Request) => {
         .filter((c) => !!c.publicId)
         .map((c) => chamarStatus(c.publicId as string)),
     );
+  }
+
+  // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
+  // Best-effort: statusResults ja foi resolvido de graca acima, sem
+  // chamada extra -- uma falha aqui nunca pode atrasar/derrubar o
+  // fluxo principal (Gemini, validador, envio ao cliente).
+  const nomeReal = statusResults.find((s) => s.cliente?.nome)?.cliente?.nome;
+  if (nomeReal) {
+    await atualizarNomeSnapshot(conversa.conversation_id, nomeReal).catch(() => {});
   }
 
   const matchIndisponivel =

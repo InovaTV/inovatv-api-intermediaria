@@ -212,3 +212,28 @@ export async function marcarVisto(
 
   return { outcome: "marcada", conversa: data[0] as ConversaEstado };
 }
+
+// Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18,
+// Plano de Execucao "Proxima evolucao do Painel de Atendimento").
+// Preenche nome_snapshot (coluna existente desde a migration
+// 20260816140000, nunca escrita ate agora). Chamada em dois pontos,
+// ambos best-effort (Orquestrador apos /status resolvido, e
+// painel-atendimento-abrir como reforco) -- nenhum dos dois pode
+// derrubar o fluxo principal se esta escrita falhar, por isso o
+// chamador sempre envolve em .catch(() => {}) em vez de deixar o
+// erro propagar. So' escreve quando ha' nome real (nunca sobrescreve
+// um nome_snapshot ja populado com null vindo de uma consulta que
+// falhou/nao encontrou).
+export async function atualizarNomeSnapshot(
+  conversationId: string,
+  nome: string,
+): Promise<void> {
+  const client = getServiceClient();
+
+  const { error } = await client
+    .from("conversas_estado")
+    .update({ nome_snapshot: nome })
+    .eq("conversation_id", conversationId);
+
+  if (error) throw error;
+}
