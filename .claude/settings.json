@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(gh *)",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" *)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" *)",
+      "PowerShell(gh *)",
+      "PowerShell(& \"C:\\Program Files\\GitHub CLI\\gh.exe\" *)",
+      "Bash(vercel *)",
+      "Bash(npx vercel *)",
+      "PowerShell(vercel *)",
+      "PowerShell(npx vercel *)",
+      "Bash(supabase *)",
+      "Bash(npx supabase *)",
+      "PowerShell(supabase *)",
+      "PowerShell(npx supabase *)",
+      "Bash(curl *)",
+      "PowerShell(Invoke-RestMethod *)",
+      "PowerShell(Invoke-WebRequest *)"
+    ]
+  }
+}
