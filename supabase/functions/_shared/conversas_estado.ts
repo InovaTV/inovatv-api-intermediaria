@@ -181,3 +181,34 @@ export async function encerrarAtendimento(
 
   return { outcome: "encerrada", conversa: data as ConversaEstado };
 }
+
+// Painel de Atendimento -- Aviso de Novas Mensagens, Fatia 2 (decisao
+// 3 do planejamento aprovado, inovatv_central: endpoint dedicado,
+// nunca um efeito colateral de painel-atendimento-abrir). Marca
+// conversas_estado.visto_em = now() para a conversa informada -- um
+// UPDATE simples, sem RPC: diferente de assumir/encerrar, nao ha
+// branching nem necessidade de atomicidade real (visto_em e' sempre
+// idempotente, sem condicao de "ja marcado"). "nao_encontrada" cobre
+// um conversation_id que nao existe (ex.: erro de digitacao/URL) --
+// nao e' falha, so' nao ha' nada pra marcar.
+export async function marcarVisto(
+  conversationId: string,
+): Promise<
+  | { outcome: "marcada"; conversa: ConversaEstado }
+  | { outcome: "nao_encontrada" }
+> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("conversas_estado")
+    .update({ visto_em: new Date().toISOString() })
+    .eq("conversation_id", conversationId)
+    .select("*");
+
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    return { outcome: "nao_encontrada" };
+  }
+
+  return { outcome: "marcada", conversa: data[0] as ConversaEstado };
+}
