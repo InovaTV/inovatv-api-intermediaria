@@ -16,6 +16,9 @@ export interface ConversaEstado {
   // ultima_mensagem_cliente_em = mantido por trigger, so' origem='cliente'.
   visto_em: string | null;
   ultima_mensagem_cliente_em: string | null;
+  // Previa da lista (Fatia 2, migration 20260818020000): mantido por
+  // trigger, nunca escrito por codigo TypeScript.
+  ultima_mensagem_texto: string | null;
 }
 
 export type OrigemEpisodio = "ia" | "operador";

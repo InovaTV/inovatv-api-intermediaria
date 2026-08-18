@@ -13,7 +13,7 @@
 // exatamente como ja estavam.
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import AuthGuard from "@/components/AuthGuard";
@@ -31,6 +31,70 @@ import type { ConversaEstado } from "@/lib/types";
 
 const TITULO_BASE = "Painel de Atendimento -- InovaTV";
 
+type Filtro = "todas" | "nao_lidas" | "aguardando";
+
+function iniciais(nome: string): string {
+  const partes = nome.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return "?";
+  const primeira = partes[0][0];
+  const ultima = partes.length > 1 ? partes[partes.length - 1][0] : "";
+  return (primeira + ultima).toUpperCase();
+}
+
+// Fatia 2 -- avatar usa foto real se uma fonte existir; fotoUrl fica
+// pronto para receber isso quando houver, sem inventar chamada nova
+// agora. Hoje sempre cai em iniciais: nao existe campo de foto em
+// lugar nenhum (Rocket/`/status`/`/match`, confirmado nas
+// investigacoes anteriores desta frente), e a lista deliberadamente
+// nao consulta dado ao vivo do cliente por conversa (Componente 5
+// SS8, minimizacao -- so' painel-atendimento-abrir faz isso, por
+// conversa unica, quando o operador abre uma conversa especifica).
+function Avatar({ nome, fotoUrl }: { nome: string; fotoUrl?: string | null }) {
+  if (fotoUrl) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={fotoUrl} alt={nome} className="avatar" />;
+  }
+  return (
+    <div className="avatar avatar-iniciais" aria-hidden="true">
+      {iniciais(nome)}
+    </div>
+  );
+}
+
+// Fatia 2 -- data/hora da lista: hoje mostra so' o horario, qualquer
+// outro dia mostra a data. Fuso fixo America/Sao_Paulo, nunca o fuso
+// do navegador do operador (mesma regra ja decidida para os
+// separadores de data da conversa, Fatia 3 -- ainda nao implementada,
+// mas o fuso fixo e' o mesmo principio).
+const FUSO = "America/Sao_Paulo";
+
+function diaCalendario(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: FUSO,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
+}
+
+function formatarDataLista(iso: string): string {
+  const data = new Date(iso);
+  const ehHoje = diaCalendario(iso) === diaCalendario(new Date().toISOString());
+  if (ehHoje) {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: FUSO,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(data);
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: FUSO,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(data);
+}
+
 // Migrada de app/conversas/page.tsx (Etapa 1) -- mesma logica de
 // fetch/realtime, sem nenhuma mudanca de comportamento, só passa a
 // viver no layout em vez da pagina. Aviso de Novas Mensagens (Fatia 4,
@@ -45,22 +109,39 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [somAtivo, setSomAtivo] = useState(true);
+  const [filtro, setFiltro] = useState<Filtro>("todas");
 
   useEffect(() => {
     setSomAtivo(somEstaAtivo());
   }, []);
 
-  const carregar = useCallback(() => {
-    return listarConversas(1)
-      .then((resp) => {
+  // Fatia 2 -- regra de produto: toda conversa que ja teve dialogo
+  // permanece na lista, e os 3 filtros (Todas/Nao lidas/Aguardando
+  // humano) precisam funcionar sobre a lista inteira, nao so' a
+  // primeira pagina. Solucao mais simples usando a infraestrutura de
+  // paginacao ja existente (listarConversas(pagina), que ja devolve
+  // "total"): percorre as paginas em sequencia e acumula em memoria,
+  // sem nenhum parametro novo nem mudanca no backend. No volume atual
+  // do projeto (poucas dezenas de conversas) isso e' 1-2 chamadas.
+  const carregar = useCallback(async () => {
+    try {
+      let pagina = 1;
+      let acumulado: ConversaEstado[] = [];
+      for (;;) {
+        const resp = await listarConversas(pagina);
         if (resp.outcome !== "success") {
           setErro("Nao foi possivel carregar as conversas agora.");
           return;
         }
-        setConversas(resp.conversas);
-        setErro(null);
-      })
-      .catch(() => setErro("Nao foi possivel carregar as conversas agora."));
+        acumulado = acumulado.concat(resp.conversas);
+        if (resp.conversas.length === 0 || acumulado.length >= resp.total) break;
+        pagina += 1;
+      }
+      setConversas(acumulado);
+      setErro(null);
+    } catch {
+      setErro("Nao foi possivel carregar as conversas agora.");
+    }
   }, []);
 
   useEffect(() => {
@@ -107,6 +188,18 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
   }, [carregar]);
 
   const naoLidas = contarNaoLidas(conversas);
+
+  // Fatia 2 -- os 3 filtros reaproveitam exatamente a mesma regra que
+  // ja alimenta o contador/badge (temNaoLida) e o mesmo campo que ja
+  // alimenta o badge de estado (c.estado) -- nenhuma logica nova,
+  // nenhuma query nova, uma unica fonte de verdade.
+  const conversasFiltradas = useMemo(() => {
+    if (filtro === "nao_lidas") return conversas.filter(temNaoLida);
+    if (filtro === "aguardando") {
+      return conversas.filter((c) => c.estado === "aguardando_humano");
+    }
+    return conversas;
+  }, [conversas, filtro]);
 
   useEffect(() => {
     document.title = naoLidas > 0 ? `(${naoLidas}) ${TITULO_BASE}` : TITULO_BASE;
@@ -170,15 +263,40 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
         </div>
       </div>
 
+      <div className="filtros">
+        <button
+          className={`filtro-btn ${filtro === "todas" ? "filtro-btn-ativo" : ""}`}
+          onClick={() => setFiltro("todas")}
+        >
+          Todas
+        </button>
+        <button
+          className={`filtro-btn ${filtro === "nao_lidas" ? "filtro-btn-ativo" : ""}`}
+          onClick={() => setFiltro("nao_lidas")}
+        >
+          Nao lidas{naoLidas > 0 ? ` (${naoLidas})` : ""}
+        </button>
+        <button
+          className={`filtro-btn ${filtro === "aguardando" ? "filtro-btn-ativo" : ""}`}
+          onClick={() => setFiltro("aguardando")}
+        >
+          Aguardando humano
+        </button>
+      </div>
+
       {carregando && <p style={{ padding: 16 }}>Carregando...</p>}
       {erro && <p style={{ color: "#e05a5a", padding: 16 }}>{erro}</p>}
       {!carregando && !erro && conversas.length === 0 && (
         <p style={{ color: "#8a8f9a", padding: 16 }}>Nenhuma conversa ainda.</p>
       )}
+      {!carregando && !erro && conversas.length > 0 && conversasFiltradas.length === 0 && (
+        <p style={{ color: "#8a8f9a", padding: 16 }}>Nenhuma conversa neste filtro.</p>
+      )}
 
       <div style={{ display: "grid", gap: 8, padding: 16 }}>
-        {conversas.map((c) => {
+        {conversasFiltradas.map((c) => {
           const naoLida = temNaoLida(c) && c.conversation_id !== conversationIdAtual;
+          const nomeExibido = c.nome_snapshot ?? c.telefone;
           return (
             <Link
               key={c.conversation_id}
@@ -195,13 +313,26 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
                     c.conversation_id === conversationIdAtual ? "#3a6fd8" : undefined,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    minWidth: 0,
+                    flex: 1,
+                  }}
+                >
                   {naoLida && <span className="ponto-nao-lida" aria-hidden="true" />}
-                  <div>
-                    <div style={{ fontWeight: naoLida ? 700 : 600 }}>
-                      {c.nome_snapshot ?? c.telefone}
+                  <Avatar nome={nomeExibido} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ fontWeight: naoLida ? 700 : 600 }}>{nomeExibido}</div>
+                      <span className="data-hora">{formatarDataLista(c.atualizado_em)}</span>
                     </div>
                     <div style={{ fontSize: 13, color: "#8a8f9a" }}>{c.telefone}</div>
+                    {c.ultima_mensagem_texto && (
+                      <div className="previa-mensagem">{c.ultima_mensagem_texto}</div>
+                    )}
                   </div>
                 </div>
                 <span
