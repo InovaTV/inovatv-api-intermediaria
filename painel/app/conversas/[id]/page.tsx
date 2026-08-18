@@ -31,6 +31,24 @@ import type {
 // do dia (agruparPorDia, abaixo).
 const FUSO = "America/Sao_Paulo";
 
+// Fatia 3 (ajuste de apresentacao) -- normaliza como 2 eventos de
+// sistema especificos aparecem na tela, sem alterar o texto real
+// gravado no banco (as RPCs assumir_atendimento/
+// encerrar_atendimento_humano continuam escrevendo o texto tecnico
+// original -- so' a apresentacao muda, nunca o dado). Qualquer
+// mensagem de sistema que nao bata com os 2 padroes continua exibida
+// como veio, pra nao esconder informacao ainda nao tratada (ex.:
+// "Transferencia automatica: ...", de acionar_transferencia_humana).
+function apresentarMensagemSistema(texto: string): string {
+  if (/^Operador .+ assumiu manualmente$/.test(texto)) {
+    return "Atendimento humano iniciado";
+  }
+  if (/^Atendimento encerrado por .+$/.test(texto)) {
+    return "Atendimento humano encerrado";
+  }
+  return texto;
+}
+
 function formatarHorario(iso: string) {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: FUSO,
@@ -417,7 +435,7 @@ function ConversaDetalhe() {
                   {formatarHorario(m.criado_em)}
                 </div>
 
-                {m.texto}
+                {m.origem === "sistema" ? apresentarMensagemSistema(m.texto) : m.texto}
               </div>
             ))}
           </div>

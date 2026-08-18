@@ -114,7 +114,12 @@ input, textarea {
   /* Centraliza o balao (agora fit-content) dentro da coluna, em vez
      de so' centralizar o texto dentro de um balao que ja ocupava a
      largura toda. */
-  margin: 0 auto 8px;
+  /* 16px (nao os 8px de .msg) -- medido no DOM real de producao:
+     8px e' tecnicamente aplicado certo (sem sobreposicao/colapso
+     incorreto), mas visualmente insuficiente pro estilo tracejado/
+     transparente, sobretudo com varios eventos de sistema seguidos
+     sem nenhum balao colorido entre eles. */
+  margin: 0 auto 16px;
 }
 
 /* Fatia 3 -- separador de bloco do dia (Hoje/Ontem/data), entre
