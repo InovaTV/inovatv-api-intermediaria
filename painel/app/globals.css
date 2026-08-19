@@ -179,6 +179,79 @@ input, textarea {
 .conversa-area {
   width: 100%;
   padding: 24px 20px;
+  /* flex:1 + min-width:0 so' tem efeito quando .conversa-area vira
+     item de .conversa-shell (conversa aberta, ao lado da coluna 3) --
+     nos outros usos (carregando/erro, sem .conversa-shell em volta)
+     este elemento nao e' filho de flex container nenhum, entao as
+     duas propriedades ficam sem efeito nenhum. Sem min-width:0 aqui,
+     o mesmo "grid blowout" ja corrigido na lista (Componente 5) se
+     repetiria como "flex blowout": o balao mais largo dentro da
+     conversa empurraria a coluna 3 pra fora da tela em vez de
+     respeitar os 280px fixos dela. */
+  flex: 1;
+  min-width: 0;
+}
+
+/* Terceira coluna -- Dados do Contato (2026-08-19). .conversa-shell
+   e' o unico elemento novo que envolve .conversa-area -- vira um flex
+   row com .conversa-area (a conversa em si, agora flex:1) e
+   .painel-contato (esta coluna) lado a lado, area propria, sem
+   sobrepor a conversa. Isolado dentro de .painel-detalhe (que ja
+   tinha overflow-y:auto -- nao mexido aqui), nao no shell de 2
+   colunas (.painel-shell/.painel-lista) -- a lista da esquerda nao
+   precisa saber que esta coluna existe. */
+.conversa-shell {
+  display: flex;
+  align-items: flex-start;
+}
+
+.painel-contato {
+  width: 280px;
+  min-width: 280px;
+  border-left: 1px solid #2a2e38;
+  padding: 24px 20px;
+  /* Acompanha a conversa ao rolar (mesmo elemento com scroll de
+     sempre, .painel-detalhe) em vez de subir junto com o topo do
+     historico -- so' CSS, a logica de scroll (detalheRef,
+     usePainelDetalheRef) continua intocada. */
+  position: sticky;
+  top: 0;
+}
+
+.painel-contato h2 {
+  font-size: 15px;
+  margin: 0 0 16px;
+  text-align: center;
+}
+
+.painel-contato-avatar {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.painel-contato-nome {
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.painel-contato-telefone {
+  font-size: 13px;
+  color: #8a8f9a;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.painel-contato-campo {
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.painel-contato-campo-rotulo {
+  color: #8a8f9a;
+  margin-bottom: 2px;
 }
 
 /* Fatia 2 -- filtros da lista (Todas / Nao lidas / Aguardando
@@ -224,6 +297,17 @@ input, textarea {
   color: #e6e6e6;
   font-size: 14px;
   font-weight: 600;
+}
+
+/* Coluna 3 -- Dados do Contato (2026-08-19). Avatar maior que o da
+   lista, mesmo componente (Avatar, layout.tsx), so' o tamanho muda --
+   por isso vem depois de .avatar/.avatar-iniciais no arquivo, pra
+   sobrescrever width/height/font-size sem precisar subir
+   especificidade. */
+.avatar-grande {
+  width: 72px;
+  height: 72px;
+  font-size: 22px;
 }
 
 /* Fatia 2 -- previa da ultima mensagem. Trunca por CSS (nunca

@@ -57,7 +57,7 @@ export function usePainelDetalheRef() {
 
 type Filtro = "todas" | "nao_lidas" | "aguardando";
 
-function iniciais(nome: string): string {
+export function iniciais(nome: string): string {
   const partes = nome.trim().split(/\s+/).filter(Boolean);
   if (partes.length === 0) return "?";
   const primeira = partes[0][0];
@@ -73,13 +73,25 @@ function iniciais(nome: string): string {
 // nao consulta dado ao vivo do cliente por conversa (Componente 5
 // SS8, minimizacao -- so' painel-atendimento-abrir faz isso, por
 // conversa unica, quando o operador abre uma conversa especifica).
-function Avatar({ nome, fotoUrl }: { nome: string; fotoUrl?: string | null }) {
+export function Avatar({
+  nome,
+  fotoUrl,
+  grande,
+}: {
+  nome: string;
+  fotoUrl?: string | null;
+  // Coluna 3 -- Dados do Contato (2026-08-19): mesmo componente da
+  // lista, so' com um modificador de tamanho opcional (.avatar-grande,
+  // globals.css) -- sem duplicar Avatar/iniciais() pra isso.
+  grande?: boolean;
+}) {
+  const classeBase = `avatar${grande ? " avatar-grande" : ""}`;
   if (fotoUrl) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={fotoUrl} alt={nome} className="avatar" />;
+    return <img src={fotoUrl} alt={nome} className={classeBase} />;
   }
   return (
-    <div className="avatar avatar-iniciais" aria-hidden="true">
+    <div className={`${classeBase} avatar-iniciais`} aria-hidden="true">
       {iniciais(nome)}
     </div>
   );
@@ -357,12 +369,19 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
                   <Avatar nome={nomeExibido} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <div style={{ fontWeight: naoLida ? 700 : 600 }}>{nomeExibido}</div>
+                      <div
+                        style={{
+                          fontWeight: naoLida ? 700 : 600,
+                          minWidth: 0,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {nomeExibido}
+                      </div>
                       <span className="data-hora">{formatarDataLista(c.atualizado_em)}</span>
                     </div>
-                    {!c.nome_snapshot && (
-                      <div style={{ fontSize: 13, color: "#8a8f9a" }}>{c.telefone}</div>
-                    )}
                     {c.ultima_mensagem_texto && (
                       <div className="previa-mensagem">
                         {apresentarMensagemSistema(c.ultima_mensagem_texto)}

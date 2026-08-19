@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AuthGuard from "@/components/AuthGuard";
-import { usePainelDetalheRef } from "../layout";
+import { usePainelDetalheRef, Avatar } from "../layout";
 import {
   abrirConversa,
   assumirConversa,
@@ -317,11 +317,15 @@ function ConversaDetalhe() {
 
   const clienteInfo = clienteAoVivo.find((c) => c.cliente)?.cliente;
   const aguardandoHumano = conversa.estado === "aguardando_humano";
-  const episodioAtual = episodios.find(
-    (e) => e.id === conversa.episodio_atual_id,
-  );
+  // Prioridade de identificacao (item 2 da correcao 2026-08-19):
+  // nome_snapshot primeiro (regra ja definida); clienteInfo.nome (dado
+  // ao vivo, ja carregado por esta mesma tela, nenhuma chamada nova)
+  // como reforco quando o snapshot ainda nao existiu; telefone por
+  // ultimo.
+  const nomeContato = conversa.nome_snapshot ?? clienteInfo?.nome ?? conversa.telefone;
 
   return (
+    <div className="conversa-shell">
     <div className="conversa-area">
       <button
         onClick={() => router.push("/conversas")}
@@ -345,12 +349,16 @@ function ConversaDetalhe() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: 20, margin: 0 }}>
-            {conversa.nome_snapshot ?? conversa.telefone}
-          </h1>
-          <div style={{ color: "#8a8f9a", fontSize: 13 }}>
-            {conversa.telefone}
-          </div>
+          <h1 style={{ fontSize: 20, margin: 0 }}>{nomeContato}</h1>
+          {/* So' repete o telefone aqui quando o nome de cima nao e'
+              o proprio telefone (senao duplicaria a mesma
+              informacao) -- telefone completo sempre disponivel na
+              coluna 3 (Dados do Contato). */}
+          {nomeContato !== conversa.telefone && (
+            <div style={{ color: "#8a8f9a", fontSize: 13 }}>
+              {conversa.telefone}
+            </div>
+          )}
         </div>
 
         <span
@@ -361,42 +369,6 @@ function ConversaDetalhe() {
           {aguardandoHumano ? "aguardando humano" : "normal"}
         </span>
       </div>
-
-      {clienteInfo && (
-        <div
-          className="card"
-          style={{
-            fontSize: 13,
-            marginBottom: 16,
-            display: "grid",
-            gap: 4,
-          }}
-        >
-          <div style={{ color: "#8a8f9a" }}>Dado ao vivo (Rocket)</div>
-          <div>
-            {clienteInfo.planoNome ?? "-"} &middot;{" "}
-            {clienteInfo.servidorNome ?? "-"} &middot; vence{" "}
-            {clienteInfo.vencimento ?? "-"}
-          </div>
-        </div>
-      )}
-
-      {episodioAtual && (
-        <div
-          className="card"
-          style={{
-            fontSize: 13,
-            marginBottom: 16,
-            borderColor: "#e0a95a",
-          }}
-        >
-          Episódio em aberto -- motivo:{" "}
-          {episodioAtual.motivo ?? "assumido manualmente"}
-          {episodioAtual.assumido_por
-            ? ` -- assumido por ${episodioAtual.assumido_por}`
-            : " -- ninguém assumiu ainda"}
-        </div>
-      )}
 
       <div style={{ marginBottom: 16 }}>
         {mensagens.length === 0 && (
@@ -498,6 +470,44 @@ function ConversaDetalhe() {
           </button>
         </div>
       )}
+    </div>
+
+    <aside className="painel-contato">
+      <h2>Dados do Contato</h2>
+
+      <div className="painel-contato-avatar">
+        <Avatar nome={nomeContato} grande />
+      </div>
+      <div className="painel-contato-nome">{nomeContato}</div>
+      <div className="painel-contato-telefone">{conversa.telefone}</div>
+
+      {clienteInfo ? (
+        <>
+          <div className="painel-contato-campo">
+            <div className="painel-contato-campo-rotulo">Plano</div>
+            <div>{clienteInfo.planoNome ?? "-"}</div>
+          </div>
+          <div className="painel-contato-campo">
+            <div className="painel-contato-campo-rotulo">Servidor</div>
+            <div>{clienteInfo.servidorNome ?? "-"}</div>
+          </div>
+          <div className="painel-contato-campo">
+            <div className="painel-contato-campo-rotulo">Vencimento</div>
+            <div>{clienteInfo.vencimento ?? "-"}</div>
+          </div>
+          {clienteInfo.telas !== null && (
+            <div className="painel-contato-campo">
+              <div className="painel-contato-campo-rotulo">Telas</div>
+              <div>{clienteInfo.telas}</div>
+            </div>
+          )}
+        </>
+      ) : (
+        <p style={{ color: "#8a8f9a", fontSize: 13 }}>
+          Sem dado cadastral encontrado no Rocket para este telefone.
+        </p>
+      )}
+    </aside>
     </div>
   );
 }
