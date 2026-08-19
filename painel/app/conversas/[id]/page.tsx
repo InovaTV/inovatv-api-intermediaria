@@ -107,6 +107,13 @@ function ConversaDetalhe() {
   const [textoResposta, setTextoResposta] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [acaoEmAndamento, setAcaoEmAndamento] = useState(false);
+  // Coluna 3 recolhivel, estilo WhatsApp (correcao 2026-08-19) -- so
+  // controla se .painel-contato e' renderizada; nao mexe em nenhum
+  // dado carregado (clienteAoVivo/episodios continuam buscados do
+  // mesmo jeito, so a exibicao muda). Comeca aberta, fecha/reabre por
+  // clique -- nao persiste entre conversas/reload de proposito (mesmo
+  // padrao simples ja usado no resto do Painel nesta fase).
+  const [contatoAberto, setContatoAberto] = useState(true);
 
   const carregar = useCallback(async () => {
     try {
@@ -349,7 +356,19 @@ function ConversaDetalhe() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: 20, margin: 0 }}>{nomeContato}</h1>
+          {/* Reabre a coluna 3 (correcao 2026-08-19, revisada --
+              clicar no nome, nao mais um botao separado) -- clicavel
+              sempre, mesmo com a coluna ja aberta (sem efeito nesse
+              caso, mesmo padrao de "abrir info do contato" de apps de
+              chat reais). Nenhum estado novo de atendimento aqui, so'
+              visibilidade de UI. */}
+          <h1
+            onClick={() => setContatoAberto(true)}
+            title="Mostrar dados do contato"
+            style={{ fontSize: 20, margin: 0, cursor: "pointer" }}
+          >
+            {nomeContato}
+          </h1>
           {/* So' repete o telefone aqui quando o nome de cima nao e'
               o proprio telefone (senao duplicaria a mesma
               informacao) -- telefone completo sempre disponivel na
@@ -472,8 +491,19 @@ function ConversaDetalhe() {
       )}
     </div>
 
+    {contatoAberto && (
     <aside className="painel-contato">
-      <h2>Dados do Contato</h2>
+      <div className="painel-contato-cabecalho">
+        <h2>Dados do Contato</h2>
+        <button
+          onClick={() => setContatoAberto(false)}
+          title="Fechar dados do contato"
+          aria-label="Fechar dados do contato"
+          className="painel-contato-fechar"
+        >
+          &times;
+        </button>
+      </div>
 
       <div className="painel-contato-avatar">
         <Avatar nome={nomeContato} grande />
@@ -508,6 +538,7 @@ function ConversaDetalhe() {
         </p>
       )}
     </aside>
+    )}
     </div>
   );
 }

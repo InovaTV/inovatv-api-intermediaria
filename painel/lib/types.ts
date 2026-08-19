@@ -17,8 +17,16 @@ export interface ConversaEstado {
   visto_em: string | null;
   ultima_mensagem_cliente_em: string | null;
   // Previa da lista (Fatia 2, migration 20260818020000): mantido por
-  // trigger, nunca escrito por codigo TypeScript.
+  // trigger, nunca escrito por codigo TypeScript. Ignora
+  // origem='sistema' desde a correcao 2026-08-19 (migration
+  // 20260819000000_painel_previa_ignora_sistema.sql).
   ultima_mensagem_texto: string | null;
+  // "Humano assumiu" x "Aguardando humano" (correcao 2026-08-19). NAO
+  // e' coluna de conversas_estado -- e' assumido_por do episodio
+  // atual, computado so' por painel-atendimento-listar. Ausente fora
+  // da listagem (ex.: painel-atendimento-abrir). Null quando nao ha
+  // episodio atual, ou quando ninguem assumiu ainda.
+  episodio_atual_assumido_por?: string | null;
 }
 
 export type OrigemEpisodio = "ia" | "operador";

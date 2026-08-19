@@ -90,11 +90,12 @@ export function Avatar({
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={fotoUrl} alt={nome} className={classeBase} />;
   }
-  return (
-    <div className={`${classeBase} avatar-iniciais`} aria-hidden="true">
-      {iniciais(nome)}
-    </div>
-  );
+  // Correcao 2026-08-19 (geometria das 3 colunas): sem foto real do
+  // WhatsApp ainda, o avatar fica so' como espaco reservado -- nunca
+  // mostra iniciais/abreviacao. iniciais(nome) continua exportada
+  // (usada so' aqui antes) para quando a foto real existir e for
+  // reintroduzido como fallback legitimo, nao removida do arquivo.
+  return <div className={`${classeBase} avatar-iniciais`} aria-hidden="true" title={nome} />;
 }
 
 // Fatia 2 -- data/hora da lista: hoje mostra so' o horario, qualquer
@@ -340,6 +341,12 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
         {conversasFiltradas.map((c) => {
           const naoLida = temNaoLida(c) && c.conversation_id !== conversationIdAtual;
           const nomeExibido = c.nome_snapshot ?? c.telefone;
+          // "Humano assumiu" x "Aguardando humano" (correcao
+          // 2026-08-19) -- estado real vem de
+          // episodio_atual_assumido_por (conversas_episodios via
+          // listarConversas()), nunca deduzido do texto da previa.
+          const humanoAssumiu =
+            c.estado === "aguardando_humano" && !!c.episodio_atual_assumido_por;
           return (
             <Link
               key={c.conversation_id}
@@ -350,52 +357,67 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
                 className="card"
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
+                  alignItems: "flex-start",
+                  gap: 8,
                   borderColor:
                     c.conversation_id === conversationIdAtual ? "#3a6fd8" : undefined,
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    minWidth: 0,
-                    flex: 1,
-                  }}
-                >
-                  {naoLida && <span className="ponto-nao-lida" aria-hidden="true" />}
-                  <Avatar nome={nomeExibido} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <div
-                        style={{
-                          fontWeight: naoLida ? 700 : 600,
-                          minWidth: 0,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {nomeExibido}
-                      </div>
-                      <span className="data-hora">{formatarDataLista(c.atualizado_em)}</span>
+                {naoLida && (
+                  <span
+                    className="ponto-nao-lida"
+                    aria-hidden="true"
+                    style={{ marginTop: 6 }}
+                  />
+                )}
+                <Avatar nome={nomeExibido} />
+                {/* Card em 3 linhas (correcao 2026-08-19, layout estilo
+                    WhatsApp): nome sozinho na linha 1 (prioridade total
+                    da largura, nunca disputa espaco com data/status),
+                    previa na linha 2, status+data na linha 3. Nome nunca
+                    quebra (white-space:nowrap) -- .conversa-card-nome so
+                    trunca com "..." se realmente faltar espaco, e a
+                    coluna ficou larga o bastante (.painel-lista, 340px)
+                    pra isso natural nunca acontecer com nome comum. */}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    className="conversa-card-nome"
+                    style={{ fontWeight: naoLida ? 700 : 600 }}
+                  >
+                    {nomeExibido}
+                  </div>
+                  {c.ultima_mensagem_texto && (
+                    <div className="previa-mensagem">
+                      {apresentarMensagemSistema(c.ultima_mensagem_texto)}
                     </div>
-                    {c.ultima_mensagem_texto && (
-                      <div className="previa-mensagem">
-                        {apresentarMensagemSistema(c.ultima_mensagem_texto)}
-                      </div>
-                    )}
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 4,
+                    }}
+                  >
+                    <span
+                      className={`badge ${
+                        c.estado === "aguardando_humano"
+                          ? humanoAssumiu
+                            ? "badge-assumido"
+                            : "badge-aguardando"
+                          : "badge-normal"
+                      }`}
+                    >
+                      {c.estado === "aguardando_humano"
+                        ? humanoAssumiu
+                          ? "Humano assumiu"
+                          : "Aguardando humano"
+                        : "normal"}
+                    </span>
+                    <span className="data-hora">{formatarDataLista(c.atualizado_em)}</span>
                   </div>
                 </div>
-                <span
-                  className={`badge ${
-                    c.estado === "aguardando_humano" ? "badge-aguardando" : "badge-normal"
-                  }`}
-                >
-                  {c.estado === "aguardando_humano" ? "aguardando humano" : "normal"}
-                </span>
               </div>
             </Link>
           );

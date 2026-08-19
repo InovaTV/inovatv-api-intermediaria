@@ -120,7 +120,39 @@ export async function listarConversas(
     .range(inicio, fim);
 
   if (error) throw error;
-  return { conversas: (data ?? []) as ConversaEstado[], total: count ?? 0 };
+  const conversas = (data ?? []) as ConversaEstado[];
+
+  // Painel de Atendimento -- "Humano assumiu" x "Aguardando humano"
+  // (correcao 2026-08-19). conversas_estado.estado nao distingue os
+  // dois casos (os dois sao 'aguardando_humano') -- a distincao real
+  // mora em conversas_episodios.assumido_por, so acessivel via
+  // episodio_atual_id. Segunda consulta pequena, so os episodios em
+  // aberto desta pagina (no maximo porPagina linhas) -- nunca N+1 por
+  // linha, nunca RPC nova, nunca coluna nova em conversas_estado.
+  const episodioIds = conversas
+    .map((c) => c.episodio_atual_id)
+    .filter((id): id is string => id !== null);
+
+  if (episodioIds.length > 0) {
+    const { data: episodiosAtuais, error: errorEpisodios } = await client
+      .from("conversas_episodios")
+      .select("id, assumido_por")
+      .in("id", episodioIds);
+
+    if (errorEpisodios) throw errorEpisodios;
+
+    const assumidoPorPorEpisodio = new Map(
+      (episodiosAtuais ?? []).map((e) => [e.id as string, e.assumido_por as string | null]),
+    );
+
+    for (const c of conversas) {
+      c.episodio_atual_assumido_por = c.episodio_atual_id
+        ? (assumidoPorPorEpisodio.get(c.episodio_atual_id) ?? null)
+        : null;
+    }
+  }
+
+  return { conversas, total: count ?? 0 };
 }
 
 // Componente 5 §9 -- RPC unificada, cobre os 2 casos (assumir a partir

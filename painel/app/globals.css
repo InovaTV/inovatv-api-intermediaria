@@ -1,6 +1,16 @@
 /* V1 funcional -- sem design polido de proposito (mesmo espirito da
    Fase 1 antes de Fase 2 ja usado no resto do projeto InovaTV). */
 
+/* Geometria das 3 colunas (correcao 2026-08-19) -- 1a e 3a coluna
+   SEMPRE com a mesma largura (requisito explicito, "nao fazer uma
+   coluna maior que a outra"). Uma unica variavel usada nas duas
+   regras (.painel-lista/.painel-contato) torna isso estrutural, nao
+   uma coincidencia de dois valores iguais digitados separadamente --
+   mudar aqui muda as duas juntas, nunca uma sem a outra. */
+:root {
+  --painel-coluna-lateral: 400px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -54,6 +64,15 @@ input, textarea {
 .badge-aguardando {
   background: #3a2e1e;
   color: #e0a95a;
+}
+
+/* "Humano assumiu" (correcao 2026-08-19) -- distinto de
+   .badge-aguardando (ninguem assumiu ainda). Mesma familia de azul
+   ja usada no botao "Assumir conversa"/borda do card selecionado
+   (#3a6fd8), nenhuma cor nova introduzida no projeto. */
+.badge-assumido {
+  background: #1e2c3a;
+  color: #7aa8e0;
 }
 
 /* Aviso de Novas Mensagens (Fatia 4) -- contador global de conversas
@@ -156,9 +175,12 @@ input, textarea {
   overflow: hidden;
 }
 
+/* Largura da lista (correcao 2026-08-19, revisada) -- usa a mesma
+   variavel da coluna 3 (--painel-coluna-lateral, topo do arquivo) --
+   1a e 3a coluna sempre identicas. */
 .painel-lista {
-  width: 360px;
-  min-width: 360px;
+  width: var(--painel-coluna-lateral);
+  min-width: var(--painel-coluna-lateral);
   border-right: 1px solid #2a2e38;
   overflow-y: auto;
 }
@@ -206,8 +228,8 @@ input, textarea {
 }
 
 .painel-contato {
-  width: 280px;
-  min-width: 280px;
+  width: var(--painel-coluna-lateral);
+  min-width: var(--painel-coluna-lateral);
   border-left: 1px solid #2a2e38;
   padding: 24px 20px;
   /* Acompanha a conversa ao rolar (mesmo elemento com scroll de
@@ -218,10 +240,30 @@ input, textarea {
   top: 0;
 }
 
+/* Cabecalho da coluna 3 com botao de fechar (correcao 2026-08-19,
+   estilo WhatsApp) -- h2 perde o centralizado antigo pra dividir a
+   linha com o X, mesmo espirito visual do cabecalho de "Info do
+   contato" do WhatsApp Web. */
+.painel-contato-cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
 .painel-contato h2 {
   font-size: 15px;
-  margin: 0 0 16px;
-  text-align: center;
+  margin: 0;
+}
+
+.painel-contato-fechar {
+  background: none;
+  border: none;
+  color: #8a8f9a;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
 }
 
 .painel-contato-avatar {
@@ -313,6 +355,19 @@ input, textarea {
 /* Fatia 2 -- previa da ultima mensagem. Trunca por CSS (nunca
    substring em JS, evita cortar no meio de um emoji/caractere
    multibyte). */
+/* Card da lista em 3 linhas (correcao 2026-08-19) -- nome tem a linha
+   inteira so pra ele (prioridade sobre data/status, nunca disputa
+   espaco). white-space:nowrap nunca deixa o nome quebrar em duas
+   linhas (quebraria a estrutura de 3 linhas do card); ellipsis so
+   entra como ultimo recurso, se um nome individual for maior que o
+   espaco todo da coluna -- com .painel-lista em 340px isso nao
+   acontece pra nome comum. */
+.conversa-card-nome {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .previa-mensagem {
   font-size: 13px;
   color: #8a8f9a;

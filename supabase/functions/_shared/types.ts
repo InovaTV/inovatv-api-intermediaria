@@ -19,6 +19,13 @@ export interface ConversaEstado {
   // Mantido por trigger (mensagens_conversa), nunca escrito por
   // codigo TypeScript -- ver atualizar_conversa_ao_inserir_mensagem.
   ultima_mensagem_texto: string | null;
+  // Painel de Atendimento -- "Humano assumiu" x "Aguardando humano"
+  // (correcao 2026-08-19). NAO e' coluna de conversas_estado -- e'
+  // assumido_por do episodio atual (conversas_episodios), computado
+  // por listarConversas() so' na listagem. Ausente/undefined fora da
+  // listagem (ex.: resposta de painel-atendimento-abrir). Null quando
+  // nao ha episodio atual, ou quando ninguem assumiu ainda.
+  episodio_atual_assumido_por?: string | null;
 }
 
 // Log permanente de cada periodo de atendimento humano (Componente 5
