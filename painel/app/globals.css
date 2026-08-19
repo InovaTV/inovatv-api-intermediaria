@@ -80,13 +80,25 @@ input, textarea {
   padding: 8px 12px;
   border-radius: 8px;
   margin-bottom: 8px;
-  max-width: 80%;
+  /* Correcao de geometria horizontal (2026-08-18) -- percentual puro
+     (80% do antigo .container de 960px) deixava de aproveitar a
+     largura real da coluna central e, isolado, cresceria demais em
+     monitores largos depois da remocao do .container (ver
+     .conversa-area abaixo). min() com teto em px evita as duas
+     pontas: balao mesquinho em tela estreita, balao gigante em tela
+     larga. */
+  max-width: min(65%, 720px);
   /* Fatia 3 -- sem isso o balao sempre esticava ate max-width mesmo
      com texto curto (block auto-width preenche o container inteiro
      ate o teto do max-width). fit-content faz o balao acompanhar o
-     tamanho real do conteudo, respeitando o teto de 80%. */
+     tamanho real do conteudo, respeitando o teto acima. */
   width: fit-content;
   white-space: pre-wrap;
+  /* Protecao para texto sem espaco (URL longa, token, etc.) que nao
+     teria onde quebrar de forma natural -- sem isso um texto assim
+     forcaria o balao (fit-content) a crescer ate o max-width inteiro
+     em vez de quebrar dentro dele. */
+  overflow-wrap: anywhere;
 }
 
 .msg-cliente {
@@ -154,6 +166,19 @@ input, textarea {
 .painel-detalhe {
   flex: 1;
   overflow-y: auto;
+}
+
+/* Correcao de geometria horizontal (2026-08-18) -- wrapper proprio da
+   conversa aberta, especifico deste lugar. Antes usava a classe
+   generica .container (max-width:960px, margin:0 auto), pensada para
+   telas simples de largura fixa (login/reset-password) e que deixava
+   a conversa presa numa faixa central com vazio nas duas laterais,
+   independente da largura real de .painel-detalhe. .container
+   continua existindo e usada normalmente em outras telas -- esta
+   classe nao a substitui, so' deixa de ser usada aqui. */
+.conversa-area {
+  width: 100%;
+  padding: 24px 20px;
 }
 
 /* Fatia 2 -- filtros da lista (Todas / Nao lidas / Aguardando

@@ -35,6 +35,7 @@ import {
   somEstaAtivo,
   definirSomAtivo,
 } from "@/lib/notificacoes";
+import { apresentarMensagemSistema } from "@/lib/mensagens";
 import type { ConversaEstado } from "@/lib/types";
 
 const TITULO_BASE = "Painel de Atendimento -- InovaTV";
@@ -316,7 +317,14 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
         <p style={{ color: "#8a8f9a", padding: 16 }}>Nenhuma conversa neste filtro.</p>
       )}
 
-      <div style={{ display: "grid", gap: 8, padding: 16 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr)",
+          gap: 8,
+          padding: 16,
+        }}
+      >
         {conversasFiltradas.map((c) => {
           const naoLida = temNaoLida(c) && c.conversation_id !== conversationIdAtual;
           const nomeExibido = c.nome_snapshot ?? c.telefone;
@@ -352,9 +360,13 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
                       <div style={{ fontWeight: naoLida ? 700 : 600 }}>{nomeExibido}</div>
                       <span className="data-hora">{formatarDataLista(c.atualizado_em)}</span>
                     </div>
-                    <div style={{ fontSize: 13, color: "#8a8f9a" }}>{c.telefone}</div>
+                    {!c.nome_snapshot && (
+                      <div style={{ fontSize: 13, color: "#8a8f9a" }}>{c.telefone}</div>
+                    )}
                     {c.ultima_mensagem_texto && (
-                      <div className="previa-mensagem">{c.ultima_mensagem_texto}</div>
+                      <div className="previa-mensagem">
+                        {apresentarMensagemSistema(c.ultima_mensagem_texto)}
+                      </div>
                     )}
                   </div>
                 </div>
