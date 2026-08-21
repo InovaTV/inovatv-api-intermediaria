@@ -25,3 +25,15 @@ export function corsResponse(): Response {
     headers: CORS_HEADERS,
   });
 }
+
+// Achado da bateria de testes negativos do Painel de Atendimento
+// (2026-08-17): um conversation_id malformado (nao-UUID) chegava sem
+// checagem propria ate o Postgres, que rejeita a string antes de
+// qualquer RPC customizada -- cai no catch generico de cada function
+// e vira 503 "unavailable" em vez de um 400 de validacao. Corrigido
+// checando o formato ANTES de qualquer chamada ao banco.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function conversationIdValido(id: string): boolean {
+  return UUID_REGEX.test(id);
+}

@@ -9,7 +9,7 @@ import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel
 import { buscarConversaPorId } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
-import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse, conversationIdValido } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -31,6 +31,9 @@ Deno.serve(async (req: Request) => {
 
   if (!body.conversation_id || !body.texto?.trim()) {
     return errorResponse("Campos obrigatorios: conversation_id, texto");
+  }
+  if (!conversationIdValido(body.conversation_id)) {
+    return errorResponse("conversation_id precisa ser um UUID valido", 400);
   }
 
   let conversa;

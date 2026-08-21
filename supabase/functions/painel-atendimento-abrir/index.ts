@@ -11,7 +11,7 @@ import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel
 import { buscarConversaPorId, atualizarNomeSnapshot } from "../_shared/conversas_estado.ts";
 import { listarEpisodios, listarMensagens } from "../_shared/mensagens_atendimento.ts";
 import { chamarMatch, chamarStatus, type StatusResult } from "../_shared/rocket_intermediaria.ts";
-import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse, conversationIdValido } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -28,6 +28,9 @@ Deno.serve(async (req: Request) => {
   const conversationId = url.searchParams.get("conversation_id");
   if (!conversationId) {
     return errorResponse("Parametro 'conversation_id' obrigatorio", 400);
+  }
+  if (!conversationIdValido(conversationId)) {
+    return errorResponse("conversation_id precisa ser um UUID valido", 400);
   }
 
   let conversa;

@@ -161,12 +161,20 @@ export async function listarConversas(
 // jeitos de a RPC recusar por concorrencia (P0001): outro operador ja
 // assumiu o mesmo episodio, ou tentativa duplicada -- esperado sob
 // concorrencia, nao e' falha. Qualquer outro erro propaga (throw).
+//
+// Achado da bateria de testes negativos (2026-08-17): a RPC usa o
+// mesmo errcode P0001 tambem para 'conversa_inexistente' -- essa
+// camada so checava o codigo, nunca a mensagem, entao "conversa nao
+// existe" e "ja assumida" ficavam indistinguiveis pro chamador.
+// Corrigido lendo error.message (o texto literal do RAISE EXCEPTION
+// da migration) antes de decidir o outcome.
 export async function assumirAtendimento(
   conversationId: string,
   operador: string,
 ): Promise<
   | { outcome: "assumida"; conversa: ConversaEstado }
   | { outcome: "ja_assumida" }
+  | { outcome: "nao_encontrada" }
 > {
   const client = getServiceClient();
 
@@ -176,6 +184,9 @@ export async function assumirAtendimento(
   });
 
   if (error) {
+    if (error.code === "P0001" && error.message === "conversa_inexistente") {
+      return { outcome: "nao_encontrada" };
+    }
     if (error.code === "P0001") {
       return { outcome: "ja_assumida" };
     }
@@ -190,12 +201,17 @@ export async function assumirAtendimento(
 // cobre tentar encerrar uma conversa que ja nao tem episodio aberto
 // (ex.: dois cliques de "Encerrar" no Painel) -- esperado, nao e'
 // falha. Qualquer outro erro propaga (throw).
+//
+// Mesma correcao de assumirAtendimento (achado da bateria de testes
+// negativos, 2026-08-17): distingue 'conversa_inexistente' das outras
+// causas de P0001 lendo error.message, nao so o codigo.
 export async function encerrarAtendimento(
   conversationId: string,
   operador: string,
 ): Promise<
   | { outcome: "encerrada"; conversa: ConversaEstado }
   | { outcome: "nao_estava_aguardando_humano" }
+  | { outcome: "nao_encontrada" }
 > {
   const client = getServiceClient();
 
@@ -205,6 +221,9 @@ export async function encerrarAtendimento(
   });
 
   if (error) {
+    if (error.code === "P0001" && error.message === "conversa_inexistente") {
+      return { outcome: "nao_encontrada" };
+    }
     if (error.code === "P0001") {
       return { outcome: "nao_estava_aguardando_humano" };
     }

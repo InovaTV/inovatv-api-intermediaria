@@ -5,7 +5,7 @@
 
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
 import { encerrarAtendimento } from "../_shared/conversas_estado.ts";
-import { jsonResponse, errorResponse, corsResponse } from "../_shared/http.ts";
+import { jsonResponse, errorResponse, corsResponse, conversationIdValido } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -28,9 +28,15 @@ Deno.serve(async (req: Request) => {
   if (!body.conversation_id) {
     return errorResponse("Campo obrigatorio: conversation_id");
   }
+  if (!conversationIdValido(body.conversation_id)) {
+    return errorResponse("conversation_id precisa ser um UUID valido", 400);
+  }
 
   try {
     const resultado = await encerrarAtendimento(body.conversation_id, auth.email);
+    if (resultado.outcome === "nao_encontrada") {
+      return jsonResponse({ outcome: "nao_encontrada" }, 404);
+    }
     if (resultado.outcome === "nao_estava_aguardando_humano") {
       return jsonResponse({ outcome: "nao_estava_aguardando_humano" }, 409);
     }
