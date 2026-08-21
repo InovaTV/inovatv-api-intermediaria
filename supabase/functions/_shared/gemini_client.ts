@@ -16,6 +16,12 @@
 import type { GeminiOutput } from "./types.ts";
 
 const TIMEOUT_MS = 10000;
+// Midia (imagem/audio/documento) processa muito mais devagar que texto
+// puro -- teste real (2026-08-21, screenshot ~117KB) demorou mais de
+// 30s e so terminou com sucesso com 90s de folga (~1360 tokens de
+// "pensamento" só pra essa imagem). Timeout maior SO quando ha midia
+// -- chamada de texto puro continua com o valor original ja validado.
+const TIMEOUT_MS_MIDIA = 60000;
 
 const SYSTEM_PROMPT = `IDENTIDADE E FUNÇÃO
 Você é a IA de atendimento da InovaTV, um serviço de IPTV. Atende
@@ -140,9 +146,22 @@ export type GeminiResult =
   | { outcome: "success"; data: GeminiOutput }
   | { outcome: "unavailable" };
 
+// Midia anexada (imagem/audio/documento) -- mesmo mecanismo de envio
+// inline (base64) ja validado manualmente no AI Studio (Rodadas 3/4,
+// inovatv_central/CLAUDE.md). Parametro opcional, aditivo -- nao muda
+// a assinatura existente de chamarGemini para quem so manda texto, e
+// nao muda o contrato {telefone, conteudo} do Orquestrador (essa
+// continua sendo uma decisao separada, ainda nao tomada -- ver
+// "Achado separado -- suporte multimidia" no CLAUDE.md).
+export interface MidiaAnexada {
+  mimeType: string;
+  dadosBase64: string;
+}
+
 async function chamarUmaVez(
   mensagemCliente: string,
   contextoCliente: string | null,
+  midias: MidiaAnexada[] = [],
 ): Promise<GeminiResult> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   const modelId = Deno.env.get("GEMINI_MODEL_ID");
@@ -151,6 +170,12 @@ async function chamarUmaVez(
   const partesUsuario = [contextoCliente, mensagemCliente]
     .filter((p): p is string => !!p)
     .join("\n\n");
+
+  const parts: Record<string, unknown>[] = [];
+  if (partesUsuario) parts.push({ text: partesUsuario });
+  for (const midia of midias) {
+    parts.push({ inlineData: { mimeType: midia.mimeType, data: midia.dadosBase64 } });
+  }
 
   try {
     const resp = await fetch(
@@ -163,13 +188,13 @@ async function chamarUmaVez(
         },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: [{ role: "user", parts: [{ text: partesUsuario }] }],
+          contents: [{ role: "user", parts }],
           generationConfig: {
             responseMimeType: "application/json",
             responseSchema: RESPONSE_SCHEMA,
           },
         }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(midias.length > 0 ? TIMEOUT_MS_MIDIA : TIMEOUT_MS),
       },
     );
 
@@ -205,8 +230,9 @@ async function chamarUmaVez(
 export async function chamarGemini(
   mensagemCliente: string,
   contextoCliente: string | null,
+  midias: MidiaAnexada[] = [],
 ): Promise<GeminiResult> {
-  const primeira = await chamarUmaVez(mensagemCliente, contextoCliente);
+  const primeira = await chamarUmaVez(mensagemCliente, contextoCliente, midias);
   if (primeira.outcome === "success") return primeira;
-  return chamarUmaVez(mensagemCliente, contextoCliente); // 1 retry automatico
+  return chamarUmaVez(mensagemCliente, contextoCliente, midias); // 1 retry automatico
 }
