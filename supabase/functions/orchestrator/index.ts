@@ -84,6 +84,7 @@ import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
 } from "../_shared/mensagens_fixas.ts";
+import { normalizarTelefone } from "../_shared/telefone.ts";
 
 Deno.serve(async (req: Request) => {
   // Componente 3, decisao arquitetural 2 (2026-08-17): unica fonte de
@@ -110,10 +111,20 @@ Deno.serve(async (req: Request) => {
     return errorResponse("Corpo da requisicao precisa ser JSON valido");
   }
 
-  const { telefone, conteudo } = body;
-  if (!telefone || !conteudo) {
+  const { telefone: telefoneBruto, conteudo } = body;
+  if (!telefoneBruto || !conteudo) {
     return errorResponse("Campos obrigatorios: telefone, conteudo");
   }
+
+  // Bug 3 (achado real, bateria de testes reais pelo Webhook,
+  // 2026-08-21): normaliza aqui, no topo, antes de qualquer uso --
+  // cobre os dois pontos de entrada do Orquestrador (Webhook real e a
+  // entrada de teste direto) com uma unica regra de identidade
+  // interna (conversas_estado, contexto do Gemini, envio ao cliente).
+  // NAO decide o formato enviado ao Rocket -- chamarMatch, mais
+  // abaixo, usa deliberadamente telefoneBruto, nao este valor
+  // canonico (decisao separada, ainda em aberto, ver _shared/telefone.ts).
+  const telefone = normalizarTelefone(telefoneBruto);
 
   let conversa;
   try {
@@ -155,7 +166,12 @@ Deno.serve(async (req: Request) => {
   // 6, terceira fatia), e envia a mensagem real ao cliente via
   // WhatsApp (Etapa 6, quinta fatia). NAO envia aviso ao Jose --
   // fatia futura.
-  const matchResult = await chamarMatch(telefone);
+  //
+  // Bug 3 (2026-08-21): chamarMatch recebe deliberadamente
+  // telefoneBruto (nao o telefone canonico) -- decisao explicita do
+  // usuario de NAO alterar ainda o formato enviado ao Rocket, so
+  // reaproveitar exatamente o comportamento ja validado ate aqui.
+  const matchResult = await chamarMatch(telefoneBruto);
 
   let statusResults: StatusResult[] = [];
   if (matchResult.outcome === "single_match") {
