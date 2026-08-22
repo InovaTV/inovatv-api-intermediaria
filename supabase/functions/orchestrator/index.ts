@@ -83,6 +83,7 @@ import {
   type StatusResult,
 } from "../_shared/rocket_intermediaria.ts";
 import { montarContextoCliente } from "../_shared/contexto.ts";
+import { buscarConhecimentoRelevante } from "../_shared/conhecimento.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
 import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
@@ -215,7 +216,27 @@ Deno.serve(async (req: Request) => {
     matchIndisponivel,
   });
 
-  const geminiResult = await chamarGemini(conteudo, contextoCliente);
+  // Componente 2 (Camada de Conhecimento Empresarial, PROPOSTA_
+  // INTEGRACAO_ORQUESTRADOR.md secao 1/3): busca so pelo texto da
+  // mensagem do cliente, nunca dado de cliente. Roda sempre que o
+  // fluxo chega aqui, independente de matchIndisponivel -- fontes
+  // desacopladas por desenho (Arquitetura Formal §7).
+  const conhecimentoResult = await buscarConhecimentoRelevante(conteudo);
+  const contextoConhecimento =
+    conhecimentoResult.outcome === "encontrado"
+      ? `[CONHECIMENTO INSTITUCIONAL - ${conhecimentoResult.titulo}]\n${conhecimentoResult.conteudo}`
+      : null;
+
+  // "Regra de ouro" (secao 7 do levantamento): contextoCompleto e' o
+  // UNICO texto de contexto a partir daqui -- passado identico para
+  // chamarGemini() e para validarResposta() mais abaixo, nunca
+  // contextoCliente sozinho por engano.
+  const partesContexto = [contextoCliente, contextoConhecimento].filter(
+    (parte): parte is string => !!parte,
+  );
+  const contextoCompleto = partesContexto.length > 0 ? partesContexto.join("\n\n") : null;
+
+  const geminiResult = await chamarGemini(conteudo, contextoCompleto);
 
   let geminiSaida: unknown = { outcome: "unavailable" };
   let validacaoResultado: { aprovado: boolean; motivo?: string } | undefined;
@@ -225,7 +246,7 @@ Deno.serve(async (req: Request) => {
 
   if (geminiResult.outcome === "success") {
     const geminiData = geminiResult.data;
-    const validacao = validarResposta(geminiData, contextoCliente);
+    const validacao = validarResposta(geminiData, contextoCompleto);
     validacaoResultado = validacao.aprovado
       ? { aprovado: true }
       : { aprovado: false, motivo: validacao.motivo };
@@ -373,6 +394,10 @@ Deno.serve(async (req: Request) => {
       outcome: s.outcome,
       linkState: s.linkState,
     })),
+    conhecimento:
+      conhecimentoResult.outcome === "encontrado"
+        ? { outcome: conhecimentoResult.outcome, titulo: conhecimentoResult.titulo }
+        : { outcome: conhecimentoResult.outcome },
     gemini: geminiSaida,
     ...(validacaoResultado ? { validacao: validacaoResultado } : {}),
     ...(transferenciaResultado ? { transferencia: transferenciaResultado } : {}),
