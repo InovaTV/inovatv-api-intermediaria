@@ -59,9 +59,16 @@
 //     contexto (linha acima), nunca e' descartada de verdade.
 //
 // Entrada temporaria para teste direto -- o Webhook real (Componente
-// 3) ainda nao existe nesta etapa, chega depois. Formato provisorio,
-// so para validar o nucleo:
-//   POST { telefone: string, conteudo: string }
+// 3) ja existe e e' o caminho normal de producao; esta entrada segue
+// disponivel so' para teste manual. Formato:
+//   POST { telefone: string, conteudo: string, nomeContato?: string }
+//
+// nome_snapshot (evolucao arquitetural aprovada, 2026-08-21/22,
+// inovatv_central CLAUDE.md): passa a vir sempre de nomeContato
+// (contacts[].profile.name da Meta, repassado pelo Webhook) -- nunca
+// mais de um acesso do Rocket. Ver bloco logo apos buscarOuCriarConversa.
+// Entrada de teste direto sem nomeContato continua funcionando, so'
+// nao atualiza nome_snapshot nessa chamada.
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
@@ -104,14 +111,14 @@ Deno.serve(async (req: Request) => {
     return errorResponse("Metodo nao suportado, use POST", 405);
   }
 
-  let body: { telefone?: string; conteudo?: string };
+  let body: { telefone?: string; conteudo?: string; nomeContato?: string };
   try {
     body = await req.json();
   } catch {
     return errorResponse("Corpo da requisicao precisa ser JSON valido");
   }
 
-  const { telefone: telefoneBruto, conteudo } = body;
+  const { telefone: telefoneBruto, conteudo, nomeContato } = body;
   if (!telefoneBruto || !conteudo) {
     return errorResponse("Campos obrigatorios: telefone, conteudo");
   }
@@ -134,6 +141,20 @@ Deno.serve(async (req: Request) => {
       { outcome: "unavailable", message: "Falha ao consultar conversas_estado" },
       503,
     );
+  }
+
+  // Identidade do contato (evolucao arquitetural aprovada, 2026-08-21/22,
+  // inovatv_central CLAUDE.md): nome_snapshot passa a vir SEMPRE do
+  // proprio WhatsApp (contacts[].profile.name, repassado pelo Webhook
+  // como nomeContato), nunca mais de um acesso do Rocket -- o Rocket
+  // identifica cadastro/acessos, o WhatsApp identifica a pessoa/
+  // conversa. Atualiza sempre que vier nome (decisao explicita do
+  // usuario, item 7: nome_snapshot e' campo de exibicao/conveniencia,
+  // nao fonte historica -- reflete sempre o nome de perfil mais
+  // recente). Sem nome (Meta nao mandou / entrada de teste direto) =>
+  // nao escreve nada, nome_snapshot existente permanece intocado.
+  if (nomeContato) {
+    await atualizarNomeSnapshot(conversa.conversation_id, nomeContato).catch(() => {});
   }
 
   // Passo 0 (Componente 1 §6): aguardando_humano -- so registra e para,
@@ -185,15 +206,6 @@ Deno.serve(async (req: Request) => {
         .filter((c) => !!c.publicId)
         .map((c) => chamarStatus(c.publicId as string)),
     );
-  }
-
-  // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
-  // Best-effort: statusResults ja foi resolvido de graca acima, sem
-  // chamada extra -- uma falha aqui nunca pode atrasar/derrubar o
-  // fluxo principal (Gemini, validador, envio ao cliente).
-  const nomeReal = statusResults.find((s) => s.cliente?.nome)?.cliente?.nome;
-  if (nomeReal) {
-    await atualizarNomeSnapshot(conversa.conversation_id, nomeReal).catch(() => {});
   }
 
   const matchIndisponivel =

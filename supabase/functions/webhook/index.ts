@@ -21,10 +21,20 @@
 //    200 antes da chamada ao Orquestrador terminar. Falha na chamada
 //    interna gera log estruturado, NUNCA loga o
 //    ORCHESTRATOR_INTERNAL_TOKEN.
-// 6. Contrato de dados ao Orquestrador inalterado: {telefone, conteudo}.
+// 6. Contrato de dados ao Orquestrador: {telefone, conteudo} + campo
+//    novo opcional/aditivo nomeContato (ver evolucao arquitetural
+//    abaixo, 2026-08-21/22 -- decisao 6 original revista).
 // 7. Reconhecimento de eventos: so value.messages processa;
 //    value.statuses/value.errors reconhecidos e descartados (errors
-//    com log); value.contacts ignorado.
+//    com log).
+//
+// Evolucao arquitetural aprovada (2026-08-21/22, inovatv_central
+// CLAUDE.md, achado do nome_snapshot arbitrario do Rocket): value.contacts
+// deixa de ser ignorado -- correlacionado por wa_id === messages[].from
+// (nunca por posicao de array), profile.name repassado como nomeContato
+// pro Orquestrador. Revisa a decisao 7 original ("contacts ignorado") e
+// parcialmente a decisao 6 ("contrato inalterado") -- ver CLAUDE.md pra
+// o racional completo (identidade do contato = WhatsApp, nunca Rocket).
 
 import {
   registrarMensagemSeNova,
@@ -40,12 +50,17 @@ interface MetaMensagem {
   text?: { body?: string };
 }
 
+interface MetaContato {
+  wa_id?: string;
+  profile?: { name?: string };
+}
+
 interface MetaValue {
   metadata?: { phone_number_id?: string };
   messages?: MetaMensagem[];
   statuses?: unknown[];
   errors?: unknown[];
-  contacts?: unknown[];
+  contacts?: MetaContato[];
 }
 
 interface MetaPayload {
@@ -97,6 +112,7 @@ async function assinaturaValida(
 async function chamarOrquestrador(
   telefone: string,
   conteudo: string,
+  nomeContato?: string,
 ): Promise<void> {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const tokenInterno = Deno.env.get("ORCHESTRATOR_INTERNAL_TOKEN");
@@ -116,7 +132,9 @@ async function chamarOrquestrador(
         "Content-Type": "application/json",
         "X-Internal-Token": tokenInterno,
       },
-      body: JSON.stringify({ telefone, conteudo }),
+      body: JSON.stringify(
+        nomeContato ? { telefone, conteudo, nomeContato } : { telefone, conteudo },
+      ),
       signal: AbortSignal.timeout(60000),
     });
 
@@ -171,7 +189,16 @@ async function processarValue(value: MetaValue): Promise<void> {
     if (resultado === "duplicada") continue;
 
     if (mensagem.type === "text" && mensagem.text?.body) {
-      EdgeRuntime.waitUntil(chamarOrquestrador(mensagem.from, mensagem.text.body));
+      // Identidade do contato (evolucao arquitetural aprovada,
+      // 2026-08-21/22, inovatv_central CLAUDE.md): contacts[] e
+      // messages[] sao arrays IRMAOS, nao pareados por indice --
+      // correlaciona por wa_id === from, nunca por posicao (a Meta
+      // nao garante a mesma ordem entre os dois arrays quando ha mais
+      // de uma mensagem no mesmo evento).
+      const contato = value.contacts?.find((c) => c.wa_id === mensagem.from);
+      EdgeRuntime.waitUntil(
+        chamarOrquestrador(mensagem.from, mensagem.text.body, contato?.profile?.name),
+      );
       continue;
     }
 
