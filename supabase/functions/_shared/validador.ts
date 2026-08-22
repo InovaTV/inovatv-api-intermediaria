@@ -86,6 +86,31 @@ const MARCADORES_NEGACAO = [
 ];
 const JANELA_NEGACAO = 40;
 
+// Achado real em teste (2026-08-21, bateria de testes reais pelo
+// Webhook, Caso 2): a regex de contagem casava "um" dentro de "mais de
+// um acesso", lendo como afirmacao literal de 1 acesso -- quando na
+// verdade "mais de um" significa "varios", o oposto. Esses
+// quantificadores aproximados nunca afirmam uma contagem exata, entao
+// o numeral que os segue nao deve virar uma comparacao factual.
+const MARCADORES_QUANTIFICADOR_APROXIMADO = [
+  "mais de",
+  "mais que",
+  "pelo menos",
+  "acima de",
+  "menos de",
+  "menos que",
+];
+const JANELA_QUANTIFICADOR = 15;
+
+function textoTemQuantificadorAproximadoAntes(
+  texto: string,
+  indice: number,
+): boolean {
+  const inicio = Math.max(0, indice - JANELA_QUANTIFICADOR);
+  const janela = texto.slice(inicio, indice).toLowerCase();
+  return MARCADORES_QUANTIFICADOR_APROXIMADO.some((m) => janela.includes(m));
+}
+
 // Lista fixa de numerais por extenso (Componente 4 §7). Forma digito
 // e' livre (\d+), sem lista fixa.
 const NUMERAIS: Record<string, number> = {
@@ -269,6 +294,7 @@ function validarContagemAcessos(
         : null;
     if (valor === null) continue;
     if (numeralIndicaItemIndividual(texto, m.index!, valor, servidoresContexto)) continue;
+    if (textoTemQuantificadorAproximadoAntes(texto, m.index!)) continue;
     encontrados.add(valor);
   }
 
