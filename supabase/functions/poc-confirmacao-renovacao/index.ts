@@ -1,18 +1,24 @@
 // POC TEMPORARIA E DESCARTAVEL -- prova do mecanismo "renovacao no
 // Rocket -> nossa infraestrutura -> WhatsApp Cloud API -> numero de
 // TESTE" (2026-08-22, autorizado explicitamente pelo usuario). NAO e'
-// o fluxo de producao -- so valida o encanamento tecnico com texto
-// livre, dentro da janela de 24h aberta manualmente pelo cliente de
-// teste antes da chamada. Apagar esta function depois de usada, mesmo
+// o fluxo de producao. Apagar esta function depois de usada, mesmo
 // padrao ja usado neste repositorio para diagnosticos pontuais
 // (debug-fields, whatsapp-diag, teste-patch-renovacao-newone).
 //
+// SEGUNDA POC (2026-08-22, mesma sessao/dia): dispara via Message
+// Template `pagamento_confirmado`, ja aprovado pela Meta -- nao mais
+// texto livre, nao depende mais de janela de 24h aberta manualmente
+// (autorizado explicitamente pelo usuario). Template tem 4 variaveis
+// (nome/plano/servidor/vencimento) -- {VALOR} nao existe no template
+// aprovado, deixado de fora deliberadamente desta rodada; nunca
+// inventado nem acrescentado por fora do template.
+//
 // Generaliza o PATCH ja comprovado em teste-patch-renovacao-newone
 // (GET /planos/ -> GET cliente -> PATCH vencimento -> GET de
-// confirmacao) e acrescenta so o passo novo: montar uma mensagem de
-// texto livre com os dados confirmados e enviar via
-// enviarMensagemWhatsApp (_shared/whatsapp_client.ts, ja testado,
-// usa os secrets do numero de TESTE ja configurados no projeto).
+// confirmacao) e acrescenta o passo novo: disparar o template
+// aprovado com os dados confirmados via enviarTemplateWhatsApp
+// (_shared/whatsapp_client.ts, ja testado, usa os secrets do numero
+// de TESTE ja configurados no projeto).
 //
 // Autenticacao: NENHUMA -- mesmo padrao ja aceito neste repositorio
 // para diagnosticos unicos e descartaveis (teste-patch-renovacao-newone,
@@ -24,7 +30,11 @@
 // Alvo fixo (nunca por parametro livre): mesmo cliente de teste ja
 // usado em toda essa investigacao (Js Informatica Rp / NewOne).
 
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import {
+  NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
+  IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
+} from "../_shared/mensagens_fixas.ts";
 
 const PUBLIC_ID = "01a026ef-8bdd-7641-a4f2-2ae37b184ac0"; // Js Informatica Rp / NewOne (publicId reconfirmado via /match em 2026-08-22)
 const NOME_ESPERADO = "Js Informática Rp";
@@ -145,16 +155,22 @@ Deno.serve(async (_req: Request) => {
   }
 
   // --- 4. Disparador -- so dispara DEPOIS de confirmar o PATCH de verdade ---
-  const mensagem =
-    `🧪 *TESTE DE MECANISMO -- ignore, nao e' uma cobranca real*\n\n` +
-    `✅ Renovação confirmada no Rocket!\n\n` +
-    `Nome: ${clienteDepois.nome}\n` +
-    `Plano: ${clienteDepois.plano?.nome}\n` +
-    `Servidor: ${clienteDepois.servidor?.nome}\n` +
-    `Novo vencimento: ${formatarDataBr(clienteDepois.vencimento)}\n\n` +
-    `Esta mensagem veio da nossa infraestrutura (Cloud API), não do RocketZap -- prova de mecanismo, InovaTV.`;
+  // Template pagamento_confirmado, 4 variaveis na ordem exata aprovada
+  // pela Meta: {{1}} nome, {{2}} plano, {{3}} servidor, {{4}} vencimento.
+  // Sem {VALOR} -- nao existe no template aprovado, nunca inventado aqui.
+  const parametrosTemplate = [
+    clienteDepois.nome,
+    clienteDepois.plano?.nome,
+    clienteDepois.servidor?.nome,
+    formatarDataBr(clienteDepois.vencimento),
+  ];
 
-  const envio = await enviarMensagemWhatsApp(TELEFONE_CLIENTE_TESTE, mensagem);
+  const envio = await enviarTemplateWhatsApp(
+    TELEFONE_CLIENTE_TESTE,
+    NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
+    IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
+    parametrosTemplate,
+  );
 
   return new Response(
     JSON.stringify({
@@ -162,6 +178,8 @@ Deno.serve(async (_req: Request) => {
       identificacao: { nomeConfere, servidorConfere, planoConfere },
       vencimentoAntes,
       novoVencimentoConfirmado: clienteDepois.vencimento,
+      templateUsado: NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
+      parametrosTemplate,
       mensagemEnviada: envio.outcome === "success",
       envioOutcome: envio.outcome,
     }, null, 2),
