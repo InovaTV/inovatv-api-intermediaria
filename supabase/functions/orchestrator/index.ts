@@ -289,17 +289,47 @@ Deno.serve(async (req: Request) => {
       }
     }
   } else {
-    // Fatia 2 (Painel de Atendimento, 2026-08-16): Gemini indisponivel
-    // (falhou apos retry, Componente 1 §11) -- a mensagem do cliente
-    // ainda precisa ficar registrada ("sempre, qualquer estado",
-    // Componente 5 §12). episodio_id=null: nenhuma transferencia foi
-    // decidida aqui. Transferencia automatica por indisponibilidade do
-    // Gemini (Componente 1 §11) permanece fora de escopo desta fatia,
-    // gap pre-existente, nao mexido agora.
+    // Correcao do gap pre-existente (Bug 2, achado na bateria de testes
+    // reais pelo Webhook, 2026-08-21): Gemini indisponivel mesmo apos o
+    // retry (Componente 1 §11) agora aciona transferencia humana de
+    // verdade, reaproveitando o MESMO mecanismo do branch deveTransferir
+    // acima -- nenhum mecanismo novo (Alternativa A do levantamento,
+    // aprovada pelo usuario). TEXTO_IA_INDISPONIVEL e' só um valor de
+    // log/auditoria (grafado explicitamente como placeholder, nunca
+    // enviado ao cliente nem ao Jose) -- exigido pela assinatura da RPC,
+    // que sempre grava um par cliente+ia.
+    const TEXTO_IA_INDISPONIVEL = "(Gemini indisponível)";
     try {
-      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+      const resultado = await acionarTransferenciaHumana(
+        conversa.conversation_id,
+        "sistema:gemini_indisponivel",
+        conteudo,
+        TEXTO_IA_INDISPONIVEL,
+      );
+      transferenciaResultado =
+        resultado.outcome === "acionada"
+          ? { acionada: true, motivo: "sistema:gemini_indisponivel" }
+          : { acionada: false, motivo: "ja_transferida_por_outra_requisicao" };
     } catch {
-      // best-effort, mesma filosofia acima
+      transferenciaResultado = { acionada: false, motivo: "falha_ao_registrar" };
+    }
+    // Mesma disciplina do branch deveTransferir: so envia mensagem ao
+    // cliente/aviso ao Jose quando a RPC realmente acionou AGORA (nunca
+    // em "ja_transferida"/erro -- evita duplicar envio sob concorrencia).
+    if (transferenciaResultado.acionada) {
+      const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
+      envioResultado = { enviado: envio.outcome === "success" };
+
+      const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
+      if (numeroJose) {
+        const aviso = await enviarTemplateWhatsApp(
+          numeroJose,
+          NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+          IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+          [transferenciaResultado.motivo],
+        );
+        avisoJoseResultado = { enviado: aviso.outcome === "success" };
+      }
     }
   }
 
