@@ -9,13 +9,15 @@
 >
 > **Revisão 2 (mesma sessão) — contrato de identificação FECHADO e
 > APROVADO pelo usuário.** Ver seção 6 (redação final da regra) e
-> seção 6-A (novo — exigência de extrator único compartilhado). A
-> seção 4 (matriz de avaliação forma a forma) e a seção 7 permanecem
-> como registro do raciocínio que levou à aprovação — não reabertas.
-> **Ainda NÃO AUTORIZADO:** nenhuma alteração de código. Este documento
-> precisa da aprovação da redação final (abaixo) antes de
-> `rotulo_acesso.ts`/`validador.ts`/`orchestrator/index.ts` serem
-> tocados.
+> seção 6-A (exigência de extrator único compartilhado).
+>
+> **Revisão 3 (mesma sessão) — ✅ CASO 1 HOMOLOGADO, ciclo fechado.**
+> Correção implementada (`826c2a7`) e observabilidade adicional
+> (`e326b79`, `92a14b8`) implantadas (`orchestrator` v35). Terceira
+> execução real aprovada com evidência DIRETA (log do Logs Explorer,
+> não inferência) — ver seção 7 para a linha do tempo completa e o
+> diagnóstico exato. Casos 2-12 continuam bloqueados, aguardando
+> liberação individual do usuário.
 
 ## 1. O que aconteceu (evidência real, lida do banco em produção)
 
@@ -273,30 +275,93 @@ texto (ex.: um servidor hipotético chamado `"Max"` batendo dentro de
 `"máximo"`) — a extração precisa reconhecer limites de palavra, nunca
 só `.includes()`.
 
-## 7. Estado atual — contrato fechado, implementação ainda não autorizada
+## 7. Estado final — ✅ CASO 1 HOMOLOGADO, com evidência direta
 
-- **Caso 1: inconclusivo, não falhou.** A intenção foi reconhecida
-  corretamente pelo Gemini — o bloqueio foi na camada determinística
-  de resolução de acesso, não na capacidade de reconhecimento. Registro
-  para a matriz: **Caso 1 — BLOQUEADO POR INCONSISTÊNCIA DE CONTRATO,
-  CORRIGIDO NA SEÇÃO 6 — aguardando reexecução após implementação.**
-- **Casos 2-12: não executados.** Casos 2 e 6 dependem do mesmo
-  mecanismo de resolução de acesso — seriam afetados pelo mesmo gap
-  até a implementação da seção 6 estar pronta e testada.
-- **Contrato de identificação (seção 6): ✅ FECHADO E APROVADO.**
-  Redação final acima, incluindo a exigência de extrator único
-  compartilhado (seção 6-A) e a confirmação explícita de que o Caso 9
-  permanece protegido.
-- **Conversa de teste (`43fcff07-80e5-4d0a-b814-62323ef6c3a9`) segue em
-  `aguardando_humano`.** Não foi tocada — nem pelo código, nem
-  manualmente. Continua assim por instrução explícita: só será
-  encerrada no Painel de Atendimento depois que o ajuste estiver
-  implementado, testado localmente e pronto para a reexecução do
-  Caso 1 — não antes, e não como parte deste registro.
-- **Nada foi implementado ainda.** Próximo passo, quando autorizado:
-  alterar `rotulo_acesso.ts`/`validador.ts`/`orchestrator/index.ts`
-  conforme a seção 6, rodar os testes locais relacionados (novos +
-  regressão dos 50 já existentes), apresentar diff + resultado, e só
-  depois disso retomar os 12 casos reais a partir do Caso 1 — os
-  Casos 2-12 continuam bloqueados até essa reexecução confirmar o
-  ajuste.
+**Linha do tempo completa deste achado, do início ao fechamento:**
+
+1. **Primeira execução real (23/08, ~10:12)** — *"Quero renovar meu
+   NewOne, por favor."* → Gemini reconheceu a intenção e o acesso
+   corretamente na confirmação em linguagem natural, mas o Validador
+   **reprovou** com `renovacao:acesso_nao_determinado` — inconsistência
+   de contrato (seções 1-4 acima). Caiu no mecanismo de transferência
+   já existente. **Não foi uma falha do Caso 1 em si** — foi o
+   reconhecimento de intenção funcionando, barrado por uma regra de
+   extração restritiva demais.
+2. **Contrato de identificação fechado e aprovado** (seção 6/6-A) —
+   nome do servidor como palavra/token inteiro determina o acesso;
+   plano isolado nunca determina (protege o Caso 9).
+3. **Correção implementada e implantada** — commit `826c2a7`
+   (`_shared/rotulo_acesso.ts`, `_shared/validador.ts`,
+   `orchestrator/index.ts`), deploy `orchestrator` v33. 68/68 testes
+   locais, incluindo reprodução exata da frase real do Caso 1.
+4. **Segunda execução real — inconclusiva por motivo totalmente
+   alheio à correção**: duas tentativas seguidas (11:32 e 11:35)
+   caíram em `sistema:gemini_indisponivel` — a chamada real ao Gemini
+   falhou antes de qualquer código desta etapa ser alcançado. Como
+   nenhum dos dois lados (Webhook, Orquestrador, `gemini_client.ts`)
+   tinha qualquer log nos 6 caminhos de falha da chamada ao Gemini,
+   não havia como diagnosticar a causa.
+5. **Observabilidade mínima adicionada e implantada** — commit
+   `e326b79` (log do diagnóstico `propor_renovacao` no Orquestrador,
+   deploy v34) e commit `92a14b8` (log técnico nos 6 caminhos de
+   `unavailable` de `_shared/gemini_client.ts` — status HTTP,
+   `blockReason`, `finishReason`, exceção/timeout, nunca segredo —
+   deploy final **v35**). 73/68→73 testes locais, sem regressão.
+6. **Terceira execução real (23/08, 08:46 — horário do log) — ✅
+   APROVADA, com evidência DIRETA, não inferência:**
+   ```
+   [orchestrator] propor_renovacao diagnostico
+   {"tipo":"propor_renovacao","validacaoAprovado":true,
+    "servidorResolvido":"NewOne",
+    "publicId":"01a026ef-8bdd-7641-a4f2-2ae37b184ac0"}
+   ```
+   Lido direto do Logs Explorer do Supabase (Edge Functions →
+   `orchestrator` → Logs) — `publicId` conferido e batendo exatamente
+   com o `public_id` real do acesso NewOne/Js Informática Rp (já
+   confirmado via `/status` no início da rodada de testes). Cruzamento
+   com o banco: `conversas_estado.estado` permaneceu `normal`; só 1
+   mensagem gravada (`origem: cliente`, `episodio_id: null`, sem par
+   "ia"); nenhuma mensagem WhatsApp enviada; nenhuma cobrança, token
+   ou renovação Sigma — nenhum código para essas operações existe
+   ainda nesta etapa.
+
+**Nota de leitura, para não confundir no futuro:** as duas ocorrências
+de `sistema:gemini_indisponivel` (item 4) **não contam como falha do
+Caso 1** — são instabilidade real e transitória da chamada ao Gemini,
+observada *durante* a homologação, e foi exatamente esse achado que
+motivou a observabilidade adicional (item 5). Na execução que de fato
+percorreu o caminho `propor_renovacao`, o resultado foi aprovado de
+primeira, com evidência direta.
+
+**Precisão de escopo, apontada pelo usuário — o que foi homologado é
+o diagnóstico, não a experiência conversacional final:**
+
+| Aspecto | Resultado |
+|---|---|
+| Intenção reconhecida (Gemini) | ✅ |
+| Acesso determinado (Validador) | ✅ |
+| `public_id` correto (Orquestrador) | ✅ |
+| Transferência indevida | ❌ não ocorreu |
+| Cobrança/token/Sigma | ⏸ não existe nesta etapa (Etapas 2/3) |
+| Resposta ao cliente | **Nenhuma enviada — por desenho do modo diagnóstico (opção A), não falha** |
+| Experiência final de conversa (mensagem intermediária, Lacuna 8) | **Ainda NÃO homologada — pertence à Etapa 4, não existe código para isso ainda** |
+
+O cliente real, na prática, mandou a mensagem e **não recebeu
+nenhuma resposta** — isso é o comportamento correto e esperado do
+modo diagnóstico isolado (Etapa 1), não um resultado a ser lido como
+"o fluxo de renovação está pronto". O que este achado prova é que a
+**cadeia determinística** (reconhecimento → validação → resolução de
+`public_id`) funciona — não que a experiência do cliente ao pedir uma
+renovação já está completa. Essas são duas afirmações diferentes, e
+só a primeira está comprovada até aqui.
+
+**Registro para a matriz do `LEVANTAMENTO_ETAPA1.md` (seção 7):**
+**Caso 1 — ✅ APROVADO (diagnóstico)** — evidência direta via log
+(item 6 acima). Não usar o rótulo "homologado" sozinho sem qualificar
+que é o diagnóstico, não a experiência final — ver tabela acima.
+
+- **Casos 2-12: continuam bloqueados**, aguardando o próximo
+  checkpoint do usuário para liberação individual.
+- **Nenhuma operação financeira em nenhum momento desta investigação**
+  — nenhuma cobrança PagBank, token, renovação Sigma ou mensagem de
+  cobrança, em nenhuma das 3 execuções reais.
