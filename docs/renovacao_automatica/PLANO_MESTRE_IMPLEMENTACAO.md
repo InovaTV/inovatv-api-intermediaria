@@ -35,7 +35,8 @@
 | Etapa | Status |
 |---|---|
 | 0 — Base do canal/identidade | ✅ Homologado |
-| 1 — `propor_renovacao` | 🔲 Não iniciado |
+| 1a — `propor_renovacao` (reconhecimento/validação/resolução) | ✅ Comprovada tecnicamente (diagnóstico) — **não é o mesmo que Etapa 1 concluída, ver 1b** |
+| 1b — `propor_renovacao` (resposta real ao cliente) | 🔲 Não iniciado |
 | 2 — `cobrancas_pix`/`tokens_renovacao` | 🔲 Não iniciado |
 | 3 — Criação da cobrança + valor real | 🔲 Não iniciado |
 | 4 — Mensagens fixas | 🔲 Não iniciado |
@@ -56,14 +57,59 @@
 ---
 
 ### Etapa 1 — `propor_renovacao` (porta de entrada do núcleo)
-**Status: 🔲 Não iniciado**
+**Status: 🔶 Parcialmente comprovada — ver 1a/1b abaixo. Não tratar como concluída.**
 **Depende de:** Etapa 0 (já pronta).
+
+> **Distinção obrigatória, registrada em 2026-08-23 depois de um achado
+> real.** A Etapa 1 tem duas partes, com critérios de homologação
+> diferentes — "comprovada tecnicamente" (1a) nunca é o mesmo que
+> "concluída" (1a **e** 1b). O Caso 1 (23/08) provou isso na prática: a
+> cadeia determinística (Gemini → Validador → Orquestrador) funcionou
+> de ponta a ponta e resolveu o `public_id` correto, mas o cliente
+> **nunca recebeu nenhuma mensagem** — não por falha, mas porque a
+> Etapa 1 foi deliberadamente implementada em modo diagnóstico (opção
+> A, `docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md` §6). Isso quase foi
+> confundido com "Etapa 1 concluída" numa sessão seguinte — daí este
+> registro explícito, para não se repetir.
+
+#### Etapa 1a — Reconhecimento, validação e resolução do acesso
+**Status: ✅ Comprovada tecnicamente (diagnóstico, Caso 1, 23/08/2026 — ver `docs/propor_renovacao/ACHADO_CASO1_RESOLUCAO_ACESSO.md`).**
 **O que é construído:**
 - Extensão do contrato estruturado do Gemini: novo `tipo: "propor_renovacao"` (Lacuna 2).
 - Alteração do `SYSTEM_PROMPT` congelado — mudança sensível, exige disciplina própria do projeto.
 - Regras novas do Validador (Lacuna 3): cliente identificado, acesso determinado (rótulo obrigatório se múltiplos acessos), sem checagem de elegibilidade por vencimento.
-**Pré-requisito explícito, não pulável:** nova rodada de validação comportamental (mesmo padrão das Rodadas 3/4) antes de qualquer coisa ir pra produção — alterar prompt sem essa rodada não é aceitável, já registrado como disciplina permanente do projeto.
-**Critério de homologação:** bateria de casos reais (intenção clara, intenção ambígua, cliente não identificado, múltiplos acessos) rodada no número de teste, sem falso positivo/negativo, sem regressão nos comportamentos já validados (Rodadas 3/4 originais).
+- Resolução do `public_id`/acesso correto, a partir dos dados estruturados já em memória (`_shared/rotulo_acesso.ts`), nunca por parsing livre do texto.
+**Critério de homologação (cumprido):** `outcome` correto (`tipo`, `public_id`/acesso resolvido) observado em execução real — **sem exigir nenhuma mensagem real entregue ao cliente**, por desenho (opção A).
+
+#### Etapa 1b — Resposta real ao cliente
+**Status: 🔲 Não iniciado. Nenhum código, prompt ou deploy alterado.**
+**Depende de:** Etapa 1a (pronta).
+**Decisão arquitetural fechada (2026-08-23):** enviar o próprio `texto`
+gerado pelo Gemini (já validado pelo Validador — mesmo caminho hoje
+usado para `tipo === "responder"`), **Opção 1** — nenhuma mensagem
+fixa nova é criada. Comparação completa das duas opções e o texto
+integral da decisão: `docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md` §9.
+
+**Isolamento estrito — lista negativa aprovada.** A implementação da
+1b é **estritamente limitada ao envio da confirmação**. Ela não deve,
+em nenhuma hipótese: criar cobrança; chamar PagBank; gerar token;
+chamar Sigma/Rocket para renovar; alterar vencimento; criar qualquer
+estado de pagamento; enviar a mensagem intermediária da Etapa 4;
+antecipar nenhuma decisão da Etapa 2.
+
+**Fluxo aprovado:**
+```
+mensagem do cliente → Gemini → Validador → propor_renovacao aprovado
+→ resolver acesso (Etapa 1a) → enviar confirmação do Gemini
+→ persistir resposta da IA
+```
+Reprovado pelo Validador → continua valendo, sem alteração, o
+mecanismo de segurança/transferência já existente.
+
+**Pré-requisito explícito, não pulável:** execução real da matriz de 12 casos (já aprovada, `docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md` §7) com mensagem real observada pelo cliente — nunca só o `outcome` interno, diferente do critério já cumprido em 1a. O Caso 1 (23/08) vale só como homologação de 1a — precisa ser **reexecutado** sob o critério de 1b, nunca reaproveitado.
+**Critério de homologação:** os 12 casos, com mensagem real entregue e correta, sem falso positivo/negativo, sem regressão nos comportamentos já validados (Rodadas 3/4 originais).
+
+**A Etapa 1 só conta como concluída quando 1a e 1b estiverem, as duas, homologadas com evidência real.**
 
 ---
 
