@@ -288,3 +288,70 @@ export async function atualizarNomeSnapshot(
 
   if (error) throw error;
 }
+
+// Memoria de sessao (Camada 3, 2026-08-23) -- update parcial, mesmo
+// padrao de atualizarNomeSnapshot (sem RPC, sem branching). Chamado
+// pelo Orquestrador pra renovar sessao_atividade_em a cada mensagem
+// valida do cliente, e pra gravar acesso_selecionado quando a resposta
+// citar exatamente um servidor. So' atualiza os campos explicitamente
+// presentes em `patch` -- nunca sobrescreve o que nao foi passado.
+// NAO usar esta funcao pra tratar a expiracao de sessao (2+ requisicoes
+// concorrentes podem enviar o aviso fixo duas vezes) -- ver
+// expirarSessaoAtomicamente, logo abaixo, feita especificamente pra
+// esse caso com uma condicao atomica.
+export async function atualizarSessao(
+  conversationId: string,
+  patch: { acessoSelecionado?: string | null; sessaoAtividadeEm?: string },
+): Promise<void> {
+  const client = getServiceClient();
+
+  const update: Record<string, string | null> = {};
+  if ("acessoSelecionado" in patch) {
+    update.acesso_selecionado = patch.acessoSelecionado ?? null;
+  }
+  if ("sessaoAtividadeEm" in patch) {
+    update.sessao_atividade_em = patch.sessaoAtividadeEm ?? null;
+  }
+
+  const { error } = await client
+    .from("conversas_estado")
+    .update(update)
+    .eq("conversation_id", conversationId);
+
+  if (error) throw error;
+}
+
+// Memoria de sessao (2026-08-23) -- achado real da auditoria de
+// concorrencia: atualizarSessao (acima) e' um UPDATE simples, sem
+// nenhuma trava -- se 2 mensagens REAIS e distintas do mesmo cliente
+// chegarem quase simultaneamente logo apos a janela de 1h, as duas
+// podem ler o mesmo sessao_atividade_em antigo e enviar o aviso fixo
+// duas vezes. Correcao minima, sem RPC nova: um UNICO UPDATE cujo
+// WHERE inclui a condicao "sessao_atividade_em = valor lido" (CAS --
+// compare-and-swap) e' atomico por natureza de uma unica instrucao SQL
+// no Postgres -- mesmo espirito das RPCs ja existentes
+// (assumir_atendimento/acionar_transferencia_humana, "where
+// estado = 'normal'"), sem precisar de PL/pgSQL pra um UPDATE de uma
+// tabela so. Sob concorrencia real, so' UMA das duas chamadas casa com
+// o WHERE (a outra ja mudou o valor por primeiro) -- a que nao casar
+// recebe outcome "ja_expirada_por_outra_requisicao" e NUNCA deve
+// enviar o aviso de novo (quem ja venceu a corrida ja enviou).
+export async function expirarSessaoAtomicamente(
+  conversationId: string,
+  sessaoAtividadeEmAntiga: string,
+): Promise<{ outcome: "expirou_agora" | "ja_expirada_por_outra_requisicao" }> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("conversas_estado")
+    .update({ acesso_selecionado: null, sessao_atividade_em: new Date().toISOString() })
+    .eq("conversation_id", conversationId)
+    .eq("sessao_atividade_em", sessaoAtividadeEmAntiga)
+    .select("conversation_id");
+
+  if (error) throw error;
+
+  return data && data.length > 0
+    ? { outcome: "expirou_agora" }
+    : { outcome: "ja_expirada_por_outra_requisicao" };
+}

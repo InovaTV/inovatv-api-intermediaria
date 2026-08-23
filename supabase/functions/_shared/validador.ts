@@ -363,9 +363,20 @@ function acessosCorrespondentesAoServidor(
   return acessos.filter((a) => nomeApareceComoPalavra(texto, a.servidor));
 }
 
+// Memoria de sessao (Camada 3, 2026-08-23) -- acessoSelecionadoServidor
+// e' o NOME DO SERVIDOR (nunca public_id -- o Validador nao conhece, e
+// nao precisa conhecer, o public_id, Componente 4 §5/contexto.ts) que
+// o Orquestrador ja resolveu e reconferiu contra o conjunto FRESCO de
+// statusResults desta mesma chamada, antes de chamar validarResposta.
+// Ordem de prioridade fixa, sem excecao: o rotulo da MENSAGEM ATUAL
+// sempre e' tentado primeiro (inalterado); o contexto de sessao so'
+// participa como FALLBACK, quando a mensagem atual nao resolveu
+// sozinha -- nunca sobrepoe um rotulo explicito presente no texto
+// atual.
 function validarPropostaRenovacao(
   texto: string,
   contexto: ContextoParseado,
+  acessoSelecionadoServidor: string | null,
 ): ValidacaoResultado | null {
   if (contexto.acessos.length === 0) {
     return reprovar("renovacao:cliente_nao_identificado");
@@ -373,10 +384,19 @@ function validarPropostaRenovacao(
   if (contexto.acessos.length === 1) return null; // ja' determinado, so' 1 acesso possivel
 
   const correspondencias = acessosCorrespondentesAoServidor(texto, contexto.acessos);
-  if (correspondencias.length !== 1) {
-    return reprovar("renovacao:acesso_nao_determinado");
+  if (correspondencias.length === 1) return null;
+
+  if (
+    correspondencias.length === 0 &&
+    acessoSelecionadoServidor &&
+    contexto.acessos.some(
+      (a) => a.servidor.toLowerCase() === acessoSelecionadoServidor.toLowerCase(),
+    )
+  ) {
+    return null; // aprovado via contexto de sessao (fallback)
   }
-  return null;
+
+  return reprovar("renovacao:acesso_nao_determinado");
 }
 
 // --- Formato/schema (guarda de entrada, pedido explicito do usuario) ---
@@ -410,6 +430,7 @@ function validarFormato(saidaGemini: unknown): FormatoValidado {
 export function validarResposta(
   saidaGemini: unknown,
   contextoEnviado: string | null,
+  acessoSelecionadoServidor: string | null = null,
 ): ValidacaoResultado {
   const formato = validarFormato(saidaGemini);
   if (!formato.valido) return reprovar(formato.motivo);
@@ -433,7 +454,9 @@ export function validarResposta(
   // checagens acima continuam rodando de forma identica, independente
   // do tipo, sem nenhuma mudanca.
   if (tipo === "propor_renovacao") {
-    checagens.push(() => validarPropostaRenovacao(texto, contextoParseado));
+    checagens.push(() =>
+      validarPropostaRenovacao(texto, contextoParseado, acessoSelecionadoServidor),
+    );
   }
 
   for (const checagem of checagens) {

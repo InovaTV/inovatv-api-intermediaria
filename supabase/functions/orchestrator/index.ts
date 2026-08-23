@@ -101,6 +101,8 @@ import {
   buscarOuCriarConversa,
   acionarTransferenciaHumana,
   atualizarNomeSnapshot,
+  atualizarSessao,
+  expirarSessaoAtomicamente,
 } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import {
@@ -108,7 +110,7 @@ import {
   chamarStatus,
   type StatusResult,
 } from "../_shared/rocket_intermediaria.ts";
-import { montarContextoCliente } from "../_shared/contexto.ts";
+import { montarContextoCliente, montarContextoConversa } from "../_shared/contexto.ts";
 import { buscarConhecimentoRelevante } from "../_shared/conhecimento.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
@@ -117,9 +119,21 @@ import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+  MENSAGEM_SESSAO_EXPIRADA,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
+
+// Memoria de sessao (Camada 3, 2026-08-23 -- ver
+// docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
+// 8). 1h de inatividade, contada exclusivamente a partir de
+// sessao_atividade_em (timestamp UNICO da sessao inteira, nunca por
+// campo) -- checagem em leitura, sem pg_cron, sem aviso automatico de
+// expiracao iminente, sem processo em segundo plano (decisao
+// explicita do usuario). Escopo desta implementacao: SOMENTE sessao
+// ativa -- sem memoria persistente entre sessoes (Camada 2), sem
+// Redis, sem antecipar campos das Etapas 2-4.
+const SESSAO_TTL_MS = 60 * 60 * 1000;
 
 // Etapa 1 (propor_renovacao) -- resolve qual StatusResult corresponde
 // ao acesso citado no texto do Gemini, usando os MESMOS dados
@@ -137,17 +151,59 @@ import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
 // regra do Validador (validarPropostaRenovacao), aplicada aqui de
 // forma independente contra StatusResult[] em vez de
 // ContextoParseado.acessos[].
+// Memoria de sessao (2026-08-23): acessoSelecionadoServidor e' o nome
+// do servidor ja resolvido a partir de conversas_estado.acesso_selecionado
+// (public_id), reconferido pelo CHAMADOR contra o mesmo statusResults
+// desta chamada -- so' entra como fallback quando a mensagem atual, por
+// si so', nao resolveu nada (0 correspondencias). Nunca sobrepoe um
+// rotulo explicito da mensagem atual, nunca decide em caso de
+// ambiguidade genuina (2+ correspondencias na mensagem atual).
 function resolverAcessoRenovacao(
   texto: string,
   statusResults: StatusResult[],
+  acessoSelecionadoServidor: string | null,
 ): StatusResult | null {
   if (statusResults.length === 1) return statusResults[0];
 
   const correspondencias = statusResults.filter((s) =>
     nomeApareceComoPalavra(texto, s.cliente?.servidorNome ?? ""),
   );
+  if (correspondencias.length === 1) return correspondencias[0];
 
-  return correspondencias.length === 1 ? correspondencias[0] : null;
+  if (correspondencias.length === 0 && acessoSelecionadoServidor) {
+    const viaSessao = statusResults.filter(
+      (s) => s.cliente?.servidorNome?.toLowerCase() === acessoSelecionadoServidor.toLowerCase(),
+    );
+    if (viaSessao.length === 1) return viaSessao[0];
+  }
+
+  return null;
+}
+
+// Memoria de sessao (2026-08-23): grava acesso_selecionado SO' quando
+// a resposta EFETIVAMENTE ENVIADA (chamador so' invoca isto apos
+// confirmar envioResultado.enviado === true, nunca por antecipacao)
+// citar exatamente um servidor do conjunto atual como palavra inteira
+// -- mesma disciplina de ambiguidade ja usada no Validador/resolucao
+// de acesso (0 ou 2+ correspondencias nunca gravam nada). Objetivo
+// documentado: "cliente escolhe 2 -> sistema identifica NewOne ->
+// cliente depois diz 'esse acesso'". Best-effort: falha ao gravar
+// nunca desfaz o envio ja concluido.
+async function gravarAcessoSelecionadoSeCitado(
+  conversationId: string,
+  texto: string,
+  statusResults: StatusResult[],
+): Promise<void> {
+  if (statusResults.length <= 1) return;
+
+  const citados = statusResults.filter((s) =>
+    s.cliente?.servidorNome ? nomeApareceComoPalavra(texto, s.cliente.servidorNome) : false,
+  );
+  if (citados.length !== 1) return;
+
+  await atualizarSessao(conversationId, { acessoSelecionado: citados[0].publicId }).catch(
+    () => {},
+  );
 }
 
 Deno.serve(async (req: Request) => {
@@ -238,6 +294,86 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // Passo 0-B -- memoria de sessao (2026-08-23): so' dispara quando ha'
+  // uma sessao anterior de verdade (sessao_atividade_em preenchido) --
+  // a primeira mensagem de uma conversa nova nunca aciona isto. Tambem
+  // nunca aciona logo apos um atendimento humano: as RPCs
+  // acionar_transferencia_humana/assumir_atendimento (entrada em
+  // aguardando_humano) e encerrar_atendimento_humano (saida) ja zeram
+  // acesso_selecionado/sessao_atividade_em (migration
+  // 20260823140000_sessao_ia_invalidada_por_atendimento_humano.sql,
+  // decisao arquitetural: nenhum contexto operacional da IA atravessa
+  // um atendimento humano) -- entao a primeira mensagem apos o humano
+  // encerrar sempre ve sessao_atividade_em null, mesmo caso de "sessao
+  // nova" acima, nunca "expirada". Mais de
+  // 1h desde a ultima atividade -> limpa o contexto de sessao (so'
+  // acesso_selecionado hoje), envia o aviso fixo (nunca gerado pelo
+  // Gemini, mesmo padrao de MENSAGEM_TRANSFERENCIA_CLIENTE), e PARA --
+  // a mensagem atual do cliente nunca chega ao Gemini nesta chamada
+  // (mesmo espirito do Passo 0 acima: um "reinicio" e' tratado como
+  // situacao propria, nao como conteudo pra responder). A proxima
+  // mensagem do cliente processa normalmente, com sessao ja renovada.
+  const agora = Date.now();
+  const sessaoAnteriorEm = conversa.sessao_atividade_em
+    ? new Date(conversa.sessao_atividade_em).getTime()
+    : null;
+  const sessaoExpirada = sessaoAnteriorEm !== null && agora - sessaoAnteriorEm > SESSAO_TTL_MS;
+
+  if (sessaoExpirada) {
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+    } catch {
+      // best-effort, mesma filosofia do aviso ao Jose (§16-A)
+    }
+
+    // Achado da auditoria de concorrencia (2026-08-23): claim atomico
+    // (CAS -- compare-and-swap) via expirarSessaoAtomicamente. So' a
+    // requisicao que "vencer" (WHERE bateu com o valor antigo lido)
+    // segue pra enviar o aviso fixo. A que perder ("ja_expirada_por_outra_requisicao")
+    // ja teve a mensagem do cliente registrada acima (nunca perdida),
+    // mas NAO envia nada -- outra requisicao concorrente ja enviou.
+    // sessao_atividade_em nunca e' null aqui (garantido por
+    // sessaoAnteriorEm !== null acima).
+    const claim = await expirarSessaoAtomicamente(
+      conversa.conversation_id,
+      conversa.sessao_atividade_em as string,
+    );
+
+    if (claim.outcome === "ja_expirada_por_outra_requisicao") {
+      return jsonResponse({
+        outcome: "sessao_expirada",
+        conversation_id: conversa.conversation_id,
+        envio: { enviado: false },
+        concorrencia: "ja_tratada_por_outra_requisicao",
+      });
+    }
+
+    const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_SESSAO_EXPIRADA);
+    if (envio.outcome === "success") {
+      try {
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_SESSAO_EXPIRADA, null);
+      } catch {
+        // best-effort
+      }
+    }
+
+    return jsonResponse({
+      outcome: "sessao_expirada",
+      conversation_id: conversa.conversation_id,
+      envio: { enviado: envio.outcome === "success" },
+    });
+  }
+
+  // Sessao valida (ou primeira mensagem desta conversa) -- renova a
+  // atividade agora, ANTES de seguir o resto do fluxo. Client-driven:
+  // a propria chegada da mensagem renova, independente do que
+  // acontecer depois no processamento (Gemini indisponivel,
+  // transferencia, etc.) -- "cada nova mensagem do cliente dentro da
+  // janela mantem/renova a sessao" (decisao do usuario, sem excecao).
+  await atualizarSessao(conversa.conversation_id, {
+    sessaoAtividadeEm: new Date().toISOString(),
+  }).catch(() => {});
+
   // estado === 'normal': encadeia /match, /status, contexto minimo,
   // Gemini (Etapa 5), validador (Etapa 6, segunda fatia), se
   // reprovado ou tipo==="transferir" marca aguardando_humano (Etapa
@@ -283,11 +419,23 @@ Deno.serve(async (req: Request) => {
       ? `[CONHECIMENTO INSTITUCIONAL - ${conhecimentoResult.titulo}]\n${conhecimentoResult.conteudo}`
       : null;
 
+  // Memoria de sessao (2026-08-23): resolve conversa.acesso_selecionado
+  // (public_id guardado) contra o conjunto FRESCO de statusResults
+  // desta chamada -- nunca confia no valor guardado sem reconferir. Se
+  // o public_id nao existir mais no conjunto atual (acesso sumiu/
+  // mudou), e' tratado como se nao houvesse selecao nenhuma -- sem
+  // erro, sem aviso ao cliente.
+  const acessoSelecionadoServidor = conversa.acesso_selecionado
+    ? (statusResults.find((s) => s.publicId === conversa.acesso_selecionado)?.cliente
+        ?.servidorNome ?? null)
+    : null;
+  const contextoConversa = montarContextoConversa(acessoSelecionadoServidor);
+
   // "Regra de ouro" (secao 7 do levantamento): contextoCompleto e' o
   // UNICO texto de contexto a partir daqui -- passado identico para
   // chamarGemini() e para validarResposta() mais abaixo, nunca
   // contextoCliente sozinho por engano.
-  const partesContexto = [contextoCliente, contextoConhecimento].filter(
+  const partesContexto = [contextoCliente, contextoConhecimento, contextoConversa].filter(
     (parte): parte is string => !!parte,
   );
   const contextoCompleto = partesContexto.length > 0 ? partesContexto.join("\n\n") : null;
@@ -317,7 +465,7 @@ Deno.serve(async (req: Request) => {
 
   if (geminiResult.outcome === "success") {
     const geminiData = geminiResult.data;
-    const validacao = validarResposta(geminiData, contextoCompleto);
+    const validacao = validarResposta(geminiData, contextoCompleto, acessoSelecionadoServidor);
     validacaoResultado = validacao.aprovado
       ? { aprovado: true }
       : { aprovado: false, motivo: validacao.motivo };
@@ -411,6 +559,13 @@ Deno.serve(async (req: Request) => {
       } else {
         const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
         envioResultado = { enviado: envio.outcome === "success" };
+        if (envioResultado.enviado) {
+          await gravarAcessoSelecionadoSeCitado(
+            conversa.conversation_id,
+            geminiData.texto,
+            statusResults,
+          );
+        }
       }
     } else if (deveTransferir && transferenciaResultado?.acionada) {
       const envio = await enviarMensagemWhatsApp(
@@ -466,12 +621,21 @@ Deno.serve(async (req: Request) => {
         } catch {
           // best-effort, mesma filosofia do aviso ao Jose (§16-A)
         }
+        await gravarAcessoSelecionadoSeCitado(
+          conversa.conversation_id,
+          geminiData.texto,
+          statusResults,
+        );
       }
 
       // Diagnostico/observabilidade (Etapa 1a, preservado sem mudanca)
       // -- resolve o acesso a partir dos dados estruturados ja em
       // memoria, nunca por parsing livre do texto.
-      const acessoResolvido = resolverAcessoRenovacao(geminiData.texto, statusResults);
+      const acessoResolvido = resolverAcessoRenovacao(
+        geminiData.texto,
+        statusResults,
+        acessoSelecionadoServidor,
+      );
       renovacaoDiagnostico = {
         tipo: "propor_renovacao",
         acessoResolvido: acessoResolvido

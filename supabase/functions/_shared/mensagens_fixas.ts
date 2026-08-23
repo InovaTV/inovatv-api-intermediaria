@@ -24,3 +24,11 @@ export const IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA = "pt_BR";
 // — Sempre pensando em você! 📺"
 export const NOME_TEMPLATE_PAGAMENTO_CONFIRMADO = "pagamento_confirmado";
 export const IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO = "pt_BR";
+
+// Memoria de sessao (Camada 3, 2026-08-23) -- mensagem fixa, nunca
+// gerada pelo Gemini, enviada quando o cliente volta depois de mais
+// de 1h de inatividade e a sessao anterior e' encerrada/reiniciada.
+// Texto aprovado pelo usuario como referencia de UX, reproduzido aqui
+// sem alteracao.
+export const MENSAGEM_SESSAO_EXPIRADA =
+  "Vi que você ficou um tempo ausente. Como nossa sessão ficou inativa por mais de 1 hora, o contexto anterior foi encerrado para começarmos novamente com segurança. Pode me dizer como posso ajudá-lo?";

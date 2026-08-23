@@ -15,6 +15,15 @@ export interface ConversaEstado {
   estado: EstadoConversa;
   episodio_atual_id: string | null;
   atualizado_em: string;
+  // Memoria de sessao (Camada 3, 2026-08-23) -- ponteiro de contexto
+  // conversacional de curto prazo, NUNCA fonte de fato (sempre
+  // reconferido contra /match+/status frescos antes de valer pra
+  // qualquer coisa). acesso_selecionado guarda so o public_id do
+  // Rocket. sessao_atividade_em e' o timestamp UNICO de atividade da
+  // sessao inteira -- renovado a cada mensagem real do cliente,
+  // expira apos 1h de inatividade (checagem em leitura, sem cron).
+  acesso_selecionado: string | null;
+  sessao_atividade_em: string | null;
   // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
   // Mantido por trigger (mensagens_conversa), nunca escrito por
   // codigo TypeScript -- ver atualizar_conversa_ao_inserir_mensagem.

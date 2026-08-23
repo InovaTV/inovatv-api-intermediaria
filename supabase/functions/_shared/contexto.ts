@@ -56,3 +56,27 @@ export function montarContextoCliente(
 
   return ["[DADOS CONECTADOS - CLIENTE]", `Telefone: ${telefone}`, ...linhas].join("\n");
 }
+
+// Memoria de sessao (Camada 3, 2026-08-23) -- bloco SEPARADO de
+// montarContextoCliente, nunca misturado com dados oficiais. Recebe
+// so o NOME DO SERVIDOR ja resolvido (nunca o public_id -- o
+// Validador nao conhece, e nao precisa conhecer, o public_id, mesmo
+// principio ja documentado acima pra montarContextoCliente) e ja
+// reconferido pelo chamador contra o conjunto FRESCO de statusResults
+// da chamada atual. Omitido inteiramente quando null -- nunca um
+// bloco vazio/placeholder. A instrucao de uso vive dentro do proprio
+// bloco (reforco deliberado, alem de qualquer regra geral do
+// SYSTEM_PROMPT): serve so pra resolver referencia indireta ("esse
+// acesso"/"ele"/"esse plano"), nunca e' fato -- os dados reais
+// continuam vindo exclusivamente de [DADOS CONECTADOS - CLIENTE].
+export function montarContextoConversa(
+  servidorMencionadoAnteriormente: string | null,
+): string | null {
+  if (!servidorMencionadoAnteriormente) return null;
+
+  return [
+    "[CONTEXTO DA CONVERSA]",
+    `Nesta conversa, o cliente mencionou anteriormente o acesso: Servidor ${servidorMencionadoAnteriormente}.`,
+    'Use esta informação apenas para entender a quem "esse acesso"/"ele"/"esse plano" se refere, se o cliente usar uma referência indireta. NUNCA trate isto como um fato atual — os dados reais e atualizados deste acesso já estão no bloco [DADOS CONECTADOS - CLIENTE] acima.',
+  ].join("\n");
+}
