@@ -31,6 +31,18 @@ export interface StatusCliente {
   planoNome: string | null;
   servidorNome: string | null;
   telas: number | null;
+  // Valor real do plano (Rocket: cliente.valor) -- extensao 2026-08-23,
+  // fluxo de renovacao (Lacuna 7, docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md,
+  // Etapa 3). NAO e' campo sensivel (diferente de senha/device_key) --
+  // so' nunca tinha sido incluido na allowlist ate agora, por falta de
+  // uso. Tipo aberto (string | number) porque o formato exato vindo do
+  // Rocket varia (visto como numero em leituras diretas, como texto em
+  // exportacoes) -- normalizado so' no ponto de uso (mensagens_fixas.ts,
+  // formatarValorBRL). Nunca exposto a montarContextoCliente/Gemini --
+  // so' o Orquestrador le este campo diretamente do StatusResult, pra
+  // construir uma mensagem deterministica (Gemini nunca fala de valor,
+  // regra ja existente no SYSTEM_PROMPT congelado).
+  valor: string | number | null;
 }
 
 export interface StatusResult {

@@ -131,6 +131,8 @@ import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   MENSAGEM_SESSAO_EXPIRADA,
+  formatarValorBRL,
+  montarMensagemOrientacaoPagamentoRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
@@ -523,23 +525,48 @@ Deno.serve(async (req: Request) => {
       ? geminiData
       : { outcome: "bloqueado" };
 
-    // Etapa 6, terceira fatia: reprovado, OU aprovado mas o Gemini
-    // decidiu transferir -- marca aguardando_humano de verdade e
-    // registra as duas mensagens (Componente 1 §16, Componente 5
-    // §12). Aprovado + tipo==="responder" nunca entra aqui.
-    const deveTransferir = !validacao.aprovado || geminiData.tipo === "transferir";
     // Etapa 1 (propor_renovacao): so' entra aqui quando o Validador
-    // APROVOU e o tipo e' propor_renovacao -- reprovado ja cai em
-    // deveTransferir acima, sem nenhuma mudanca. Mutuamente exclusivo
-    // com deveTransferir (validacao.aprovado nao pode ser true e false
-    // ao mesmo tempo).
+    // APROVOU e o tipo e' propor_renovacao -- reprovado cai direto em
+    // deveTransferir abaixo, sem nenhuma mudanca.
     const propostaRenovacao =
       validacao.aprovado && geminiData.tipo === "propor_renovacao";
 
+    // Fechamento do "buraco sem saida" (2026-08-23, achado de teste
+    // real): resolve o acesso e o valor real JA' AQUI, antes de decidir
+    // o que enviar -- nao mais so' como diagnostico depois do envio.
+    // Mesma funcao/mesma logica da Etapa 1a (resolverAcessoRenovacao),
+    // sem nenhuma mudanca nela. valorFormatado vem exclusivamente do
+    // dado real do Rocket (/status, campo valor) -- NUNCA inventado
+    // pelo Gemini (que nunca ve este campo, SYSTEM_PROMPT congelado
+    // continua proibindo isso). Ausencia de acesso resolvido OU de
+    // valor cadastrado -> trata como precisando de humano, nunca envia
+    // uma orientacao de pagamento incompleta/inventada.
+    const acessoResolvidoRenovacao = propostaRenovacao
+      ? resolverAcessoRenovacao(geminiData.texto, statusResults, acessoSelecionadoServidor)
+      : null;
+    const valorFormatadoRenovacao = acessoResolvidoRenovacao
+      ? formatarValorBRL(acessoResolvidoRenovacao.cliente?.valor)
+      : null;
+    const propostaRenovacaoComDadosCompletos =
+      propostaRenovacao && !!acessoResolvidoRenovacao && !!valorFormatadoRenovacao;
+    const propostaRenovacaoSemDadosCompletos = propostaRenovacao && !propostaRenovacaoComDadosCompletos;
+
+    // Etapa 6, terceira fatia: reprovado, Gemini decidiu transferir, OU
+    // propor_renovacao aprovado mas sem acesso resolvido/valor cadastrado
+    // (extensao 2026-08-23) -- marca aguardando_humano de verdade e
+    // registra as duas mensagens (Componente 1 §16, Componente 5 §12).
+    // Aprovado + tipo==="responder" nunca entra aqui.
+    const deveTransferir =
+      !validacao.aprovado || geminiData.tipo === "transferir" || propostaRenovacaoSemDadosCompletos;
+
     if (deveTransferir) {
-      const motivoTransferencia = validacao.aprovado
-        ? "gemini:transferir"
-        : validacao.motivo;
+      const motivoTransferencia = !validacao.aprovado
+        ? validacao.motivo
+        : geminiData.tipo === "transferir"
+          ? "gemini:transferir"
+          : acessoResolvidoRenovacao
+            ? "renovacao:valor_nao_cadastrado"
+            : "renovacao:acesso_nao_resolvido_apos_aprovacao";
       try {
         const resultado = await acionarTransferenciaHumana(
           conversa.conversation_id,
@@ -558,7 +585,7 @@ Deno.serve(async (req: Request) => {
       // episodio_id certo quando aciona de verdade (Componente 5 §12)
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
-    } else if (propostaRenovacao) {
+    } else if (propostaRenovacaoComDadosCompletos) {
       // Etapa 1b (ajustado 2026-08-23, revisao do usuario sobre o
       // Caso (h)): grava SO' a mensagem do cliente aqui -- ela chegou
       // de verdade, independente do que acontecer com o envio. A
@@ -647,44 +674,64 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
-    } else if (propostaRenovacao) {
-      // Etapa 1b (2026-08-23, LEVANTAMENTO_ETAPA1.md secao 9, Opcao 1
-      // aprovada): envia o proprio texto do Gemini (ja validado pelo
-      // Validador), com a MESMA re-checagem de concorrencia (Componente
-      // 1 §15-A) ja usada para tipo==="responder" -- se um operador
-      // assumiu manualmente enquanto este fluxo estava em andamento, NAO
-      // envia por cima do humano (a mensagem ja foi registrada como
-      // contexto no bloco acima, nunca descartada de verdade).
-      // Isolamento estrito, sem excecao (lista negativa aprovada): nunca
-      // cria cobranca PagBank, nunca gera token, nunca chama Sigma/
-      // Rocket para renovar, nunca altera vencimento, nunca cria estado
-      // de pagamento, nunca envia a mensagem intermediaria da Etapa 4,
-      // nunca antecipa decisao da Etapa 2 -- so' esta confirmacao.
+    } else if (propostaRenovacaoComDadosCompletos) {
+      // Fechamento do "buraco sem saida" (2026-08-23, achado de teste
+      // real): substitui o texto do Gemini (que so' confirma intencao+
+      // acesso, por desenho do SYSTEM_PROMPT -- "o valor real sera'
+      // obtido posteriormente pela infraestrutura, nunca por voce") por
+      // uma mensagem DETERMINISTICA (montarMensagemOrientacaoPagamentoRenovacao,
+      // _shared/mensagens_fixas.ts), construida com o acesso e o valor
+      // REAIS ja' resolvidos acima -- nunca inventados pelo Gemini, que
+      // nunca ve' o campo valor. Mesma re-checagem de concorrencia
+      // (Componente 1 §15-A) ja usada para tipo==="responder" -- se um
+      // operador assumiu manualmente enquanto este fluxo estava em
+      // andamento, NAO envia por cima do humano (a mensagem do cliente
+      // ja foi registrada como contexto no bloco acima, nunca descartada
+      // de verdade).
+      // Isolamento estrito preservado (Plano Mestre, Etapa 1b -- lista
+      // negativa aprovada): nunca cria cobranca PagBank, nunca gera
+      // token, nunca chama Sigma/Rocket para renovar, nunca altera
+      // vencimento, nunca cria estado de pagamento, nunca informa chave/
+      // QR Pix especifico, nunca antecipa decisao da Etapa 2/3 -- so'
+      // orienta o cliente a pagar via Pix e mandar o comprovante NESTA
+      // conversa (conferencia e' etapa futura separada, webhook de
+      // midia, ainda nao implementado).
+      const textoOrientacaoPagamento = montarMensagemOrientacaoPagamentoRenovacao(
+        acessoResolvidoRenovacao.cliente?.nome ?? "seu acesso",
+        acessoResolvidoRenovacao.cliente?.servidorNome ?? "não informado",
+        acessoResolvidoRenovacao.cliente?.planoNome ?? "não informado",
+        valorFormatadoRenovacao,
+      );
+
       const conversaAtual = await buscarOuCriarConversa(telefone);
       if (conversaAtual.estado === "aguardando_humano") {
         envioResultado = { enviado: false };
       } else {
-        const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
+        const envio = await enviarMensagemWhatsApp(telefone, textoOrientacaoPagamento);
         envioResultado = { enviado: envio.outcome === "success" };
       }
 
       // origem="ia" significa EXCLUSIVAMENTE mensagem efetivamente
       // enviada ao cliente (regra aprovada pelo usuario, 2026-08-23,
-      // apos revisao do Caso (h)) -- nunca grava se a re-checagem
-      // detectou humano (envioResultado.enviado === false acima) nem
-      // se o envio falhou (envio.outcome !== "success"). Best-effort:
-      // falha ao logar nunca desfaz o envio ja concluido.
+      // apos revisao do Caso (h)) -- grava o texto REALMENTE enviado
+      // (textoOrientacaoPagamento), nao mais o texto interno do Gemini
+      // (geminiData.texto), que deixou de ser o que o cliente recebe.
+      // Nunca grava se a re-checagem detectou humano (envioResultado.enviado
+      // === false acima) nem se o envio falhou. Best-effort: falha ao
+      // logar nunca desfaz o envio ja concluido.
       if (envioResultado.enviado) {
         try {
-          await inserirMensagem(conversa.conversation_id, "ia", geminiData.texto, null);
+          await inserirMensagem(conversa.conversation_id, "ia", textoOrientacaoPagamento, null);
         } catch {
           // best-effort, mesma filosofia do aviso ao Jose (§16-A)
         }
-        await gravarAcessoSelecionadoSeCitado(
-          conversa.conversation_id,
-          geminiData.texto,
-          statusResults,
-        );
+        // acesso_selecionado gravado diretamente do acesso ja' resolvido
+        // com certeza (acessoResolvidoRenovacao) -- mais preciso que
+        // reconferir por citacao de texto (gravarAcessoSelecionadoSeCitado),
+        // ja que aqui nao ha' ambiguidade nenhuma restante.
+        await atualizarSessao(conversa.conversation_id, {
+          acessoSelecionado: acessoResolvidoRenovacao.publicId,
+        }).catch(() => {});
         // Memoria de sessao (extensao 2026-08-23) -- mesma nota do
         // branch "responder" acima: le a mensagem do CLIENTE, nunca a
         // resposta do Gemini.
@@ -695,37 +742,30 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Diagnostico/observabilidade (Etapa 1a, preservado sem mudanca)
-      // -- resolve o acesso a partir dos dados estruturados ja em
-      // memoria, nunca por parsing livre do texto.
-      const acessoResolvido = resolverAcessoRenovacao(
-        geminiData.texto,
-        statusResults,
-        acessoSelecionadoServidor,
-      );
       renovacaoDiagnostico = {
         tipo: "propor_renovacao",
-        acessoResolvido: acessoResolvido
-          ? {
-              publicId: acessoResolvido.publicId,
-              planoNome: acessoResolvido.cliente?.planoNome ?? null,
-              servidorNome: acessoResolvido.cliente?.servidorNome ?? null,
-            }
-          : null,
+        acessoResolvido: {
+          publicId: acessoResolvidoRenovacao.publicId,
+          planoNome: acessoResolvidoRenovacao.cliente?.planoNome ?? null,
+          servidorNome: acessoResolvidoRenovacao.cliente?.servidorNome ?? null,
+        },
       };
       // Observabilidade minima (aprovada pelo usuario, 2026-08-23) --
       // a resposta HTTP do Orquestrador e' descartada silenciosamente
       // pelo Webhook em caso de sucesso (webhook/index.ts so' loga em
       // falha), entao nao havia nenhum jeito de confirmar o
       // diagnostico de uma execucao real depois do fato. So' registra
-      // -- nao muda nenhum comportamento do fluxo.
+      // -- nao muda nenhum comportamento do fluxo. Nunca loga o valor
+      // real (so' se foi resolvido ou nao), mesma disciplina de
+      // minimizacao ja usada no resto do arquivo.
       console.log(
         "[orchestrator] propor_renovacao diagnostico",
         JSON.stringify({
           tipo: geminiData.tipo,
           validacaoAprovado: validacao.aprovado,
-          servidorResolvido: acessoResolvido?.cliente?.servidorNome ?? null,
-          publicId: acessoResolvido?.publicId ?? null,
+          servidorResolvido: acessoResolvidoRenovacao.cliente?.servidorNome ?? null,
+          publicId: acessoResolvidoRenovacao.publicId,
+          valorResolvido: true,
         }),
       );
     }

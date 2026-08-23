@@ -28,6 +28,12 @@ function normalizeCliente(cliente: Record<string, unknown>) {
     planoNome: plano?.nome ?? null,
     servidorNome: servidor?.nome ?? null,
     telas: cliente.telas ?? null,
+    // valor (2026-08-23, fluxo de renovacao, Lacuna 7): nao e' campo
+    // sensivel (diferente de senha/device_key_or_OTP_code, nunca
+    // incluidos aqui) -- so' nunca tinha sido adicionado por falta de
+    // consumidor real ate agora. export-clientes/index.ts ja usa
+    // exatamente este mesmo campo (cliente.valor) ha' mais tempo.
+    valor: cliente.valor ?? null,
   };
 }
 
