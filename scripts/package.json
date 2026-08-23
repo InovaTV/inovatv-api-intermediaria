@@ -2,8 +2,8 @@
   "name": "inovatv-api-intermediaria-scripts",
   "private": true,
   "type": "module",
-  "description": "Scripts locais de suporte a automacao (Etapa 2: geracao do CLIENTES_INOVATV.xlsx). Nao faz parte das Edge Functions implantadas.",
+  "description": "Scripts locais da frente Renovacao Automatica: captura/renovacao/leitura de sessao do Rocket via Playwright (login, Turnstile, PATCH controlado). Nao faz parte das Edge Functions implantadas. Ferramentas da arquitetura Meta Business Agent (abandonada) vivem isoladas em scripts/meta_business_agent/, com seu proprio package.json -- ver aviso em CLAUDE.md.",
   "dependencies": {
-    "exceljs": "^4.4.0"
+    "playwright": "^1.62.1"
   }
 }

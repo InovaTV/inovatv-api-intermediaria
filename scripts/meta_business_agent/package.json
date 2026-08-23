@@ -1,0 +1,9 @@
+{
+  "name": "inovatv-api-intermediaria-scripts-meta-business-agent",
+  "private": true,
+  "type": "module",
+  "description": "Ferramentas legadas da arquitetura Meta Business Agent (Plano B), abandonada -- geracao/verificacao do CLIENTES_INOVATV.xlsx e automacao Google Drive (OAuth, Picker, substituicao/leitura de arquivo, sincronizacao da planilha real). Migradas de inovatv_meta_business_agent em 2026-08-23. Nao fazem parte da implementacao atual da IA da InovaTV nem das Edge Functions implantadas.",
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}

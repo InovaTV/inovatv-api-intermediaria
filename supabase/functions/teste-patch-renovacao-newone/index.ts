@@ -1,6 +1,8 @@
 // TEMPORARIA E DESCARTAVEL -- renovacao real, autorizada explicitamente
-// pelo usuario em 2026-08-21 (ver CLAUDE.md do inovatv_meta_business_agent,
-// frente "Renovacao automatica via Meta Business Agent"). Segunda etapa:
+// pelo usuario em 2026-08-21 (ver
+// docs/renovacao_automatica/SESSAO_ROCKET_MONITORAMENTO.md deste
+// repositorio -- migrado de inovatv_meta_business_agent em 2026-08-23,
+// frente "Renovacao Automatica"). Segunda etapa:
 // depois de confirmar que o PATCH funciona (teste anterior, so minuto),
 // agora aplica uma renovacao de verdade -- soma o periodo real do plano
 // "Mensal" (lido do Rocket via /planos/, nao presumido) ao vencimento

@@ -1,3 +1,12 @@
+// REMOVIDA DO DEPLOY em 2026-08-23 (supabase functions delete) --
+// unico consumidor real era gerar-clientes-xlsx.mjs, script da
+// arquitetura Meta Business Agent abandonada, isolado em
+// scripts/meta_business_agent/. Nenhum outro consumidor foi
+// encontrado (Orquestrador, Painel de Atendimento, Renovacao
+// Automatica -- confirmado por auditoria antes da remocao). Codigo
+// preservado aqui so como historico -- nao reimplantar sem novo
+// consumidor real e decisao explicita.
+//
 // Fase 5 -- exportacao em massa sanitizada para a automacao
 // Rocket -> Google Drive -> Meta AI (ver ARQUITETURA_IDENTIDADE_SINCRONIZACAO.md,
 // inovatv_central, e o registro da decisao na conversa da frente WhatsApp AI).

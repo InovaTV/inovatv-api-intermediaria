@@ -1,6 +1,11 @@
--- Monitoramento de sessao do Rocket (frente "Plano B", ver CLAUDE.md
--- do inovatv_meta_business_agent). Duas partes deliberadamente
--- separadas:
+-- Monitoramento de sessao do Rocket (frente "Renovacao Automatica",
+-- ver docs/renovacao_automatica/SESSAO_ROCKET_MONITORAMENTO.md deste
+-- repositorio -- migrado em 2026-08-23 de inovatv_meta_business_agent,
+-- onde a referencia original apontava; aquele repositorio nunca teve
+-- nenhuma Edge Function/projeto Supabase proprio, e o rotulo "Plano B"
+-- era uma classificacao incorreta herdada de quando as duas frentes
+-- conviviam no mesmo CLAUDE.md, sem relacao real com o Meta Business
+-- Agent). Duas partes deliberadamente separadas:
 --
 -- 1. rocket_session_estado -- so metadado operacional, NUNCA
 --    sessionid/csrftoken em texto puro (regra explicita do usuario).

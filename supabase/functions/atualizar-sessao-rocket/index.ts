@@ -1,7 +1,9 @@
 // Atualiza a sessao do Rocket (sessionid+csrftoken) apos um login
 // manual novo. Unico ponto de escrita do Vault -- chamado por um
-// unico comando local (inovatv_meta_business_agent/scripts), nunca
-// pela Painel de Atendimento nem por nenhum outro consumidor.
+// unico comando local (scripts/atualizar-sessao-remota.mjs, deste
+// mesmo repositorio -- migrado de inovatv_meta_business_agent em
+// 2026-08-23, ver docs/renovacao_automatica/SESSAO_ROCKET_MONITORAMENTO.md),
+// nunca pela Painel de Atendimento nem por nenhum outro consumidor.
 //
 // Fronteiras (regras explicitas do usuario, nao negociaveis nesta
 // implementacao):

@@ -5,9 +5,10 @@
 > alterado, nenhuma migration, nenhum deploy, o `SYSTEM_PROMPT`
 > **congelado** não foi tocado. Os trechos de código abaixo são
 > **pseudocódigo de proposta**, não implementação real. Segue o Plano
-> Mestre (`inovatv_meta_business_agent/documentos/PLANO_MESTRE_IMPLEMENTACAO.md`)
+> Mestre (`docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md`,
+> migrado de `inovatv_meta_business_agent` em 2026-08-23)
 > e as decisões já fechadas nas Lacunas 1-4
-> (`inovatv_meta_business_agent/documentos/levantamentos/2026-08-22_fluxo_renovacao_automatica_pagbank_rocket_cloudapi.md`,
+> (`docs/renovacao_automatica/levantamentos/2026-08-22_fluxo_renovacao_automatica_pagbank_rocket_cloudapi.md`,
 > seção 8) — nenhuma decisão arquitetural é reaberta aqui.
 >
 > **Revisão 2 (mesma sessão) — os 4 pontos abaixo foram revisados e

@@ -90,7 +90,15 @@ por `paginacao.total` da resposta do Rocket, nunca por
 { "outcome": "invalid_request", "candidates": [] }
 ```
 
-## `export-clientes` — exportação em massa sanitizada (2026-08-14, implementado e testado)
+## `export-clientes` — exportação em massa sanitizada (2026-08-14, implementado e testado; REMOVIDA DO DEPLOY em 2026-08-23)
+
+**Não está mais implantada.** Removida (`supabase functions delete`)
+por não ter mais nenhum consumidor ativo — o único era
+`gerar-clientes-xlsx.mjs`, script da arquitetura Meta Business Agent
+abandonada, hoje isolado em `scripts/meta_business_agent/`. Código
+preservado em `supabase/functions/export-clientes/index.ts` só como
+histórico; não reimplantar sem um consumidor real novo e decisão
+explícita.
 
 Uso interno da automação Rocket → Google Drive → Meta AI (contexto de
 negócio completo em `inovatv_central`, seção "Frente — IA do WhatsApp
@@ -159,7 +167,7 @@ supabase/
     fase3-mock/index.ts   # Fase 3, historico
     status/index.ts       # Fase 4, Cenario C
     match/index.ts         # Fase 4, Cenario B
-    export-clientes/index.ts  # Automacao WhatsApp AI, 2026-08-14
+    export-clientes/index.ts  # Automacao WhatsApp AI, 2026-08-14 -- REMOVIDA DO DEPLOY em 2026-08-23, codigo so como historico
 ```
 
 Projeto Supabase: novo, plano Free, separado do projeto do Painel
