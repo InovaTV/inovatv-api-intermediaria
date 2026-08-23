@@ -95,6 +95,17 @@
 // re-checagem detectar humano, nunca se o envio falhar.
 // Reprovado (Validador) continua caindo em deveTransferir, sem
 // nenhuma mudanca -- so' aprovado + tipo==="propor_renovacao" e' novo.
+//
+// Memoria de sessao -- extensao com intencao_atual (2026-08-23): achado
+// real de teste no WhatsApp, cliente com 2 acessos mandou "quero
+// renovar meu plano" (tipo=responder, pergunta qual acesso) seguido de
+// "2" -- a intencao ja estabelecida na primeira mensagem se perdia,
+// porque so' acesso_selecionado existia na sessao ate entao. Mesma
+// Camada 3, mesmo TTL/invalidacao ja existentes (sessao_atividade_em,
+// Passo 0-B, e as 3 RPCs de atendimento humano) -- nunca decide
+// sozinha o "tipo" da resposta (isso continua sendo julgamento do
+// Gemini, dentro do SYSTEM_PROMPT ja congelado), so' entra como pista
+// em [CONTEXTO DA CONVERSA] (montarContextoConversa).
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
@@ -204,6 +215,35 @@ async function gravarAcessoSelecionadoSeCitado(
   await atualizarSessao(conversationId, { acessoSelecionado: citados[0].publicId }).catch(
     () => {},
   );
+}
+
+// Memoria de sessao (extensao 2026-08-23) -- grava intencao_atual
+// SO' quando a mensagem ATUAL do cliente contem "renovar" (ou
+// variacao morfologica direta) como palavra inteira. Sinal
+// deliberadamente conservador: nao tenta capturar intencao indireta
+// (ex.: "meu plano venceu, quero continuar usando", "quanto fica pra
+// renovar?") -- esses casos ficam fora desta implementacao, sem
+// mudar o comportamento ja existente (continuam dependendo de uma
+// mensagem explicita seguinte, ou resolvendo em uma unica mensagem
+// quando ha' so' 1 acesso). Escopo restrito a mais de 1 acesso -- com
+// 1 so' acesso, propor_renovacao ja resolve numa unica mensagem
+// (Caso 1), sem precisar de sessao. Mesma disciplina de
+// acesso_selecionado: so' chamada pelo chamador apos confirmar
+// envioResultado.enviado === true (nunca por antecipacao). Nao
+// participa de nenhuma checagem do Validador (Componente 4 §5
+// preservado) -- so' influencia o que o Gemini VE no proximo turno,
+// via [CONTEXTO DA CONVERSA] (montarContextoConversa).
+const REGEX_INTENCAO_RENOVACAO = /\brenova(r|ç[aã]o|cao|ndo|d[ao])\b/i;
+
+async function gravarIntencaoRenovacaoSeDemonstrada(
+  conversationId: string,
+  textoClienteAtual: string,
+  statusResults: StatusResult[],
+): Promise<void> {
+  if (statusResults.length <= 1) return;
+  if (!REGEX_INTENCAO_RENOVACAO.test(textoClienteAtual)) return;
+
+  await atualizarSessao(conversationId, { intencaoAtual: "renovacao" }).catch(() => {});
 }
 
 Deno.serve(async (req: Request) => {
@@ -429,7 +469,17 @@ Deno.serve(async (req: Request) => {
     ? (statusResults.find((s) => s.publicId === conversa.acesso_selecionado)?.cliente
         ?.servidorNome ?? null)
     : null;
-  const contextoConversa = montarContextoConversa(acessoSelecionadoServidor);
+  // Memoria de sessao (extensao 2026-08-23): leitura direta, sem
+  // reconferencia adicional -- intencao_atual nao e' um ponteiro pra
+  // dado do Rocket (diferente de acesso_selecionado), so' um sinal de
+  // continuidade conversacional, ja coberto pelo mesmo TTL/invalidacao
+  // que zera esta e as outras 2 colunas juntas (Passo 0-B, e as 3 RPCs
+  // de atendimento humano).
+  const intencaoRenovacaoEstabelecida = conversa.intencao_atual === "renovacao";
+  const contextoConversa = montarContextoConversa(
+    acessoSelecionadoServidor,
+    intencaoRenovacaoEstabelecida,
+  );
 
   // "Regra de ouro" (secao 7 do levantamento): contextoCompleto e' o
   // UNICO texto de contexto a partir daqui -- passado identico para
@@ -565,6 +615,15 @@ Deno.serve(async (req: Request) => {
             geminiData.texto,
             statusResults,
           );
+          // Memoria de sessao (extensao 2026-08-23): a mensagem que
+          // demonstra intencao e' a do CLIENTE (conteudo), nunca a
+          // resposta do Gemini -- e' a intencao dele que precisa ser
+          // preservada, nao o que a IA disse de volta.
+          await gravarIntencaoRenovacaoSeDemonstrada(
+            conversa.conversation_id,
+            conteudo,
+            statusResults,
+          );
         }
       }
     } else if (deveTransferir && transferenciaResultado?.acionada) {
@@ -624,6 +683,14 @@ Deno.serve(async (req: Request) => {
         await gravarAcessoSelecionadoSeCitado(
           conversa.conversation_id,
           geminiData.texto,
+          statusResults,
+        );
+        // Memoria de sessao (extensao 2026-08-23) -- mesma nota do
+        // branch "responder" acima: le a mensagem do CLIENTE, nunca a
+        // resposta do Gemini.
+        await gravarIntencaoRenovacaoSeDemonstrada(
+          conversa.conversation_id,
+          conteudo,
           statusResults,
         );
       }

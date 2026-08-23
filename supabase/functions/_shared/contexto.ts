@@ -69,14 +69,38 @@ export function montarContextoCliente(
 // SYSTEM_PROMPT): serve so pra resolver referencia indireta ("esse
 // acesso"/"ele"/"esse plano"), nunca e' fato -- os dados reais
 // continuam vindo exclusivamente de [DADOS CONECTADOS - CLIENTE].
+//
+// intencaoRenovacaoEstabelecida (2026-08-23, extensao da Camada 3):
+// mesma disciplina -- so' um sinal de continuidade conversacional,
+// nunca fato, nunca decide sozinho o "tipo" da resposta (isso
+// continua sendo julgamento do proprio Gemini, dentro do que o
+// SYSTEM_PROMPT ja permite). Existe pra cobrir exatamente o caso em
+// que a intencao de renovar foi manifestada numa mensagem anterior
+// (ex.: "quero renovar meu plano", com 2+ acessos, ainda sem saber
+// qual) e a mensagem atual so' resolve QUAL acesso (ex.: "2"), sem
+// repetir a intencao.
 export function montarContextoConversa(
   servidorMencionadoAnteriormente: string | null,
+  intencaoRenovacaoEstabelecida: boolean,
 ): string | null {
-  if (!servidorMencionadoAnteriormente) return null;
+  if (!servidorMencionadoAnteriormente && !intencaoRenovacaoEstabelecida) return null;
 
-  return [
-    "[CONTEXTO DA CONVERSA]",
-    `Nesta conversa, o cliente mencionou anteriormente o acesso: Servidor ${servidorMencionadoAnteriormente}.`,
-    'Use esta informação apenas para entender a quem "esse acesso"/"ele"/"esse plano" se refere, se o cliente usar uma referência indireta. NUNCA trate isto como um fato atual — os dados reais e atualizados deste acesso já estão no bloco [DADOS CONECTADOS - CLIENTE] acima.',
-  ].join("\n");
+  const linhas = ["[CONTEXTO DA CONVERSA]"];
+
+  if (intencaoRenovacaoEstabelecida) {
+    linhas.push(
+      "Nesta conversa, o cliente já demonstrou intenção de renovar um acesso, antes desta mensagem.",
+    );
+  }
+  if (servidorMencionadoAnteriormente) {
+    linhas.push(
+      `Nesta conversa, o cliente mencionou anteriormente o acesso: Servidor ${servidorMencionadoAnteriormente}.`,
+    );
+  }
+
+  linhas.push(
+    'Use estas informações apenas para entender a quem "esse acesso"/"ele"/"esse plano" se refere, ou para reconhecer que uma intenção já foi manifestada, se o cliente estiver dando continuidade ao mesmo assunto. NUNCA trate isto como um fato atual, nem como confirmação de valor, plano, vencimento ou cobrança — os dados reais e atualizados de qualquer acesso já estão no bloco [DADOS CONECTADOS - CLIENTE] acima, e qualquer etapa de pagamento é tratada em outro momento, nunca aqui. Se a mensagem atual não tiver relação com isto, ignore esta informação.',
+  );
+
+  return linhas.join("\n");
 }

@@ -24,6 +24,11 @@ export interface ConversaEstado {
   // expira apos 1h de inatividade (checagem em leitura, sem cron).
   acesso_selecionado: string | null;
   sessao_atividade_em: string | null;
+  // Memoria de sessao (extensao 2026-08-23) -- mesma disciplina de
+  // acesso_selecionado: nunca fonte de fato, so' contexto
+  // conversacional de curto prazo, sujeito ao mesmo TTL/invalidacao
+  // (sessao_atividade_em). Unico valor usado hoje: "renovacao".
+  intencao_atual: string | null;
   // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
   // Mantido por trigger (mensagens_conversa), nunca escrito por
   // codigo TypeScript -- ver atualizar_conversa_ao_inserir_mensagem.

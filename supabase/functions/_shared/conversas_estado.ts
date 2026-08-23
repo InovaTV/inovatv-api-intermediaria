@@ -292,8 +292,10 @@ export async function atualizarNomeSnapshot(
 // Memoria de sessao (Camada 3, 2026-08-23) -- update parcial, mesmo
 // padrao de atualizarNomeSnapshot (sem RPC, sem branching). Chamado
 // pelo Orquestrador pra renovar sessao_atividade_em a cada mensagem
-// valida do cliente, e pra gravar acesso_selecionado quando a resposta
-// citar exatamente um servidor. So' atualiza os campos explicitamente
+// valida do cliente, pra gravar acesso_selecionado quando a resposta
+// citar exatamente um servidor, e pra gravar intencao_atual quando a
+// mensagem do cliente demonstrar intencao genuina de renovacao
+// (extensao 2026-08-23). So' atualiza os campos explicitamente
 // presentes em `patch` -- nunca sobrescreve o que nao foi passado.
 // NAO usar esta funcao pra tratar a expiracao de sessao (2+ requisicoes
 // concorrentes podem enviar o aviso fixo duas vezes) -- ver
@@ -301,7 +303,11 @@ export async function atualizarNomeSnapshot(
 // esse caso com uma condicao atomica.
 export async function atualizarSessao(
   conversationId: string,
-  patch: { acessoSelecionado?: string | null; sessaoAtividadeEm?: string },
+  patch: {
+    acessoSelecionado?: string | null;
+    sessaoAtividadeEm?: string;
+    intencaoAtual?: string | null;
+  },
 ): Promise<void> {
   const client = getServiceClient();
 
@@ -311,6 +317,9 @@ export async function atualizarSessao(
   }
   if ("sessaoAtividadeEm" in patch) {
     update.sessao_atividade_em = patch.sessaoAtividadeEm ?? null;
+  }
+  if ("intencaoAtual" in patch) {
+    update.intencao_atual = patch.intencaoAtual ?? null;
   }
 
   const { error } = await client
@@ -344,7 +353,11 @@ export async function expirarSessaoAtomicamente(
 
   const { data, error } = await client
     .from("conversas_estado")
-    .update({ acesso_selecionado: null, sessao_atividade_em: new Date().toISOString() })
+    .update({
+      acesso_selecionado: null,
+      intencao_atual: null,
+      sessao_atividade_em: new Date().toISOString(),
+    })
     .eq("conversation_id", conversationId)
     .eq("sessao_atividade_em", sessaoAtividadeEmAntiga)
     .select("conversation_id");
