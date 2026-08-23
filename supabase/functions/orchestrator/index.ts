@@ -440,6 +440,21 @@ Deno.serve(async (req: Request) => {
             }
           : null,
       };
+      // Observabilidade minima (aprovada pelo usuario, 2026-08-23) --
+      // a resposta HTTP do Orquestrador e' descartada silenciosamente
+      // pelo Webhook em caso de sucesso (webhook/index.ts so' loga em
+      // falha), entao nao havia nenhum jeito de confirmar o
+      // diagnostico de uma execucao real depois do fato. So' registra
+      // -- nao muda nenhum comportamento do fluxo.
+      console.log(
+        "[orchestrator] propor_renovacao diagnostico",
+        JSON.stringify({
+          tipo: geminiData.tipo,
+          validacaoAprovado: validacao.aprovado,
+          servidorResolvido: acessoResolvido?.cliente?.servidorNome ?? null,
+          publicId: acessoResolvido?.publicId ?? null,
+        }),
+      );
     }
   } else {
     // Correcao do gap pre-existente (Bug 2, achado na bateria de testes
