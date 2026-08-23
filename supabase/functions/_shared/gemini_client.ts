@@ -187,6 +187,22 @@ export interface MidiaAnexada {
   dadosBase64: string;
 }
 
+// Observabilidade minima (aprovada pelo usuario, 2026-08-23) -- so'
+// registra INFORMACAO TECNICA da falha (status HTTP, motivo do
+// bloqueio/finishReason, nome/mensagem de excecao) para descobrir POR
+// QUE uma chamada real caiu em "unavailable" -- achado real: 2
+// chamadas reais seguidas falharam sem nenhuma pista disponivel em
+// lugar nenhum (nem console.log aqui, nem no Webhook, nem na
+// plataforma alem de status/timing). NUNCA loga apiKey/modelId (so' a
+// PRESENCA deles, como booleano) nem o conteudo de mensagemCliente/
+// contextoCliente/texto do Gemini. Nao muda timeout, retry, modelo,
+// prompt, nem nenhum tratamento de sucesso/indisponibilidade -- so'
+// adiciona uma linha de log logo antes de cada `return { outcome:
+// "unavailable" }` ja existente.
+function logIndisponivel(motivo: string, detalhe: Record<string, unknown>): void {
+  console.log("[gemini_client] indisponivel:", motivo, JSON.stringify(detalhe));
+}
+
 async function chamarUmaVez(
   mensagemCliente: string,
   contextoCliente: string | null,
@@ -194,7 +210,13 @@ async function chamarUmaVez(
 ): Promise<GeminiResult> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   const modelId = Deno.env.get("GEMINI_MODEL_ID");
-  if (!apiKey || !modelId) return { outcome: "unavailable" };
+  if (!apiKey || !modelId) {
+    logIndisponivel("config ausente", {
+      apiKeyPresente: !!apiKey,
+      modelIdPresente: !!modelId,
+    });
+    return { outcome: "unavailable" };
+  }
 
   const partesUsuario = [contextoCliente, mensagemCliente]
     .filter((p): p is string => !!p)
@@ -227,20 +249,36 @@ async function chamarUmaVez(
       },
     );
 
-    if (!resp.ok) return { outcome: "unavailable" };
+    if (!resp.ok) {
+      const corpoErro = await resp.text().catch(() => "");
+      logIndisponivel("HTTP nao-ok", {
+        status: resp.status,
+        statusText: resp.statusText,
+        corpo: corpoErro.slice(0, 500), // truncado -- so' precisa do motivo, nunca dado sensivel do prompt
+      });
+      return { outcome: "unavailable" };
+    }
 
     const data = await resp.json();
 
-    if (data?.promptFeedback?.blockReason) return { outcome: "unavailable" };
+    if (data?.promptFeedback?.blockReason) {
+      logIndisponivel("bloqueado pelo Gemini", { blockReason: data.promptFeedback.blockReason });
+      return { outcome: "unavailable" };
+    }
 
     const candidato = data?.candidates?.[0];
     const finishReason = candidato?.finishReason;
     if (finishReason && finishReason !== "STOP") {
-      return { outcome: "unavailable" }; // SAFETY, MAX_TOKENS, RECITATION etc.
+      // SAFETY, MAX_TOKENS, RECITATION etc.
+      logIndisponivel("finishReason != STOP", { finishReason });
+      return { outcome: "unavailable" };
     }
 
     const textoBruto = candidato?.content?.parts?.[0]?.text;
-    if (typeof textoBruto !== "string") return { outcome: "unavailable" };
+    if (typeof textoBruto !== "string") {
+      logIndisponivel("texto ausente na resposta", { temCandidato: !!candidato });
+      return { outcome: "unavailable" };
+    }
 
     const parsed = JSON.parse(textoBruto);
     if (
@@ -249,11 +287,19 @@ async function chamarUmaVez(
         parsed?.tipo !== "propor_renovacao") ||
       typeof parsed?.texto !== "string"
     ) {
+      logIndisponivel("schema invalido no JSON parseado", { tipoRecebido: parsed?.tipo });
       return { outcome: "unavailable" };
     }
 
     return { outcome: "success", data: { tipo: parsed.tipo, texto: parsed.texto } };
-  } catch {
+  } catch (erro) {
+    const nome = erro instanceof Error ? erro.name : typeof erro;
+    const mensagem = erro instanceof Error ? erro.message : String(erro);
+    logIndisponivel("excecao", {
+      nome,
+      mensagem,
+      pareceTimeout: nome === "TimeoutError" || nome === "AbortError",
+    });
     return { outcome: "unavailable" };
   }
 }
