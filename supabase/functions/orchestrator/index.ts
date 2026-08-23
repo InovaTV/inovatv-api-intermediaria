@@ -70,17 +70,29 @@
 // Entrada de teste direto sem nomeContato continua funcionando, so'
 // nao atualiza nome_snapshot nessa chamada.
 //
-// Etapa 1 do fluxo de renovacao automatica (tipo === "propor_renovacao",
-// docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 6 -- decisao
-// fechada pelo usuario: opcao (A), SO' DIAGNOSTICO). Aprovado pelo
-// Validador -> resolve o acesso/public_id a partir dos dados
-// ESTRUTURADOS ja em memoria (statusResults), nunca por parsing livre
-// do texto atras de um UUID (Lacuna 3) -- expoe o resultado so' na
-// resposta JSON de retorno (campo "renovacao"), no mesmo padrao ja
-// usado para match/gemini/conhecimento. NESTA ETAPA: nunca cria
-// cobranca PagBank, nunca gera token, nunca renova Sigma, nunca envia
-// mensagem de cobranca, nunca envia NADA ao WhatsApp alem do que ja
-// aconteceria hoje -- e' isso que "so' diagnostico" significa.
+// Etapa 1 do fluxo de renovacao automatica (tipo === "propor_renovacao").
+// Dividida em 1a e 1b (docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md,
+// secoes 6 e 9 -- achado real de 2026-08-23: "comprovado tecnicamente"
+// nao e' o mesmo que "concluido").
+//
+// Etapa 1a (comprovada, diagnostico): Aprovado pelo Validador -> resolve
+// o acesso/public_id a partir dos dados ESTRUTURADOS ja em memoria
+// (statusResults), nunca por parsing livre do texto atras de um UUID
+// (Lacuna 3) -- expoe o resultado na resposta JSON de retorno (campo
+// "renovacao"), mesmo padrao ja usado para match/gemini/conhecimento.
+//
+// Etapa 1b (secao 9, Opcao 1 aprovada 2026-08-23): o proprio texto do
+// Gemini (ja validado pelo Validador, mesmo caminho de
+// tipo === "responder") agora e' realmente enviado ao cliente, com a
+// mesma re-checagem de concorrencia (Componente 1 §15-A). Isolamento
+// estrito, sem excecao: NESTA ETAPA nunca cria cobranca PagBank, nunca
+// gera token, nunca chama Sigma/Rocket para renovar, nunca altera
+// vencimento, nunca cria estado de pagamento, nunca envia a mensagem
+// intermediaria da Etapa 4, nunca antecipa decisao da Etapa 2 -- so' a
+// confirmacao de reconhecimento. Regra de persistencia (ajustada
+// 2026-08-23, revisao do usuario): origem="ia" so' e' gravada quando o
+// envio efetivamente teve sucesso -- nunca por antecipacao, nunca se a
+// re-checagem detectar humano, nunca se o envio falhar.
 // Reprovado (Validador) continua caindo em deveTransferir, sem
 // nenhuma mudanca -- so' aprovado + tipo==="propor_renovacao" e' novo.
 
@@ -349,20 +361,18 @@ Deno.serve(async (req: Request) => {
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
     } else if (propostaRenovacao) {
-      // Etapa 1 (propor_renovacao), correcao pedida pelo usuario apos
-      // revisao do bloco: grava SO' a mensagem REAL do cliente (ela
-      // chegou de verdade, mesmo padrao "sempre, qualquer estado" ja
-      // usado no Passo 0/aguardando_humano e na RPC de transferencia
-      // acima) -- NUNCA o texto do Gemini como origem "ia", porque
-      // esse texto e' so' uma confirmacao de intencao em modo
-      // diagnostico, nunca efetivamente enviado ao cliente nesta
-      // etapa (opcao A). Gravar como "ia" seria um registro falso de
-      // resposta que o cliente nunca recebeu -- mantem a integridade
-      // do historico: o sistema sabe que o cliente falou aquilo, sem
-      // inventar uma resposta da IA que nunca existiu de verdade.
-      // episodio_id=null (fluxo so' de diagnostico, fora de qualquer
-      // episodio de atendimento humano). Best-effort: falha ao logar
-      // nunca derruba o diagnostico (mais abaixo).
+      // Etapa 1b (ajustado 2026-08-23, revisao do usuario sobre o
+      // Caso (h)): grava SO' a mensagem do cliente aqui -- ela chegou
+      // de verdade, independente do que acontecer com o envio. A
+      // mensagem "ia" NUNCA e' gravada neste ponto -- so' mais abaixo,
+      // condicionada ao envio real ter tido sucesso (bloco de envio).
+      // Regra: origem="ia" significa EXCLUSIVAMENTE mensagem
+      // efetivamente entregue ao cliente -- nunca gravar por
+      // antecipacao um texto que ainda pode nao ser enviado (por
+      // concorrencia com um humano) ou que pode falhar no envio.
+      // episodio_id=null (fluxo de propor_renovacao nunca pertence a
+      // um episodio de atendimento humano). Best-effort: falha ao
+      // logar nunca derruba o envio (mais abaixo).
       try {
         await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
       } catch {
@@ -424,11 +434,43 @@ Deno.serve(async (req: Request) => {
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
     } else if (propostaRenovacao) {
-      // Etapa 1 (propor_renovacao) -- SO' diagnostico (decisao (A),
-      // docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 6). Nunca
-      // chama enviarMensagemWhatsApp, nunca cria cobranca/token,
-      // nunca renova Sigma -- so' resolve o acesso a partir dos dados
-      // estruturados ja em memoria e devolve na resposta JSON.
+      // Etapa 1b (2026-08-23, LEVANTAMENTO_ETAPA1.md secao 9, Opcao 1
+      // aprovada): envia o proprio texto do Gemini (ja validado pelo
+      // Validador), com a MESMA re-checagem de concorrencia (Componente
+      // 1 §15-A) ja usada para tipo==="responder" -- se um operador
+      // assumiu manualmente enquanto este fluxo estava em andamento, NAO
+      // envia por cima do humano (a mensagem ja foi registrada como
+      // contexto no bloco acima, nunca descartada de verdade).
+      // Isolamento estrito, sem excecao (lista negativa aprovada): nunca
+      // cria cobranca PagBank, nunca gera token, nunca chama Sigma/
+      // Rocket para renovar, nunca altera vencimento, nunca cria estado
+      // de pagamento, nunca envia a mensagem intermediaria da Etapa 4,
+      // nunca antecipa decisao da Etapa 2 -- so' esta confirmacao.
+      const conversaAtual = await buscarOuCriarConversa(telefone);
+      if (conversaAtual.estado === "aguardando_humano") {
+        envioResultado = { enviado: false };
+      } else {
+        const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
+        envioResultado = { enviado: envio.outcome === "success" };
+      }
+
+      // origem="ia" significa EXCLUSIVAMENTE mensagem efetivamente
+      // enviada ao cliente (regra aprovada pelo usuario, 2026-08-23,
+      // apos revisao do Caso (h)) -- nunca grava se a re-checagem
+      // detectou humano (envioResultado.enviado === false acima) nem
+      // se o envio falhou (envio.outcome !== "success"). Best-effort:
+      // falha ao logar nunca desfaz o envio ja concluido.
+      if (envioResultado.enviado) {
+        try {
+          await inserirMensagem(conversa.conversation_id, "ia", geminiData.texto, null);
+        } catch {
+          // best-effort, mesma filosofia do aviso ao Jose (§16-A)
+        }
+      }
+
+      // Diagnostico/observabilidade (Etapa 1a, preservado sem mudanca)
+      // -- resolve o acesso a partir dos dados estruturados ja em
+      // memoria, nunca por parsing livre do texto.
       const acessoResolvido = resolverAcessoRenovacao(geminiData.texto, statusResults);
       renovacaoDiagnostico = {
         tipo: "propor_renovacao",
