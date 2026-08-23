@@ -69,6 +69,20 @@
 // mais de um acesso do Rocket. Ver bloco logo apos buscarOuCriarConversa.
 // Entrada de teste direto sem nomeContato continua funcionando, so'
 // nao atualiza nome_snapshot nessa chamada.
+//
+// Etapa 1 do fluxo de renovacao automatica (tipo === "propor_renovacao",
+// docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 6 -- decisao
+// fechada pelo usuario: opcao (A), SO' DIAGNOSTICO). Aprovado pelo
+// Validador -> resolve o acesso/public_id a partir dos dados
+// ESTRUTURADOS ja em memoria (statusResults), nunca por parsing livre
+// do texto atras de um UUID (Lacuna 3) -- expoe o resultado so' na
+// resposta JSON de retorno (campo "renovacao"), no mesmo padrao ja
+// usado para match/gemini/conhecimento. NESTA ETAPA: nunca cria
+// cobranca PagBank, nunca gera token, nunca renova Sigma, nunca envia
+// mensagem de cobranca, nunca envia NADA ao WhatsApp alem do que ja
+// aconteceria hoje -- e' isso que "so' diagnostico" significa.
+// Reprovado (Validador) continua caindo em deveTransferir, sem
+// nenhuma mudanca -- so' aprovado + tipo==="propor_renovacao" e' novo.
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
@@ -93,6 +107,39 @@ import {
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
+import { extrairRotulosAcesso } from "../_shared/rotulo_acesso.ts";
+
+// Etapa 1 (propor_renovacao) -- resolve qual StatusResult corresponde
+// ao acesso citado no texto do Gemini, usando os MESMOS dados
+// estruturados (statusResults) ja montados mais abaixo para o
+// contexto -- nunca reconsulta nada, nunca faz parsing livre atras de
+// um UUID (Lacuna 3). Chamada de forma INDEPENDENTE da checagem
+// equivalente que o Validador ja fez (validarPropostaRenovacao,
+// _shared/validador.ts) -- nunca reaproveita o resultado interno dele
+// (Componente 4 §5: Validador nunca decide dado de negocio).
+function resolverAcessoRenovacao(
+  texto: string,
+  statusResults: StatusResult[],
+): StatusResult | null {
+  if (statusResults.length === 1) return statusResults[0];
+
+  const rotulos = extrairRotulosAcesso(texto);
+  if (rotulos.planos.length === 0 && rotulos.servidores.length === 0) return null;
+
+  const correspondencias = statusResults.filter((s) => {
+    const planoLower = (s.cliente?.planoNome ?? "").toLowerCase();
+    const servidorLower = (s.cliente?.servidorNome ?? "").toLowerCase();
+    const planoBate =
+      planoLower !== "" &&
+      rotulos.planos.some((p) => planoLower.includes(p) || p.includes(planoLower));
+    const servidorBate =
+      servidorLower !== "" &&
+      rotulos.servidores.some((sv) => servidorLower.includes(sv) || sv.includes(servidorLower));
+    return planoBate || servidorBate;
+  });
+
+  return correspondencias.length === 1 ? correspondencias[0] : null;
+}
 
 Deno.serve(async (req: Request) => {
   // Componente 3, decisao arquitetural 2 (2026-08-17): unica fonte de
@@ -243,6 +290,21 @@ Deno.serve(async (req: Request) => {
   let transferenciaResultado: { acionada: boolean; motivo: string } | undefined;
   let envioResultado: { enviado: boolean } | undefined;
   let avisoJoseResultado: { enviado: boolean } | undefined;
+  // Etapa 1 (propor_renovacao) -- so' diagnostico, nunca enviado ao
+  // cliente. acessoResolvido null quando o Validador aprovou mas a
+  // resolucao por rotulo nao achou exatamente 1 correspondencia (nao
+  // deveria acontecer, ja que o Validador ja checou isso -- mas esta
+  // funcao nunca confia cegamente no resultado interno dele).
+  let renovacaoDiagnostico:
+    | {
+        tipo: "propor_renovacao";
+        acessoResolvido: {
+          publicId: string | null;
+          planoNome: string | null;
+          servidorNome: string | null;
+        } | null;
+      }
+    | undefined;
 
   if (geminiResult.outcome === "success") {
     const geminiData = geminiResult.data;
@@ -259,6 +321,13 @@ Deno.serve(async (req: Request) => {
     // registra as duas mensagens (Componente 1 §16, Componente 5
     // §12). Aprovado + tipo==="responder" nunca entra aqui.
     const deveTransferir = !validacao.aprovado || geminiData.tipo === "transferir";
+    // Etapa 1 (propor_renovacao): so' entra aqui quando o Validador
+    // APROVOU e o tipo e' propor_renovacao -- reprovado ja cai em
+    // deveTransferir acima, sem nenhuma mudanca. Mutuamente exclusivo
+    // com deveTransferir (validacao.aprovado nao pode ser true e false
+    // ao mesmo tempo).
+    const propostaRenovacao =
+      validacao.aprovado && geminiData.tipo === "propor_renovacao";
 
     if (deveTransferir) {
       const motivoTransferencia = validacao.aprovado
@@ -282,9 +351,30 @@ Deno.serve(async (req: Request) => {
       // episodio_id certo quando aciona de verdade (Componente 5 §12)
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
+    } else if (propostaRenovacao) {
+      // Etapa 1 (propor_renovacao), correcao pedida pelo usuario apos
+      // revisao do bloco: grava SO' a mensagem REAL do cliente (ela
+      // chegou de verdade, mesmo padrao "sempre, qualquer estado" ja
+      // usado no Passo 0/aguardando_humano e na RPC de transferencia
+      // acima) -- NUNCA o texto do Gemini como origem "ia", porque
+      // esse texto e' so' uma confirmacao de intencao em modo
+      // diagnostico, nunca efetivamente enviado ao cliente nesta
+      // etapa (opcao A). Gravar como "ia" seria um registro falso de
+      // resposta que o cliente nunca recebeu -- mantem a integridade
+      // do historico: o sistema sabe que o cliente falou aquilo, sem
+      // inventar uma resposta da IA que nunca existiu de verdade.
+      // episodio_id=null (fluxo so' de diagnostico, fora de qualquer
+      // episodio de atendimento humano). Best-effort: falha ao logar
+      // nunca derruba o diagnostico (mais abaixo).
+      try {
+        await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+      } catch {
+        // best-effort, mesma filosofia do aviso ao Jose (§16-A)
+      }
     } else {
       // Fatia 2 (Painel de Atendimento, 2026-08-16): fluxo normal,
-      // so-IA, sem transferencia -- ninguem mais grava essa troca.
+      // so-IA, sem transferencia -- so' tipo==="responder" chega aqui
+      // (deveTransferir e propostaRenovacao ja tratados acima).
       // episodio_id=null (nao pertence a nenhum episodio de
       // atendimento humano). Best-effort: falha ao logar nunca
       // derruba a resposta ao cliente.
@@ -336,6 +426,23 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
+    } else if (propostaRenovacao) {
+      // Etapa 1 (propor_renovacao) -- SO' diagnostico (decisao (A),
+      // docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 6). Nunca
+      // chama enviarMensagemWhatsApp, nunca cria cobranca/token,
+      // nunca renova Sigma -- so' resolve o acesso a partir dos dados
+      // estruturados ja em memoria e devolve na resposta JSON.
+      const acessoResolvido = resolverAcessoRenovacao(geminiData.texto, statusResults);
+      renovacaoDiagnostico = {
+        tipo: "propor_renovacao",
+        acessoResolvido: acessoResolvido
+          ? {
+              publicId: acessoResolvido.publicId,
+              planoNome: acessoResolvido.cliente?.planoNome ?? null,
+              servidorNome: acessoResolvido.cliente?.servidorNome ?? null,
+            }
+          : null,
+      };
     }
   } else {
     // Correcao do gap pre-existente (Bug 2, achado na bateria de testes
@@ -403,5 +510,6 @@ Deno.serve(async (req: Request) => {
     ...(transferenciaResultado ? { transferencia: transferenciaResultado } : {}),
     ...(envioResultado ? { envio: envioResultado } : {}),
     ...(avisoJoseResultado ? { avisoJose: avisoJoseResultado } : {}),
+    ...(renovacaoDiagnostico ? { renovacao: renovacaoDiagnostico } : {}),
   });
 });

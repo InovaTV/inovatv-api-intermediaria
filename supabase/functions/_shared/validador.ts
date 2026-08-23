@@ -31,6 +31,10 @@
 //   factual:contagem_acessos_ambigua
 //   factual:contagem_acessos_diverge
 //   factual:plano_ou_servidor_nao_confere
+//   renovacao:cliente_nao_identificado   (Etapa 1, so' tipo === "propor_renovacao")
+//   renovacao:acesso_nao_determinado     (Etapa 1, so' tipo === "propor_renovacao")
+
+import { extrairRotulosAcesso, type RotulosExtraidos } from "./rotulo_acesso.ts";
 
 export type ValidacaoResultado =
   | { aprovado: true }
@@ -60,8 +64,10 @@ const REGEX_VALOR = /R\$\s?[\d.,]+/gi;
 const REGEX_BLOCO_ACESSO =
   /Nome:\s*([^·\n]+?)\s*·\s*Plano:\s*([^·\n]+?)\s*·\s*Servidor:\s*([^·\n]+?)\s*·\s*Vencimento:\s*([^·\n]+?)\s*·\s*Telas:\s*([^·\n]+?)(?=\n|$)/g;
 const REGEX_TELEFONE_CONTEXTO = /Telefone:\s*([^\n]+)/;
-const REGEX_PLANO_ROTULADO = /(?:^|\s)plano\s*:\s*([A-Za-zÀ-ÿ0-9]+)/gi;
-const REGEX_SERVIDOR_ROTULADO = /(?:^|\s)servidor\s*:\s*([A-Za-zÀ-ÿ0-9]+)/gi;
+// REGEX_PLANO_ROTULADO/REGEX_SERVIDOR_ROTULADO migraram para
+// ./rotulo_acesso.ts (extrairRotulosAcesso) -- reaproveitadas por
+// validarPlanoServidorRotulado (abaixo) e por validarPropostaRenovacao
+// (Etapa 1), nunca duas definicoes divergentes da mesma regex.
 
 const GATILHOS_CREDENCIAL = [
   "senha",
@@ -312,17 +318,16 @@ function validarPlanoServidorRotulado(
   texto: string,
   contexto: ContextoParseado,
 ): ValidacaoResultado | null {
+  const rotulos = extrairRotulosAcesso(texto);
   const planosContexto = contexto.acessos.map((a) => a.plano.toLowerCase());
   const servidoresContexto = contexto.acessos.map((a) => a.servidor.toLowerCase());
 
-  for (const m of texto.matchAll(REGEX_PLANO_ROTULADO)) {
-    const valor = m[1].toLowerCase();
+  for (const valor of rotulos.planos) {
     if (!planosContexto.some((p) => p.includes(valor) || valor.includes(p))) {
       return reprovar("factual:plano_ou_servidor_nao_confere");
     }
   }
-  for (const m of texto.matchAll(REGEX_SERVIDOR_ROTULADO)) {
-    const valor = m[1].toLowerCase();
+  for (const valor of rotulos.servidores) {
     if (!servidoresContexto.some((s) => s.includes(valor) || valor.includes(s))) {
       return reprovar("factual:plano_ou_servidor_nao_confere");
     }
@@ -330,10 +335,61 @@ function validarPlanoServidorRotulado(
   return null;
 }
 
+// --- Etapa 1: propor_renovacao (Lacuna 3, docs/propor_renovacao/
+// LEVANTAMENTO_ETAPA1.md, secao 4) -- SO' roda quando tipo ===
+// "propor_renovacao" (ver validarResposta, mais abaixo). Condicoes
+// objetivas, nunca semanticas: cliente identificado (>=1 acesso no
+// contexto) e acesso determinado (se houver mais de 1, precisa haver
+// EXATAMENTE 1 correspondencia inequivoca entre os rotulos citados no
+// texto e os acessos do contexto -- sem rotulo, ou rotulo batendo em
+// 0 ou 2+ acessos, reprova pelo mesmo motivo: sem essa certeza, nao
+// da' pra dizer que o acesso esta' determinado). Elegibilidade por
+// vencimento e' deliberadamente NUNCA checada aqui (decisao de
+// produto ja fechada na Lacuna 3).
+
+function acessosCorrespondentesAoRotulo(
+  rotulos: RotulosExtraidos,
+  acessos: AcessoContexto[],
+): AcessoContexto[] {
+  if (rotulos.planos.length === 0 && rotulos.servidores.length === 0) return [];
+
+  const indices = new Set<number>();
+  acessos.forEach((a, i) => {
+    const planoLower = a.plano.toLowerCase();
+    const servidorLower = a.servidor.toLowerCase();
+    const planoBate =
+      planoLower !== "" &&
+      rotulos.planos.some((p) => planoLower.includes(p) || p.includes(planoLower));
+    const servidorBate =
+      servidorLower !== "" &&
+      rotulos.servidores.some((s) => servidorLower.includes(s) || s.includes(servidorLower));
+    if (planoBate || servidorBate) indices.add(i);
+  });
+
+  return [...indices].map((i) => acessos[i]);
+}
+
+function validarPropostaRenovacao(
+  texto: string,
+  contexto: ContextoParseado,
+): ValidacaoResultado | null {
+  if (contexto.acessos.length === 0) {
+    return reprovar("renovacao:cliente_nao_identificado");
+  }
+  if (contexto.acessos.length === 1) return null; // ja' determinado, so' 1 acesso possivel
+
+  const rotulos = extrairRotulosAcesso(texto);
+  const correspondencias = acessosCorrespondentesAoRotulo(rotulos, contexto.acessos);
+  if (correspondencias.length !== 1) {
+    return reprovar("renovacao:acesso_nao_determinado");
+  }
+  return null;
+}
+
 // --- Formato/schema (guarda de entrada, pedido explicito do usuario) ---
 
 type FormatoValidado =
-  | { valido: true; tipo: "responder" | "transferir"; texto: string }
+  | { valido: true; tipo: "responder" | "transferir" | "propor_renovacao"; texto: string }
   | { valido: false; motivo: string };
 
 function validarFormato(saidaGemini: unknown): FormatoValidado {
@@ -342,7 +398,11 @@ function validarFormato(saidaGemini: unknown): FormatoValidado {
   }
 
   const obj = saidaGemini as Record<string, unknown>;
-  if (obj.tipo !== "responder" && obj.tipo !== "transferir") {
+  if (
+    obj.tipo !== "responder" &&
+    obj.tipo !== "transferir" &&
+    obj.tipo !== "propor_renovacao"
+  ) {
     return { valido: false, motivo: "formato:tipo_invalido" };
   }
   if (typeof obj.texto !== "string" || obj.texto.trim().length === 0) {
@@ -361,7 +421,7 @@ export function validarResposta(
   const formato = validarFormato(saidaGemini);
   if (!formato.valido) return reprovar(formato.motivo);
 
-  const { texto } = formato;
+  const { texto, tipo } = formato;
   const contextoBruto = contextoEnviado ?? "";
   const contextoParseado = parseContexto(contextoEnviado);
 
@@ -373,6 +433,15 @@ export function validarResposta(
     () => validarContagemAcessos(texto, contextoParseado),
     () => validarPlanoServidorRotulado(texto, contextoParseado),
   ];
+
+  // Etapa 1 (Lacuna 3): checagem adicional, SO' quando tipo ===
+  // "propor_renovacao" -- "nao e' regra do Validador" checar isso
+  // para responder/transferir (LEVANTAMENTO_ETAPA1.md, secao 4). As 6
+  // checagens acima continuam rodando de forma identica, independente
+  // do tipo, sem nenhuma mudanca.
+  if (tipo === "propor_renovacao") {
+    checagens.push(() => validarPropostaRenovacao(texto, contextoParseado));
+  }
 
   for (const checagem of checagens) {
     const resultado = checagem();

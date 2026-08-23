@@ -60,8 +60,11 @@ export interface MensagemAtendimento {
 }
 
 // Saida estruturada do Gemini 3.6 (Componente 1 §12, inovatv_central).
-// Ainda nao usado nesta etapa -- gemini_client.ts chega na etapa 5.
+// "propor_renovacao" adicionado na Etapa 1 do fluxo de renovacao
+// automatica (docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 2.1
+// -- Lacuna 2, Opcao A: terceiro valor de tipo, sem campo booleano
+// oculto). Nesta etapa e' so' diagnostico -- ver orchestrator/index.ts.
 export interface GeminiOutput {
-  tipo: "responder" | "transferir";
+  tipo: "responder" | "transferir" | "propor_renovacao";
   texto: string;
 }
