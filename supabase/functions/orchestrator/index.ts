@@ -107,7 +107,7 @@ import {
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
-import { extrairRotulosAcesso } from "../_shared/rotulo_acesso.ts";
+import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
 
 // Etapa 1 (propor_renovacao) -- resolve qual StatusResult corresponde
 // ao acesso citado no texto do Gemini, usando os MESMOS dados
@@ -117,26 +117,23 @@ import { extrairRotulosAcesso } from "../_shared/rotulo_acesso.ts";
 // equivalente que o Validador ja fez (validarPropostaRenovacao,
 // _shared/validador.ts) -- nunca reaproveita o resultado interno dele
 // (Componente 4 §5: Validador nunca decide dado de negocio).
+//
+// Contrato de identificacao -- FECHADO apos achado real do Caso 1
+// (docs/propor_renovacao/ACHADO_CASO1_RESOLUCAO_ACESSO.md, secao 6):
+// SO' o nome do SERVIDOR, como palavra/token inteiro, resolve o
+// acesso -- nunca nome de plano isolado (protege o Caso 9). A mesma
+// regra do Validador (validarPropostaRenovacao), aplicada aqui de
+// forma independente contra StatusResult[] em vez de
+// ContextoParseado.acessos[].
 function resolverAcessoRenovacao(
   texto: string,
   statusResults: StatusResult[],
 ): StatusResult | null {
   if (statusResults.length === 1) return statusResults[0];
 
-  const rotulos = extrairRotulosAcesso(texto);
-  if (rotulos.planos.length === 0 && rotulos.servidores.length === 0) return null;
-
-  const correspondencias = statusResults.filter((s) => {
-    const planoLower = (s.cliente?.planoNome ?? "").toLowerCase();
-    const servidorLower = (s.cliente?.servidorNome ?? "").toLowerCase();
-    const planoBate =
-      planoLower !== "" &&
-      rotulos.planos.some((p) => planoLower.includes(p) || p.includes(planoLower));
-    const servidorBate =
-      servidorLower !== "" &&
-      rotulos.servidores.some((sv) => servidorLower.includes(sv) || sv.includes(servidorLower));
-    return planoBate || servidorBate;
-  });
+  const correspondencias = statusResults.filter((s) =>
+    nomeApareceComoPalavra(texto, s.cliente?.servidorNome ?? ""),
+  );
 
   return correspondencias.length === 1 ? correspondencias[0] : null;
 }

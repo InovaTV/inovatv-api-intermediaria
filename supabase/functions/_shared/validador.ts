@@ -34,7 +34,7 @@
 //   renovacao:cliente_nao_identificado   (Etapa 1, so' tipo === "propor_renovacao")
 //   renovacao:acesso_nao_determinado     (Etapa 1, so' tipo === "propor_renovacao")
 
-import { extrairRotulosAcesso, type RotulosExtraidos } from "./rotulo_acesso.ts";
+import { extrairRotulosAcesso, nomeApareceComoPalavra } from "./rotulo_acesso.ts";
 
 export type ValidacaoResultado =
   | { aprovado: true }
@@ -335,38 +335,32 @@ function validarPlanoServidorRotulado(
   return null;
 }
 
-// --- Etapa 1: propor_renovacao (Lacuna 3, docs/propor_renovacao/
-// LEVANTAMENTO_ETAPA1.md, secao 4) -- SO' roda quando tipo ===
+// --- Etapa 1: propor_renovacao -- SO' roda quando tipo ===
 // "propor_renovacao" (ver validarResposta, mais abaixo). Condicoes
 // objetivas, nunca semanticas: cliente identificado (>=1 acesso no
-// contexto) e acesso determinado (se houver mais de 1, precisa haver
-// EXATAMENTE 1 correspondencia inequivoca entre os rotulos citados no
-// texto e os acessos do contexto -- sem rotulo, ou rotulo batendo em
-// 0 ou 2+ acessos, reprova pelo mesmo motivo: sem essa certeza, nao
-// da' pra dizer que o acesso esta' determinado). Elegibilidade por
-// vencimento e' deliberadamente NUNCA checada aqui (decisao de
-// produto ja fechada na Lacuna 3).
+// contexto) e acesso determinado.
+//
+// Contrato de identificacao de acesso -- FECHADO apos achado real do
+// Caso 1 (execucao no numero de teste, 23/08/2026,
+// docs/propor_renovacao/ACHADO_CASO1_RESOLUCAO_ACESSO.md, secao 6):
+// com mais de 1 acesso, o acesso esta' determinado quando, e somente
+// quando, EXATAMENTE 1 dos acessos tem o nome do seu SERVIDOR citado
+// no texto como palavra/token inteiro -- em qualquer forma de mencao
+// (rotulado "Servidor: X", com a palavra "servidor" sem dois-pontos,
+// ou so' o nome sozinho, ex. "meu NewOne"). Nome de PLANO isolado
+// NUNCA determina sozinho -- protege deliberadamente o Caso 9 ("Quero
+// trocar meu Mensal pelo anual" nao pode virar identificacao de
+// acesso so' por conter "Mensal", palavra generica que varios acessos
+// podem compartilhar). Zero ou mais de 1 correspondencia continua
+// "nao determinado" -- reprova, sem escolher arbitrariamente.
+// Elegibilidade por vencimento e' deliberadamente NUNCA checada aqui
+// (decisao de produto ja fechada na Lacuna 3).
 
-function acessosCorrespondentesAoRotulo(
-  rotulos: RotulosExtraidos,
+function acessosCorrespondentesAoServidor(
+  texto: string,
   acessos: AcessoContexto[],
 ): AcessoContexto[] {
-  if (rotulos.planos.length === 0 && rotulos.servidores.length === 0) return [];
-
-  const indices = new Set<number>();
-  acessos.forEach((a, i) => {
-    const planoLower = a.plano.toLowerCase();
-    const servidorLower = a.servidor.toLowerCase();
-    const planoBate =
-      planoLower !== "" &&
-      rotulos.planos.some((p) => planoLower.includes(p) || p.includes(planoLower));
-    const servidorBate =
-      servidorLower !== "" &&
-      rotulos.servidores.some((s) => servidorLower.includes(s) || s.includes(servidorLower));
-    if (planoBate || servidorBate) indices.add(i);
-  });
-
-  return [...indices].map((i) => acessos[i]);
+  return acessos.filter((a) => nomeApareceComoPalavra(texto, a.servidor));
 }
 
 function validarPropostaRenovacao(
@@ -378,8 +372,7 @@ function validarPropostaRenovacao(
   }
   if (contexto.acessos.length === 1) return null; // ja' determinado, so' 1 acesso possivel
 
-  const rotulos = extrairRotulosAcesso(texto);
-  const correspondencias = acessosCorrespondentesAoRotulo(rotulos, contexto.acessos);
+  const correspondencias = acessosCorrespondentesAoServidor(texto, contexto.acessos);
   if (correspondencias.length !== 1) {
     return reprovar("renovacao:acesso_nao_determinado");
   }
