@@ -106,6 +106,31 @@
 // sozinha o "tipo" da resposta (isso continua sendo julgamento do
 // Gemini, dentro do SYSTEM_PROMPT ja congelado), so' entra como pista
 // em [CONTEXTO DA CONVERSA] (montarContextoConversa).
+//
+// Bloco 1 -- fluxo de renovacao com Pix real (2026-08-23,
+// docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md, Etapas 2/3).
+// Substitui INTEIRAMENTE a orientacao generica de Pix implementada mais
+// cedo no mesmo dia (nunca vinculada a uma cobranca real). Com o acesso
+// resolvido (propostaRenovacaoComAcesso), processarCobrancaRenovacao
+// (module-level, abaixo): reaproveita cobranca pendente existente pro
+// mesmo acesso (nunca duplica, Lacuna 9 decisao 2); senao, envia
+// mensagem 1 fixa -> consulta valor real DIRETO no Rocket (nunca via
+// /status, revertido nesta mesma etapa) -> cria cobranca OpenPix real
+// (Sandbox) -> persiste em cobrancas_pix -> envia mensagem 2 fixa com
+// o Pix real. Falha em qualquer ponto -> transfere pra humano,
+// reaproveitando o MESMO mecanismo generico ja usado no resto do
+// arquivo. Isolamento estrito: NAO trata imagem/comprovante, NAO gera
+// token, NAO chama Sigma, NAO altera vencimento -- isso e' o Bloco 2,
+// ainda nao implementado.
+//
+// Provedor trocado de PagBank para OpenPix em 2026-08-24 (ver
+// inovatv_central/CLAUDE.md) -- PagBank exige CPF/CNPJ do cliente
+// pagador em toda modalidade de Pix avulso, incompativel com o
+// requisito de nao coletar nenhum dado do cliente; OpenPix confirmou
+// isso em POC real de Sandbox. Codigo PagBank (_shared/pagbank_client.ts,
+// poc-pagbank-criar-cobranca/) preservado, nao apagado -- decisao
+// explicita do usuario, limpeza fica para depois da renovacao completa
+// funcionar.
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
@@ -131,11 +156,16 @@ import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   MENSAGEM_SESSAO_EXPIRADA,
+  MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO,
   formatarValorBRL,
-  montarMensagemOrientacaoPagamentoRenovacao,
+  paraCentavos,
+  montarMensagemPixRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
+import { consultarValorClienteRocket } from "../_shared/rocket_valor_cliente.ts";
+import { criarCobrancaOpenPix } from "../_shared/openpix_client.ts";
+import { buscarCobrancaPendente, criarCobrancaPixRegistro } from "../_shared/cobrancas_pix.ts";
 
 // Memoria de sessao (Camada 3, 2026-08-23 -- ver
 // docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
@@ -246,6 +276,228 @@ async function gravarIntencaoRenovacaoSeDemonstrada(
   if (!REGEX_INTENCAO_RENOVACAO.test(textoClienteAtual)) return;
 
   await atualizarSessao(conversationId, { intencaoAtual: "renovacao" }).catch(() => {});
+}
+
+// Bloco 1 do fluxo de renovacao automatica com PagBank real (2026-08-23,
+// docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md, Etapas 2/3).
+// So' chamada quando propostaRenovacao foi aprovada E o acesso ja foi
+// resolvido com certeza (acessoResolvido != null) -- nunca decide isso
+// sozinha. Isolamento estrito preservado (Bloco 2 fica pra depois):
+// NAO trata imagem/comprovante, NAO gera token, NAO chama Sigma, NAO
+// altera vencimento -- so' leva a conversa ate' o cliente ter o Pix
+// real em maos.
+//
+// Ordem: (1) reaproveita cobranca pendente existente pro mesmo acesso,
+// nunca duplica (Lacuna 9, decisao 2 -- reforcado por unique index
+// parcial no banco); (2) senao, envia a mensagem 1 (fixa, neutra,
+// ANTES de qualquer chamada externa lenta); (3) consulta o valor real
+// direto no Rocket (nunca via /status); (4) cria a cobranca PagBank
+// real (Sandbox); (5) persiste em cobrancas_pix; (6) envia a mensagem
+// 2 (fixa, com o Pix real). Qualquer falha em (3)/(4) -> transfere pra
+// humano, reaproveitando O MESMO mecanismo generico ja usado no resto
+// do arquivo (acionarTransferenciaHumana + MENSAGEM_TRANSFERENCIA_CLIENTE
+// + aviso ao Jose) -- nenhum mecanismo novo de transferencia.
+async function processarCobrancaRenovacao(
+  conversa: { conversation_id: string },
+  telefone: string,
+  conteudo: string,
+  geminiTexto: string,
+  acessoResolvido: StatusResult,
+): Promise<{
+  envioResultado: { enviado: boolean };
+  transferenciaResultado?: { acionada: boolean; motivo: string };
+  avisoJoseResultado?: { enviado: boolean };
+  textoEnviado: string | null;
+}> {
+  const publicId = acessoResolvido.publicId as string;
+
+  // Mesmo mecanismo generico de transferencia ja usado no resto do
+  // arquivo (motivoTransferencia + acionarTransferenciaHumana +
+  // MENSAGEM_TRANSFERENCIA_CLIENTE + aviso ao Jose) -- so' reaproveitado
+  // aqui dentro, para os 2 casos de falha que so' sao descobertos DEPOIS
+  // de a mensagem 1 (fixa) ja ter sido enviada (por isso nao passam pelo
+  // deveTransferir calculado antes, no corpo principal).
+  async function transferirPorFalha(motivo: string) {
+    let transferenciaResultado: { acionada: boolean; motivo: string };
+    try {
+      const resultado = await acionarTransferenciaHumana(
+        conversa.conversation_id,
+        motivo,
+        conteudo,
+        geminiTexto,
+      );
+      transferenciaResultado =
+        resultado.outcome === "acionada"
+          ? { acionada: true, motivo }
+          : { acionada: false, motivo: "ja_transferida_por_outra_requisicao" };
+    } catch {
+      transferenciaResultado = { acionada: false, motivo: "falha_ao_registrar" };
+    }
+
+    let envioResultado = { enviado: false };
+    let avisoJoseResultado: { enviado: boolean } | undefined;
+    if (transferenciaResultado.acionada) {
+      const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
+      envioResultado = { enviado: envio.outcome === "success" };
+
+      const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
+      if (numeroJose) {
+        const aviso = await enviarTemplateWhatsApp(
+          numeroJose,
+          NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+          IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+          [transferenciaResultado.motivo],
+        );
+        avisoJoseResultado = { enviado: aviso.outcome === "success" };
+      }
+    }
+    return { envioResultado, transferenciaResultado, avisoJoseResultado, textoEnviado: null };
+  }
+
+  // Disciplina de log (2026-08-23): a mensagem do CLIENTE e' gravada
+  // EXATAMENTE UMA VEZ em cada caminho -- ou pela RPC
+  // acionar_transferencia_humana (transferirPorFalha, que ja' grava
+  // cliente+ia+sistema sozinha), ou explicitamente aqui, so' nos
+  // caminhos que NAO vao transferir. Nunca as duas coisas juntas (isso
+  // duplicaria a mensagem do cliente no historico).
+
+  // Re-checagem de concorrencia (Componente 1 §15-A) -- feita 1x aqui,
+  // no inicio: se um operador ja assumiu a conversa antes mesmo de
+  // comecarmos, nao envia nada. Simplificacao deliberada do Bloco 1
+  // (nao re-checa de novo entre a mensagem 1 e a mensagem 2, ja que
+  // nenhum dinheiro real e' confirmado nesta etapa -- so' mostrar um
+  // Pix) -- pode ser revisto no Bloco 2, onde a confirmacao real
+  // acontece.
+  const conversaAtual = await buscarOuCriarConversa(telefone);
+  if (conversaAtual.estado === "aguardando_humano") {
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+    } catch {
+      // best-effort, mesma filosofia do aviso ao Jose (§16-A)
+    }
+    return { envioResultado: { enviado: false }, textoEnviado: null };
+  }
+
+  // 1) Cobranca pendente ja existe pra este acesso? (nunca duplica --
+  // Lacuna 9, decisao 2)
+  let cobrancaExistente;
+  try {
+    cobrancaExistente = await buscarCobrancaPendente(publicId);
+  } catch {
+    return await transferirPorFalha("renovacao:falha_consultar_cobranca");
+  }
+
+  if (cobrancaExistente) {
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+    } catch {
+      // best-effort
+    }
+    const valorFormatado =
+      formatarValorBRL(cobrancaExistente.valor_esperado_centavos / 100) ?? "0,00";
+    const texto = montarMensagemPixRenovacao(valorFormatado, cobrancaExistente.qr_code_texto);
+    const envio = await enviarMensagemWhatsApp(telefone, texto);
+    if (envio.outcome === "success") {
+      try {
+        await inserirMensagem(conversa.conversation_id, "ia", texto, null);
+      } catch {
+        // best-effort
+      }
+    }
+    return {
+      envioResultado: { enviado: envio.outcome === "success" },
+      textoEnviado: envio.outcome === "success" ? texto : null,
+    };
+  }
+
+  // 2) Mensagem 1 (fixa) -- confirmacao neutra, antes de qualquer
+  // chamada externa lenta (Rocket/PagBank). Ainda NAO grava "cliente"
+  // aqui -- se o valor/criacao da cobranca falhar logo abaixo, o fluxo
+  // termina em transferirPorFalha, que grava cliente+ia+sistema
+  // sozinho; gravar agora duplicaria. O log desta mensagem 1 especifica
+  // (se enviada) so' acontece mais abaixo, apos confirmar que NAO
+  // vamos transferir.
+  const envioMsg1 = await enviarMensagemWhatsApp(telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
+
+  // 3) Valor real, direto no Rocket -- NUNCA via /status (revertido
+  // nesta mesma etapa). Ausente/invalido -> transfere, nunca inventa.
+  const valorResultado = await consultarValorClienteRocket(publicId);
+  const valorCentavos =
+    valorResultado.outcome === "success" ? paraCentavos(valorResultado.valor) : null;
+  if (!valorCentavos) {
+    return await transferirPorFalha("renovacao:valor_nao_cadastrado");
+  }
+
+  // 4) Cria a cobranca real na OpenPix (Sandbox nesta etapa).
+  // operacaoId e' enviado como correlationID -- a propria OpenPix
+  // rejeita reenvio do mesmo valor (HTTP 400 explicito, confirmado em
+  // teste real), reforcando (nao substituindo) a trava de banco em (1).
+  const operacaoId = crypto.randomUUID();
+  const descricaoItem =
+    `Renovação InovaTV - Plano ${acessoResolvido.cliente?.planoNome ?? ""}`.trim();
+  const criarResultado = await criarCobrancaOpenPix(operacaoId, valorCentavos, descricaoItem);
+  if (criarResultado.outcome !== "success") {
+    return await transferirPorFalha("renovacao:falha_criar_cobranca");
+  }
+
+  // A partir daqui o fluxo NUNCA mais transfere -- grava a mensagem do
+  // cliente agora (uma unica vez) e a mensagem 1, se ela tiver sido
+  // enviada com sucesso la' atras.
+  try {
+    await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+  } catch {
+    // best-effort
+  }
+  if (envioMsg1.outcome === "success") {
+    try {
+      await inserirMensagem(
+        conversa.conversation_id,
+        "ia",
+        MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO,
+        null,
+      );
+    } catch {
+      // best-effort
+    }
+  }
+
+  // 5) Persiste -- se falhar aqui, a cobranca ja existe de verdade na
+  // OpenPix; ainda assim entrega o Pix ao cliente (evita "pagar e nao
+  // ter pra onde"), so registra o problema pra investigacao manual.
+  try {
+    await criarCobrancaPixRegistro({
+      operacaoId,
+      conversationId: conversa.conversation_id,
+      publicId,
+      servidorNome: acessoResolvido.cliente?.servidorNome ?? null,
+      planoNome: acessoResolvido.cliente?.planoNome ?? null,
+      valorEsperadoCentavos: valorCentavos,
+      transactionIdProvedor: criarResultado.transactionId,
+      qrCodeTexto: criarResultado.qrCodeTexto,
+    });
+  } catch (erro) {
+    console.log(
+      "[orchestrator] falha ao persistir cobranca_pix (cobranca ja existe na OpenPix)",
+      JSON.stringify({ operacaoId, transactionId: criarResultado.transactionId, erro: String(erro) }),
+    );
+  }
+
+  // 6) Mensagem 2 (fixa, dados reais -- valor do Rocket, Pix do PagBank)
+  const valorFormatado = formatarValorBRL(valorCentavos / 100) ?? "0,00";
+  const texto2 = montarMensagemPixRenovacao(valorFormatado, criarResultado.qrCodeTexto);
+  const envio2 = await enviarMensagemWhatsApp(telefone, texto2);
+  if (envio2.outcome === "success") {
+    try {
+      await inserirMensagem(conversa.conversation_id, "ia", texto2, null);
+    } catch {
+      // best-effort
+    }
+  }
+
+  return {
+    envioResultado: { enviado: envio2.outcome === "success" },
+    textoEnviado: envio2.outcome === "success" ? texto2 : null,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -531,42 +783,37 @@ Deno.serve(async (req: Request) => {
     const propostaRenovacao =
       validacao.aprovado && geminiData.tipo === "propor_renovacao";
 
-    // Fechamento do "buraco sem saida" (2026-08-23, achado de teste
-    // real): resolve o acesso e o valor real JA' AQUI, antes de decidir
-    // o que enviar -- nao mais so' como diagnostico depois do envio.
-    // Mesma funcao/mesma logica da Etapa 1a (resolverAcessoRenovacao),
-    // sem nenhuma mudanca nela. valorFormatado vem exclusivamente do
-    // dado real do Rocket (/status, campo valor) -- NUNCA inventado
-    // pelo Gemini (que nunca ve este campo, SYSTEM_PROMPT congelado
-    // continua proibindo isso). Ausencia de acesso resolvido OU de
-    // valor cadastrado -> trata como precisando de humano, nunca envia
-    // uma orientacao de pagamento incompleta/inventada.
+    // Resolve o acesso JA' AQUI, antes de decidir o que enviar -- Etapa
+    // 1a, sem nenhuma mudanca nela. A checagem de VALOR real (Bloco 1,
+    // fluxo PagBank, 2026-08-23) deixou de acontecer aqui -- agora vem
+    // de consultarValorClienteRocket (direto no Rocket, nunca via
+    // /status, revertido nesta mesma etapa), dentro de
+    // processarCobrancaRenovacao, mais abaixo -- so' depois que ja'
+    // sabemos que o acesso foi resolvido com certeza.
     const acessoResolvidoRenovacao = propostaRenovacao
       ? resolverAcessoRenovacao(geminiData.texto, statusResults, acessoSelecionadoServidor)
       : null;
-    const valorFormatadoRenovacao = acessoResolvidoRenovacao
-      ? formatarValorBRL(acessoResolvidoRenovacao.cliente?.valor)
-      : null;
-    const propostaRenovacaoComDadosCompletos =
-      propostaRenovacao && !!acessoResolvidoRenovacao && !!valorFormatadoRenovacao;
-    const propostaRenovacaoSemDadosCompletos = propostaRenovacao && !propostaRenovacaoComDadosCompletos;
+    const propostaRenovacaoComAcesso = propostaRenovacao && !!acessoResolvidoRenovacao;
+    const propostaRenovacaoSemAcesso = propostaRenovacao && !propostaRenovacaoComAcesso;
 
     // Etapa 6, terceira fatia: reprovado, Gemini decidiu transferir, OU
-    // propor_renovacao aprovado mas sem acesso resolvido/valor cadastrado
-    // (extensao 2026-08-23) -- marca aguardando_humano de verdade e
-    // registra as duas mensagens (Componente 1 §16, Componente 5 §12).
-    // Aprovado + tipo==="responder" nunca entra aqui.
+    // propor_renovacao aprovado mas o acesso nao pode ser resolvido com
+    // certeza (defensivo -- Validador ja deveria ter barrado isso) --
+    // marca aguardando_humano de verdade e registra as duas mensagens
+    // (Componente 1 §16, Componente 5 §12). Aprovado + tipo==="responder"
+    // nunca entra aqui. Falha na criacao da cobranca/valor ausente
+    // (Bloco 1) sao tratadas DENTRO de processarCobrancaRenovacao, mais
+    // abaixo -- nao passam por aqui, porque so' sao descobertas depois
+    // de a mensagem 1 (fixa) ja ter sido enviada.
     const deveTransferir =
-      !validacao.aprovado || geminiData.tipo === "transferir" || propostaRenovacaoSemDadosCompletos;
+      !validacao.aprovado || geminiData.tipo === "transferir" || propostaRenovacaoSemAcesso;
 
     if (deveTransferir) {
       const motivoTransferencia = !validacao.aprovado
         ? validacao.motivo
         : geminiData.tipo === "transferir"
           ? "gemini:transferir"
-          : acessoResolvidoRenovacao
-            ? "renovacao:valor_nao_cadastrado"
-            : "renovacao:acesso_nao_resolvido_apos_aprovacao";
+          : "renovacao:acesso_nao_resolvido_apos_aprovacao";
       try {
         const resultado = await acionarTransferenciaHumana(
           conversa.conversation_id,
@@ -585,24 +832,16 @@ Deno.serve(async (req: Request) => {
       // episodio_id certo quando aciona de verdade (Componente 5 §12)
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
-    } else if (propostaRenovacaoComDadosCompletos) {
-      // Etapa 1b (ajustado 2026-08-23, revisao do usuario sobre o
-      // Caso (h)): grava SO' a mensagem do cliente aqui -- ela chegou
-      // de verdade, independente do que acontecer com o envio. A
-      // mensagem "ia" NUNCA e' gravada neste ponto -- so' mais abaixo,
-      // condicionada ao envio real ter tido sucesso (bloco de envio).
-      // Regra: origem="ia" significa EXCLUSIVAMENTE mensagem
-      // efetivamente entregue ao cliente -- nunca gravar por
-      // antecipacao um texto que ainda pode nao ser enviado (por
-      // concorrencia com um humano) ou que pode falhar no envio.
-      // episodio_id=null (fluxo de propor_renovacao nunca pertence a
-      // um episodio de atendimento humano). Best-effort: falha ao
-      // logar nunca derruba o envio (mais abaixo).
-      try {
-        await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
-      } catch {
-        // best-effort, mesma filosofia do aviso ao Jose (§16-A)
-      }
+    } else if (propostaRenovacaoComAcesso) {
+      // Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23):
+      // AO CONTRARIO dos outros branches, a mensagem do cliente NAO e'
+      // pre-gravada aqui. Motivo: este fluxo pode terminar chamando
+      // acionarTransferenciaHumana (valor ausente/falha ao criar a
+      // cobranca, descobertos so' DEPOIS da mensagem 1 fixa ja ter sido
+      // enviada) -- essa RPC ja' grava cliente+ia+sistema sozinha
+      // (Componente 5 §12); gravar o cliente aqui TAMBEM duplicaria a
+      // mensagem. processarCobrancaRenovacao (mais abaixo) e' quem
+      // decide, caso a caso, se grava direto ou deixa a RPC gravar.
     } else {
       // Fatia 2 (Painel de Atendimento, 2026-08-16): fluxo normal,
       // so-IA, sem transferencia -- so' tipo==="responder" chega aqui
@@ -674,67 +913,36 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
-    } else if (propostaRenovacaoComDadosCompletos) {
-      // Fechamento do "buraco sem saida" (2026-08-23, achado de teste
-      // real): substitui o texto do Gemini (que so' confirma intencao+
-      // acesso, por desenho do SYSTEM_PROMPT -- "o valor real sera'
-      // obtido posteriormente pela infraestrutura, nunca por voce") por
-      // uma mensagem DETERMINISTICA (montarMensagemOrientacaoPagamentoRenovacao,
-      // _shared/mensagens_fixas.ts), construida com o acesso e o valor
-      // REAIS ja' resolvidos acima -- nunca inventados pelo Gemini, que
-      // nunca ve' o campo valor. Mesma re-checagem de concorrencia
-      // (Componente 1 §15-A) ja usada para tipo==="responder" -- se um
-      // operador assumiu manualmente enquanto este fluxo estava em
-      // andamento, NAO envia por cima do humano (a mensagem do cliente
-      // ja foi registrada como contexto no bloco acima, nunca descartada
-      // de verdade).
-      // Isolamento estrito preservado (Plano Mestre, Etapa 1b -- lista
-      // negativa aprovada): nunca cria cobranca PagBank, nunca gera
-      // token, nunca chama Sigma/Rocket para renovar, nunca altera
-      // vencimento, nunca cria estado de pagamento, nunca informa chave/
-      // QR Pix especifico, nunca antecipa decisao da Etapa 2/3 -- so'
-      // orienta o cliente a pagar via Pix e mandar o comprovante NESTA
-      // conversa (conferencia e' etapa futura separada, webhook de
-      // midia, ainda nao implementado).
-      const textoOrientacaoPagamento = montarMensagemOrientacaoPagamentoRenovacao(
-        acessoResolvidoRenovacao.cliente?.nome ?? "seu acesso",
-        acessoResolvidoRenovacao.cliente?.servidorNome ?? "não informado",
-        acessoResolvidoRenovacao.cliente?.planoNome ?? "não informado",
-        valorFormatadoRenovacao,
+    } else if (propostaRenovacaoComAcesso) {
+      // Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23) --
+      // substitui integralmente a orientacao GENERICA de Pix de 23/08
+      // (nunca vinculada a uma cobranca real). Toda a logica de
+      // cobranca/persistencia/mensagens fica em processarCobrancaRenovacao
+      // (module-level, acima) -- aqui so' encaminha e usa o resultado.
+      const resultado = await processarCobrancaRenovacao(
+        conversa,
+        telefone,
+        conteudo,
+        geminiData.texto,
+        acessoResolvidoRenovacao,
       );
+      envioResultado = resultado.envioResultado;
+      if (resultado.transferenciaResultado) transferenciaResultado = resultado.transferenciaResultado;
+      if (resultado.avisoJoseResultado) avisoJoseResultado = resultado.avisoJoseResultado;
 
-      const conversaAtual = await buscarOuCriarConversa(telefone);
-      if (conversaAtual.estado === "aguardando_humano") {
-        envioResultado = { enviado: false };
-      } else {
-        const envio = await enviarMensagemWhatsApp(telefone, textoOrientacaoPagamento);
-        envioResultado = { enviado: envio.outcome === "success" };
-      }
-
-      // origem="ia" significa EXCLUSIVAMENTE mensagem efetivamente
-      // enviada ao cliente (regra aprovada pelo usuario, 2026-08-23,
-      // apos revisao do Caso (h)) -- grava o texto REALMENTE enviado
-      // (textoOrientacaoPagamento), nao mais o texto interno do Gemini
-      // (geminiData.texto), que deixou de ser o que o cliente recebe.
-      // Nunca grava se a re-checagem detectou humano (envioResultado.enviado
-      // === false acima) nem se o envio falhou. Best-effort: falha ao
-      // logar nunca desfaz o envio ja concluido.
-      if (envioResultado.enviado) {
-        try {
-          await inserirMensagem(conversa.conversation_id, "ia", textoOrientacaoPagamento, null);
-        } catch {
-          // best-effort, mesma filosofia do aviso ao Jose (§16-A)
-        }
+      // processarCobrancaRenovacao ja' cuida de TODO o log (cliente+ia,
+      // em qualquer caminho -- concorrencia, cobranca reaproveitada,
+      // cobranca nova, ou transferencia via RPC) -- nao duplicar aqui.
+      // textoEnviado != null so' quando uma mensagem de fato chegou ao
+      // cliente (usado so' para as escritas de memoria de sessao abaixo).
+      if (resultado.textoEnviado) {
         // acesso_selecionado gravado diretamente do acesso ja' resolvido
-        // com certeza (acessoResolvidoRenovacao) -- mais preciso que
-        // reconferir por citacao de texto (gravarAcessoSelecionadoSeCitado),
-        // ja que aqui nao ha' ambiguidade nenhuma restante.
+        // com certeza -- mais preciso que reconferir por citacao de
+        // texto (gravarAcessoSelecionadoSeCitado), ja que aqui nao ha'
+        // ambiguidade nenhuma restante.
         await atualizarSessao(conversa.conversation_id, {
           acessoSelecionado: acessoResolvidoRenovacao.publicId,
         }).catch(() => {});
-        // Memoria de sessao (extensao 2026-08-23) -- mesma nota do
-        // branch "responder" acima: le a mensagem do CLIENTE, nunca a
-        // resposta do Gemini.
         await gravarIntencaoRenovacaoSeDemonstrada(
           conversa.conversation_id,
           conteudo,
@@ -750,24 +958,6 @@ Deno.serve(async (req: Request) => {
           servidorNome: acessoResolvidoRenovacao.cliente?.servidorNome ?? null,
         },
       };
-      // Observabilidade minima (aprovada pelo usuario, 2026-08-23) --
-      // a resposta HTTP do Orquestrador e' descartada silenciosamente
-      // pelo Webhook em caso de sucesso (webhook/index.ts so' loga em
-      // falha), entao nao havia nenhum jeito de confirmar o
-      // diagnostico de uma execucao real depois do fato. So' registra
-      // -- nao muda nenhum comportamento do fluxo. Nunca loga o valor
-      // real (so' se foi resolvido ou nao), mesma disciplina de
-      // minimizacao ja usada no resto do arquivo.
-      console.log(
-        "[orchestrator] propor_renovacao diagnostico",
-        JSON.stringify({
-          tipo: geminiData.tipo,
-          validacaoAprovado: validacao.aprovado,
-          servidorResolvido: acessoResolvidoRenovacao.cliente?.servidorNome ?? null,
-          publicId: acessoResolvidoRenovacao.publicId,
-          valorResolvido: true,
-        }),
-      );
     }
   } else {
     // Correcao do gap pre-existente (Bug 2, achado na bateria de testes

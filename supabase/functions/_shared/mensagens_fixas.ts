@@ -33,44 +33,60 @@ export const IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO = "pt_BR";
 export const MENSAGEM_SESSAO_EXPIRADA =
   "Vi que você ficou um tempo ausente. Como nossa sessão ficou inativa por mais de 1 hora, o contexto anterior foi encerrado para começarmos novamente com segurança. Pode me dizer como posso ajudá-lo?";
 
-// Orientacao de pagamento apos renovacao confirmada (2026-08-23,
-// fechamento do "buraco sem saida" apos intencao_atual+acesso_selecionado
-// -- achado de teste real). Diferente das constantes acima, esta e'
-// TEMPLATIZADA (parametros reais do cliente/acesso) -- nunca uma string
-// fixa solta -- mas segue a MESMA disciplina: nunca gerada pelo Gemini,
-// o valor vem sempre de dado real (Rocket, via /status), nunca inventado.
-// Isolamento estrito preservado (Plano Mestre, Etapa 1b): NAO cria
-// cobranca PagBank, NAO gera token, NAO chama Sigma/Rocket, NAO informa
-// chave/QR Pix especifico -- so' orienta o cliente a pagar e mandar o
-// comprovante NESTA conversa, cuja conferencia e' etapa futura separada
-// (webhook de midia, ainda nao implementado).
-//
-// formatarValorBRL: o campo `valor` do Rocket chega em formato variavel
-// (numero ou texto, com virgula ou ponto) -- normaliza pra um numero e
-// formata como moeda brasileira. Retorna null (nunca "R$ 0,00" nem
-// qualquer valor inventado) quando o dado nao e' um numero positivo
-// valido -- o chamador (orchestrator/index.ts) trata null como "valor
-// nao disponivel" e transfere pra humano, nunca envia uma orientacao de
-// pagamento sem valor real.
-export function formatarValorBRL(valorBruto: string | number | null | undefined): string | null {
+// Valor real do plano -- parsing centralizado aqui (2026-08-23, Bloco 1
+// do fluxo de renovacao com PagBank real). O campo `valor` do Rocket
+// chega em formato variavel (numero ou texto, com virgula ou ponto) --
+// parseValorReais normaliza pra um numero em reais; retorna null
+// (nunca 0/inventado) quando o dado nao e' um numero positivo valido.
+// formatarValorBRL (exibicao) e paraCentavos (payload do PagBank, que
+// exige o valor em centavos/inteiro) reaproveitam o mesmo parsing --
+// nunca duas logicas de conversao divergentes.
+export function parseValorReais(valorBruto: string | number | null | undefined): number | null {
   if (valorBruto === null || valorBruto === undefined) return null;
   const texto = String(valorBruto).trim().replace(",", ".");
   const numero = Number(texto);
   if (!Number.isFinite(numero) || numero <= 0) return null;
+  return numero;
+}
+
+export function formatarValorBRL(valorBruto: string | number | null | undefined): string | null {
+  const numero = parseValorReais(valorBruto);
+  if (numero === null) return null;
   return numero.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function montarMensagemOrientacaoPagamentoRenovacao(
-  nomeAcesso: string,
-  servidorNome: string,
-  planoNome: string,
+export function paraCentavos(valorBruto: string | number | null | undefined): number | null {
+  const numero = parseValorReais(valorBruto);
+  if (numero === null) return null;
+  return Math.round(numero * 100);
+}
+
+// Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23,
+// docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md, Lacuna 8).
+// Duas mensagens fixas, nunca geradas pelo Gemini -- substituem
+// integralmente a orientacao GENERICA de Pix implementada em 23/08
+// ("faca um Pix pra nossa chave e envie o comprovante"), que nunca
+// vinculava o pagamento a uma cobranca real.
+//
+// Mensagem 1 -- confirmacao neutra, enviada ANTES de qualquer chamada
+// externa (Rocket/PagBank) -- nunca afirma que a cobranca ja existe.
+export const MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO =
+  "Certo! Vou preparar seu pagamento via Pix. Só um momento...";
+
+// Mensagem 2 -- so' enviada DEPOIS que a cobranca real existe (valor e
+// codigo Pix vem sempre de dado real: valorFormatado do Rocket,
+// codigoPix do PagBank -- nunca inventados). Reforca que a renovacao
+// so' e' confirmada depois que o PagBank reconhecer o pagamento (duas
+// confirmacoes, nunca uma so).
+export function montarMensagemPixRenovacao(
   valorFormatado: string,
+  codigoPix: string,
 ): string {
   return [
-    `Perfeito! Vamos renovar o acesso "${nomeAcesso}", do servidor ${servidorNome}, no plano ${planoNome}.`,
+    `Pronto! Aqui está o Pix para renovar seu plano: R$ ${valorFormatado}`,
     "",
-    `O valor da renovação é R$ ${valorFormatado}.`,
+    codigoPix,
     "",
-    "Para realizar a renovação, faça o pagamento via PIX e envie o comprovante aqui nesta conversa. Assim que recebermos o comprovante, faremos a conferência.",
+    "Assim que o pagamento for confirmado, vou te avisar por aqui.",
   ].join("\n");
 }
