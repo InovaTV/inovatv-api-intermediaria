@@ -110,18 +110,7 @@
 // Bloco 1 -- fluxo de renovacao com Pix real (2026-08-23,
 // docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md, Etapas 2/3).
 // Substitui INTEIRAMENTE a orientacao generica de Pix implementada mais
-// cedo no mesmo dia (nunca vinculada a uma cobranca real). Com o acesso
-// resolvido (propostaRenovacaoComAcesso), processarCobrancaRenovacao
-// (module-level, abaixo): reaproveita cobranca pendente existente pro
-// mesmo acesso (nunca duplica, Lacuna 9 decisao 2); senao, envia
-// mensagem 1 fixa -> consulta valor real DIRETO no Rocket (nunca via
-// /status, revertido nesta mesma etapa) -> cria cobranca OpenPix real
-// (Sandbox) -> persiste em cobrancas_pix -> envia mensagem 2 fixa com
-// o Pix real. Falha em qualquer ponto -> transfere pra humano,
-// reaproveitando o MESMO mecanismo generico ja usado no resto do
-// arquivo. Isolamento estrito: NAO trata imagem/comprovante, NAO gera
-// token, NAO chama Sigma, NAO altera vencimento -- isso e' o Bloco 2,
-// ainda nao implementado.
+// cedo no mesmo dia (nunca vinculada a uma cobranca real).
 //
 // Provedor trocado de PagBank para OpenPix em 2026-08-24 (ver
 // inovatv_central/CLAUDE.md) -- PagBank exige CPF/CNPJ do cliente
@@ -131,6 +120,20 @@
 // poc-pagbank-criar-cobranca/) preservado, nao apagado -- decisao
 // explicita do usuario, limpeza fica para depois da renovacao completa
 // funcionar.
+//
+// Bloco 2 (2026-08-24) -- MUDA a responsabilidade de
+// processarCobrancaRenovacao: com o acesso resolvido
+// (propostaRenovacaoComAcesso), a funcao agora reaproveita uma
+// SOLICITACAO ativa existente pro mesmo acesso (tokens_renovacao,
+// nunca duplica -- indice unico parcial no banco); senao, envia
+// mensagem 1 fixa -> consulta dados completos DIRETO no Rocket (nunca
+// via /status) -> cria tokens_renovacao -> envia mensagem 2 fixa com
+// o LINK de confirmacao (ACEITO/CANCELAR). Isolamento estrito, ainda
+// mais restrito que antes: NAO cria cobranca aqui (isso so' acontece
+// depois do ACEITO, dentro de confirmacao-renovacao/index.ts), NAO
+// chama Sigma, NAO altera vencimento. Inversao de ordem aprovada
+// explicitamente -- ACEITO acontece ANTES da cobranca existir, nao
+// depois do pagamento como no desenho original das Lacunas 1-9.
 
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import {
@@ -156,16 +159,16 @@ import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   MENSAGEM_SESSAO_EXPIRADA,
-  MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO,
+  MENSAGEM_BUSCANDO_DADOS_RENOVACAO,
+  MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
   formatarValorBRL,
   paraCentavos,
-  montarMensagemPixRenovacao,
+  montarMensagemLinkConfirmacaoRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
-import { consultarValorClienteRocket } from "../_shared/rocket_valor_cliente.ts";
-import { criarCobrancaOpenPix } from "../_shared/openpix_client.ts";
-import { buscarCobrancaPendente, criarCobrancaPixRegistro } from "../_shared/cobrancas_pix.ts";
+import { consultarClienteCompletoRocket } from "../_shared/rocket_valor_cliente.ts";
+import { buscarTokenAtivoPorPublicId, criarTokenRenovacao } from "../_shared/tokens_renovacao.ts";
 
 // Memoria de sessao (Camada 3, 2026-08-23 -- ver
 // docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
@@ -278,24 +281,25 @@ async function gravarIntencaoRenovacaoSeDemonstrada(
   await atualizarSessao(conversationId, { intencaoAtual: "renovacao" }).catch(() => {});
 }
 
-// Bloco 1 do fluxo de renovacao automatica com PagBank real (2026-08-23,
-// docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md, Etapas 2/3).
-// So' chamada quando propostaRenovacao foi aprovada E o acesso ja foi
-// resolvido com certeza (acessoResolvido != null) -- nunca decide isso
-// sozinha. Isolamento estrito preservado (Bloco 2 fica pra depois):
-// NAO trata imagem/comprovante, NAO gera token, NAO chama Sigma, NAO
-// altera vencimento -- so' leva a conversa ate' o cliente ter o Pix
-// real em maos.
+// Bloco 2 do fluxo de renovacao automatica (2026-08-24,
+// inovatv_central/CLAUDE.md, desenho aprovado). So' chamada quando
+// propostaRenovacao foi aprovada E o acesso ja foi resolvido com
+// certeza (acessoResolvido != null) -- nunca decide isso sozinha.
+// Isolamento estrito: NAO cria cobranca aqui (isso so' acontece
+// depois do ACEITO, em confirmacao-renovacao/index.ts), NAO trata
+// imagem/comprovante, NAO gera token de renovacao Sigma, NAO chama
+// Sigma, NAO altera vencimento -- so' leva a conversa ate' o cliente
+// ter o link de confirmacao em maos.
 //
-// Ordem: (1) reaproveita cobranca pendente existente pro mesmo acesso,
-// nunca duplica (Lacuna 9, decisao 2 -- reforcado por unique index
-// parcial no banco); (2) senao, envia a mensagem 1 (fixa, neutra,
-// ANTES de qualquer chamada externa lenta); (3) consulta o valor real
-// direto no Rocket (nunca via /status); (4) cria a cobranca PagBank
-// real (Sandbox); (5) persiste em cobrancas_pix; (6) envia a mensagem
-// 2 (fixa, com o Pix real). Qualquer falha em (3)/(4) -> transfere pra
-// humano, reaproveitando O MESMO mecanismo generico ja usado no resto
-// do arquivo (acionarTransferenciaHumana + MENSAGEM_TRANSFERENCIA_CLIENTE
+// Ordem: (1) reaproveita SOLICITACAO ativa existente pro mesmo acesso
+// (tokens_renovacao), nunca duplica -- reforcado por unique index
+// parcial no banco; (2) senao, envia a mensagem 1 (fixa, neutra, ANTES
+// de qualquer chamada externa lenta); (3) consulta os dados completos
+// direto no Rocket (nunca via /status); (4) cria tokens_renovacao
+// (estado inicial 'aguardando_confirmacao'); (5) envia a mensagem 2
+// (fixa, com os dados + link ACEITO/CANCELAR). Falha em (3) -> transfere
+// pra humano, reaproveitando O MESMO mecanismo generico ja usado no
+// resto do arquivo (acionarTransferenciaHumana + MENSAGEM_TRANSFERENCIA_CLIENTE
 // + aviso ao Jose) -- nenhum mecanismo novo de transferencia.
 async function processarCobrancaRenovacao(
   conversa: { conversation_id: string },
@@ -378,67 +382,120 @@ async function processarCobrancaRenovacao(
     return { envioResultado: { enviado: false }, textoEnviado: null };
   }
 
-  // 1) Cobranca pendente ja existe pra este acesso? (nunca duplica --
-  // Lacuna 9, decisao 2)
-  let cobrancaExistente;
+  // 1) Solicitacao ATIVA ja existe pra este acesso? (nunca duplica --
+  // unique index parcial em tokens_renovacao)
+  let tokenExistente;
   try {
-    cobrancaExistente = await buscarCobrancaPendente(publicId);
+    tokenExistente = await buscarTokenAtivoPorPublicId(publicId);
   } catch {
-    return await transferirPorFalha("renovacao:falha_consultar_cobranca");
+    return await transferirPorFalha("renovacao:falha_consultar_token");
   }
 
-  if (cobrancaExistente) {
+  if (tokenExistente) {
     try {
       await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
     } catch {
       // best-effort
     }
-    const valorFormatado =
-      formatarValorBRL(cobrancaExistente.valor_esperado_centavos / 100) ?? "0,00";
-    const texto = montarMensagemPixRenovacao(valorFormatado, cobrancaExistente.qr_code_texto);
-    const envio = await enviarMensagemWhatsApp(telefone, texto);
+    const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO);
     if (envio.outcome === "success") {
       try {
-        await inserirMensagem(conversa.conversation_id, "ia", texto, null);
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO, null);
       } catch {
         // best-effort
       }
     }
     return {
       envioResultado: { enviado: envio.outcome === "success" },
-      textoEnviado: envio.outcome === "success" ? texto : null,
+      textoEnviado: envio.outcome === "success" ? MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO : null,
     };
   }
 
   // 2) Mensagem 1 (fixa) -- confirmacao neutra, antes de qualquer
-  // chamada externa lenta (Rocket/PagBank). Ainda NAO grava "cliente"
-  // aqui -- se o valor/criacao da cobranca falhar logo abaixo, o fluxo
-  // termina em transferirPorFalha, que grava cliente+ia+sistema
-  // sozinho; gravar agora duplicaria. O log desta mensagem 1 especifica
-  // (se enviada) so' acontece mais abaixo, apos confirmar que NAO
-  // vamos transferir.
-  const envioMsg1 = await enviarMensagemWhatsApp(telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
+  // chamada externa lenta (Rocket). Ainda NAO grava "cliente" aqui --
+  // se a consulta falhar logo abaixo, o fluxo termina em
+  // transferirPorFalha, que grava cliente+ia+sistema sozinho; gravar
+  // agora duplicaria. O log desta mensagem 1 especifica (se enviada)
+  // so' acontece mais abaixo, apos confirmar que NAO vamos transferir.
+  const envioMsg1 = await enviarMensagemWhatsApp(telefone, MENSAGEM_BUSCANDO_DADOS_RENOVACAO);
 
-  // 3) Valor real, direto no Rocket -- NUNCA via /status (revertido
-  // nesta mesma etapa). Ausente/invalido -> transfere, nunca inventa.
-  const valorResultado = await consultarValorClienteRocket(publicId);
+  // 3) Dados completos, direto no Rocket -- NUNCA via /status. Ausente/
+  // invalido -> transfere, nunca inventa.
+  const dadosResultado = await consultarClienteCompletoRocket(publicId);
   const valorCentavos =
-    valorResultado.outcome === "success" ? paraCentavos(valorResultado.valor) : null;
-  if (!valorCentavos) {
+    dadosResultado.outcome === "success" ? paraCentavos(dadosResultado.valor) : null;
+  if (dadosResultado.outcome !== "success" || !valorCentavos) {
     return await transferirPorFalha("renovacao:valor_nao_cadastrado");
   }
 
-  // 4) Cria a cobranca real na OpenPix (Sandbox nesta etapa).
-  // operacaoId e' enviado como correlationID -- a propria OpenPix
-  // rejeita reenvio do mesmo valor (HTTP 400 explicito, confirmado em
-  // teste real), reforcando (nao substituindo) a trava de banco em (1).
-  const operacaoId = crypto.randomUUID();
-  const descricaoItem =
-    `Renovação InovaTV - Plano ${acessoResolvido.cliente?.planoNome ?? ""}`.trim();
-  const criarResultado = await criarCobrancaOpenPix(operacaoId, valorCentavos, descricaoItem);
-  if (criarResultado.outcome !== "success") {
-    return await transferirPorFalha("renovacao:falha_criar_cobranca");
+  // 4) Cria tokens_renovacao -- estado inicial 'aguardando_confirmacao',
+  // expira em 2h (decisao aprovada). Nenhuma cobranca criada ainda --
+  // so' acontece depois do ACEITO (confirmacao-renovacao/index.ts).
+  //
+  // Corrida real possivel (correcao de risco, 2026-08-24, revisao do
+  // Bloco 2): duas mensagens quase simultaneas do mesmo cliente pra
+  // este acesso podem passar as duas pelo passo 1 (SELECT nao e'
+  // atomico com este INSERT) -- o indice unico parcial do banco
+  // (tokens_renovacao_ativo_unico_por_acesso_idx) corretamente barra a
+  // segunda insercao, mas precisa deste try/catch pra nao subir como
+  // excecao nao tratada. Deliberadamente feito AINDA ANTES do "commit
+  // point" de gravar a mensagem do cliente (movido pra baixo desta
+  // criacao, ver comentario abaixo) -- assim, se cair aqui, ainda e'
+  // seguro reaproveitar transferirPorFalha/o padrao do passo 1 sem
+  // duplicar nenhum log.
+  let criacaoToken: Awaited<ReturnType<typeof criarTokenRenovacao>>;
+  try {
+    criacaoToken = await criarTokenRenovacao({
+      conversationId: conversa.conversation_id,
+      publicId,
+      telefone,
+      clienteNome: dadosResultado.nome,
+      servidorNome: dadosResultado.servidorNome,
+      planoNome: dadosResultado.planoNome,
+      valorEsperadoCentavos: valorCentavos,
+      vencimentoAtual: dadosResultado.vencimento,
+    });
+  } catch (erro) {
+    console.log(
+      "[orchestrator] falha ao criar tokens_renovacao -- verificando se e' corrida com solicitacao ja existente",
+      JSON.stringify({ publicId, erro: String(erro) }),
+    );
+
+    let tokenAtivoAposFalha = null;
+    try {
+      tokenAtivoAposFalha = await buscarTokenAtivoPorPublicId(publicId);
+    } catch {
+      // ignora -- cai no fallback generico abaixo
+    }
+
+    if (tokenAtivoAposFalha) {
+      // Confirma: foi a corrida do INSERT com outra requisicao pro
+      // mesmo acesso -- mesmo texto/comportamento do passo 1.
+      try {
+        await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+      } catch {
+        // best-effort
+      }
+      const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO);
+      if (envio.outcome === "success") {
+        try {
+          await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO, null);
+        } catch {
+          // best-effort
+        }
+      }
+      return {
+        envioResultado: { enviado: envio.outcome === "success" },
+        textoEnviado: envio.outcome === "success" ? MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO : null,
+      };
+    }
+
+    // Falha genuinamente inesperada (nao a corrida) -- ainda antes do
+    // "commit point", reaproveita o mesmo mecanismo generico de
+    // transferencia de sempre, sem risco de duplicar log.
+    return await transferirPorFalha("renovacao:falha_criar_token");
   }
+  const { tokenBruto, registro } = criacaoToken;
 
   // A partir daqui o fluxo NUNCA mais transfere -- grava a mensagem do
   // cliente agora (uma unica vez) e a mensagem 1, se ela tiver sido
@@ -450,41 +507,27 @@ async function processarCobrancaRenovacao(
   }
   if (envioMsg1.outcome === "success") {
     try {
-      await inserirMensagem(
-        conversa.conversation_id,
-        "ia",
-        MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO,
-        null,
-      );
+      await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_BUSCANDO_DADOS_RENOVACAO, null);
     } catch {
       // best-effort
     }
   }
 
-  // 5) Persiste -- se falhar aqui, a cobranca ja existe de verdade na
-  // OpenPix; ainda assim entrega o Pix ao cliente (evita "pagar e nao
-  // ter pra onde"), so registra o problema pra investigacao manual.
-  try {
-    await criarCobrancaPixRegistro({
-      operacaoId,
-      conversationId: conversa.conversation_id,
-      publicId,
-      servidorNome: acessoResolvido.cliente?.servidorNome ?? null,
-      planoNome: acessoResolvido.cliente?.planoNome ?? null,
-      valorEsperadoCentavos: valorCentavos,
-      transactionIdProvedor: criarResultado.transactionId,
-      qrCodeTexto: criarResultado.qrCodeTexto,
-    });
-  } catch (erro) {
-    console.log(
-      "[orchestrator] falha ao persistir cobranca_pix (cobranca ja existe na OpenPix)",
-      JSON.stringify({ operacaoId, transactionId: criarResultado.transactionId, erro: String(erro) }),
-    );
-  }
-
-  // 6) Mensagem 2 (fixa, dados reais -- valor do Rocket, Pix do PagBank)
+  // 5) Mensagem 2 (fixa, dados reais do Rocket + link de confirmacao)
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const urlConfirmacao = `${supabaseUrl}/functions/v1/confirmacao-renovacao?token=${tokenBruto}`;
   const valorFormatado = formatarValorBRL(valorCentavos / 100) ?? "0,00";
-  const texto2 = montarMensagemPixRenovacao(valorFormatado, criarResultado.qrCodeTexto);
+  const vencimentoFormatado = new Date(registro.vencimento_atual).toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+  });
+  const texto2 = montarMensagemLinkConfirmacaoRenovacao({
+    clienteNome: registro.cliente_nome,
+    servidorNome: registro.servidor_nome,
+    planoNome: registro.plano_nome,
+    valorFormatado,
+    vencimentoFormatado,
+    urlConfirmacao,
+  });
   const envio2 = await enviarMensagemWhatsApp(telefone, texto2);
   if (envio2.outcome === "success") {
     try {

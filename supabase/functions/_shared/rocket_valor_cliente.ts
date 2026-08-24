@@ -28,6 +28,58 @@ export interface ValorClienteRocket {
 
 export type ConsultaValorClienteResultado = ValorClienteRocket | { outcome: "unavailable" };
 
+// Bloco 2 (2026-08-24) -- dados completos pra apresentar na tela de
+// confirmacao (ACEITO/CANCELAR) e pro snapshot de tokens_renovacao.
+// Mesmo endpoint/API-Key de consultarValorClienteRocket (acima) --
+// so' devolve mais campos do mesmo corpo ja recebido, nao e' uma
+// segunda chamada.
+export interface ClienteCompletoRocket {
+  outcome: "success";
+  nome: string;
+  servidorNome: string;
+  planoNome: string;
+  valor: string | number | null;
+  vencimento: string;
+}
+
+export type ConsultaClienteCompletoResultado = ClienteCompletoRocket | { outcome: "unavailable" };
+
+export async function consultarClienteCompletoRocket(
+  publicId: string,
+): Promise<ConsultaClienteCompletoResultado> {
+  const rocketBaseUrl = Deno.env.get("ROCKET_BASE_URL");
+  const rocketApiKey = Deno.env.get("ROCKET_API_KEY");
+  if (!rocketBaseUrl || !rocketApiKey) return { outcome: "unavailable" };
+
+  try {
+    const resp = await fetch(
+      `${rocketBaseUrl}/gerenciador/api/v1/cliente/${encodeURIComponent(publicId)}`,
+      {
+        headers: { "X-API-Key": rocketApiKey },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+    if (!resp.ok) return { outcome: "unavailable" };
+
+    const data = await resp.json().catch(() => null);
+    const cliente = data?.cliente;
+    if (!cliente || !cliente.nome || !cliente.servidor?.nome || !cliente.plano?.nome || !cliente.vencimento) {
+      return { outcome: "unavailable" };
+    }
+
+    return {
+      outcome: "success",
+      nome: cliente.nome,
+      servidorNome: cliente.servidor.nome,
+      planoNome: cliente.plano.nome,
+      valor: cliente.valor ?? null,
+      vencimento: cliente.vencimento,
+    };
+  } catch {
+    return { outcome: "unavailable" };
+  }
+}
+
 const TIMEOUT_MS = 10000;
 
 export async function consultarValorClienteRocket(

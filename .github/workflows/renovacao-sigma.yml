@@ -1,0 +1,57 @@
+# Bloco 2 do fluxo de renovacao automatica (2026-08-24,
+# inovatv_central/CLAUDE.md, desenho aprovado). Executa a renovacao
+# real no Sigma via Playwright, reutilizando o mecanismo ja comprovado
+# em scripts/executar-renovacao-controlada.mjs (preservado como
+# referencia, nao alterado por este workflow).
+#
+# Disparado via workflow_dispatch (API do GitHub,
+# _shared/github_actions_dispatch.ts), NUNCA manualmente para clientes
+# reais fora do fluxo automatico -- so recebe operacao_id, nenhum dado
+# sensivel como parametro. O job busca tudo mais (dados da cobranca/
+# acesso, sessao do Rocket) direto no Supabase, em tempo de execucao.
+#
+# concurrency: garante que o GitHub nunca roda 2 execucoes concorrentes
+# para o mesmo operacao_id -- defesa extra, alem da reivindicacao
+# atomica que ja acontece do lado do Supabase antes do disparo.
+name: Renovação Sigma
+
+on:
+  workflow_dispatch:
+    inputs:
+      operacao_id:
+        description: "operacao_id da cobranca ja confirmada como paga"
+        required: true
+        type: string
+
+concurrency:
+  group: renovacao-sigma-${{ github.event.inputs.operacao_id }}
+  cancel-in-progress: false
+
+jobs:
+  renovar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencias
+        run: npm install playwright@1.47.0
+
+      - name: Instalar Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Executar renovação real
+        env:
+          OPERACAO_ID: ${{ github.event.inputs.operacao_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ROCKET_BASE_URL: ${{ secrets.ROCKET_BASE_URL }}
+          ROCKET_API_KEY: ${{ secrets.ROCKET_API_KEY }}
+          RENOVACAO_SIGMA_CALLBACK_TOKEN: ${{ secrets.RENOVACAO_SIGMA_CALLBACK_TOKEN }}
+        run: node scripts/renovacao-sigma-workflow.mjs

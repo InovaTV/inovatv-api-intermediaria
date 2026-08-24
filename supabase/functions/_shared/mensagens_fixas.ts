@@ -90,3 +90,50 @@ export function montarMensagemPixRenovacao(
     "Assim que o pagamento for confirmado, vou te avisar por aqui.",
   ].join("\n");
 }
+
+// Bloco 2 (2026-08-24, inovatv_central/CLAUDE.md) -- ACEITO passa a
+// acontecer ANTES da cobranca existir (inversao de ordem aprovada
+// explicitamente). Mensagem 1 do fluxo novo: buscar os dados reais no
+// Rocket pra apresentar (nome/servidor/plano/valor/vencimento), antes
+// de qualquer cobranca ser criada. Substitui, NESTE ponto do fluxo, a
+// antiga MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO -- que continua
+// existindo e sendo usada, sem alteracao, no ponto em que sempre foi
+// usada (logo apos o ACEITO, antes de criar a cobranca OpenPix).
+export const MENSAGEM_BUSCANDO_DADOS_RENOVACAO =
+  "Só um momento, vou buscar os dados da sua renovação...";
+
+// Mensagem 2 do fluxo novo -- so' enviada depois que o token existe de
+// verdade (dados reais do Rocket, nunca inventados). Apresenta os
+// dados pro cliente conferir e o link de confirmacao (ACEITO/CANCELAR).
+// Nunca afirma que a cobranca ja existe -- ela so' e' criada DEPOIS do
+// clique em ACEITO.
+export function montarMensagemLinkConfirmacaoRenovacao(dados: {
+  clienteNome: string;
+  servidorNome: string;
+  planoNome: string;
+  valorFormatado: string;
+  vencimentoFormatado: string;
+  urlConfirmacao: string;
+}): string {
+  return [
+    "Aqui estão os dados da sua renovação, confira antes de confirmar:",
+    "",
+    `👤 Cliente: ${dados.clienteNome}`,
+    `🖥️ Servidor: ${dados.servidorNome}`,
+    `📋 Plano: ${dados.planoNome}`,
+    `💰 Valor: R$ ${dados.valorFormatado}`,
+    `📅 Vencimento atual: ${dados.vencimentoFormatado}`,
+    "",
+    "Pra confirmar ou cancelar, acesse o link abaixo:",
+    dados.urlConfirmacao,
+  ].join("\n");
+}
+
+export const MENSAGEM_CANCELAMENTO_RENOVACAO =
+  "Ok, cancelado! Se quiser renovar depois, é só me chamar novamente.";
+
+// Reaproveitada quando ja existe uma solicitacao ATIVA pro mesmo
+// acesso (tokens_renovacao_ativo_unico_por_acesso_idx) -- nunca cria
+// uma segunda, so' lembra o cliente do que ja esta em andamento.
+export const MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO =
+  "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure o link que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
