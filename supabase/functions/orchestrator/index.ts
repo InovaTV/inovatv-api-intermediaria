@@ -153,7 +153,7 @@ import { montarContextoCliente, montarContextoConversa } from "../_shared/contex
 import { buscarConhecimentoRelevante } from "../_shared/conhecimento.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
-import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarMensagemWhatsApp, enviarMensagemInterativaWhatsApp, enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
 import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
@@ -163,7 +163,7 @@ import {
   MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
   formatarValorBRL,
   paraCentavos,
-  montarMensagemLinkConfirmacaoRenovacao,
+  montarMensagemBotoesConfirmacaoRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
@@ -495,11 +495,31 @@ async function processarCobrancaRenovacao(
     // transferencia de sempre, sem risco de duplicar log.
     return await transferirPorFalha("renovacao:falha_criar_token");
   }
-  const { tokenBruto, registro } = criacaoToken;
+  const { registro } = criacaoToken;
 
-  // A partir daqui o fluxo NUNCA mais transfere -- grava a mensagem do
-  // cliente agora (uma unica vez) e a mensagem 1, se ela tiver sido
-  // enviada com sucesso la' atras.
+  // 5) Mensagem 2 interativa (dados reais do Rocket, sem URL/token bruto).
+  const valorFormatado = formatarValorBRL(valorCentavos / 100) ?? "0,00";
+  const vencimentoFormatado = new Date(registro.vencimento_atual).toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+  });
+  const texto2 = montarMensagemBotoesConfirmacaoRenovacao({
+    clienteNome: registro.cliente_nome,
+    servidorNome: registro.servidor_nome,
+    planoNome: registro.plano_nome,
+    valorFormatado,
+    vencimentoFormatado,
+  });
+  const envio2 = await enviarMensagemInterativaWhatsApp(telefone, texto2, [
+    { id: `renovacao:aceitar:${registro.token_hash}`, titulo: "ACEITO" },
+    { id: `renovacao:cancelar:${registro.token_hash}`, titulo: "CANCELAR" },
+  ]);
+  if (envio2.outcome !== "success") {
+    // O token ja existe, mas a proposta nao chegou ao cliente. O helper
+    // registra cliente+contexto uma unica vez e aciona o atendimento
+    // humano, sem inventar fallback por link.
+    return await transferirPorFalha("renovacao:falha_enviar_botoes_confirmacao");
+  }
+
   try {
     await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
   } catch {
@@ -512,34 +532,15 @@ async function processarCobrancaRenovacao(
       // best-effort
     }
   }
-
-  // 5) Mensagem 2 (fixa, dados reais do Rocket + link de confirmacao)
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-  const urlConfirmacao = `${supabaseUrl}/functions/v1/confirmacao-renovacao?token=${tokenBruto}`;
-  const valorFormatado = formatarValorBRL(valorCentavos / 100) ?? "0,00";
-  const vencimentoFormatado = new Date(registro.vencimento_atual).toLocaleDateString("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-  });
-  const texto2 = montarMensagemLinkConfirmacaoRenovacao({
-    clienteNome: registro.cliente_nome,
-    servidorNome: registro.servidor_nome,
-    planoNome: registro.plano_nome,
-    valorFormatado,
-    vencimentoFormatado,
-    urlConfirmacao,
-  });
-  const envio2 = await enviarMensagemWhatsApp(telefone, texto2);
-  if (envio2.outcome === "success") {
-    try {
-      await inserirMensagem(conversa.conversation_id, "ia", texto2, null);
-    } catch {
-      // best-effort
-    }
+  try {
+    await inserirMensagem(conversa.conversation_id, "ia", texto2, null);
+  } catch {
+    // best-effort
   }
 
   return {
-    envioResultado: { enviado: envio2.outcome === "success" },
-    textoEnviado: envio2.outcome === "success" ? texto2 : null,
+    envioResultado: { enviado: true },
+    textoEnviado: texto2,
   };
 }
 

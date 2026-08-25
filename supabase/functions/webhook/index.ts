@@ -48,6 +48,7 @@ interface MetaMensagem {
   from: string;
   type: string;
   text?: { body?: string };
+  interactive?: { type?: string; button_reply?: { id?: string } };
 }
 
 interface MetaContato {
@@ -150,6 +151,20 @@ async function chamarOrquestrador(
   }
 }
 
+const ID_RENOVACAO = /^renovacao:(aceitar|cancelar):[0-9a-f]{64}$/;
+async function confirmarRenovacaoWhatsApp(telefone: string, buttonReplyId: string): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const tokenInterno = Deno.env.get("RENOVACAO_CONFIRMAR_INTERNAL_TOKEN");
+  if (!supabaseUrl || !tokenInterno) {
+    console.log("[webhook] confirmacao de renovacao abortada -- configuracao ausente", JSON.stringify({ supabaseUrlPresente: !!supabaseUrl, tokenPresente: !!tokenInterno }));
+    return;
+  }
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/renovacao-confirmar`, { method: "POST", headers: { "Content-Type": "application/json", "X-Internal-Token": tokenInterno }, body: JSON.stringify({ telefone, buttonReplyId }), signal: AbortSignal.timeout(60000) });
+    if (!resp.ok) console.log("[webhook] confirmacao de renovacao falhou", JSON.stringify({ status: resp.status, corpo: await resp.text().catch(() => "") }));
+  } catch (erro) { console.log("[webhook] excecao ao confirmar renovacao", String(erro)); }
+}
+
 // Dedup roda SEMPRE de forma sincrona (awaited pelo handler principal,
 // antes do 200) -- e' a parte atomica que precisa terminar antes de
 // decidir o que fazer. Só a chamada ao Orquestrador (lenta, Gemini +
@@ -199,6 +214,16 @@ async function processarValue(value: MetaValue): Promise<void> {
       EdgeRuntime.waitUntil(
         chamarOrquestrador(mensagem.from, mensagem.text.body, contato?.profile?.name),
       );
+      continue;
+    }
+
+    if (mensagem.type === "interactive" && mensagem.interactive?.type === "button_reply") {
+      const id = mensagem.interactive.button_reply?.id;
+      if (!id || !ID_RENOVACAO.test(id)) {
+        console.log("[webhook] button_reply de renovacao invalido", JSON.stringify({ tipo: mensagem.interactive.type }));
+        continue;
+      }
+      EdgeRuntime.waitUntil(confirmarRenovacaoWhatsApp(mensagem.from, id));
       continue;
     }
 

@@ -77,6 +77,31 @@ export async function enviarMensagemWhatsApp(
   });
 }
 
+// Botoes interativos nativos da Cloud API. A decisao de negocio (quando
+// enviar e quais IDs usar) pertence ao Orquestrador; aqui so existe o
+// transporte autenticado e o mesmo contrato de falha dos demais envios.
+export async function enviarMensagemInterativaWhatsApp(
+  paraNumero: string,
+  texto: string,
+  botoes: Array<{ id: string; titulo: string }>,
+): Promise<EnvioWhatsAppResultado> {
+  return enviarPayloadWhatsApp({
+    messaging_product: "whatsapp",
+    to: paraNumero,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: texto },
+      action: {
+        buttons: botoes.map((botao) => ({
+          type: "reply",
+          reply: { id: botao.id, title: botao.titulo },
+        })),
+      },
+    },
+  });
+}
+
 // Envio via Message Template -- unico formato aceito pela Cloud API
 // pra mensagem iniciada pela empresa fora de uma janela de atendimento
 // ativa (Componente 1 §16-A). O template precisa estar aprovado pela

@@ -129,6 +129,28 @@ export function montarMensagemLinkConfirmacaoRenovacao(dados: {
   ].join("\n");
 }
 
+// Mesmos dados reais apresentados pelo fluxo legado, sem URL. O texto e'
+// usado tanto no corpo da mensagem interativa quanto no historico local.
+export function montarMensagemBotoesConfirmacaoRenovacao(dados: {
+  clienteNome: string;
+  servidorNome: string;
+  planoNome: string;
+  valorFormatado: string;
+  vencimentoFormatado: string;
+}): string {
+  return [
+    "Aqui estao os dados da sua renovacao, confira antes de confirmar:",
+    "",
+    `Cliente: ${dados.clienteNome}`,
+    `Servidor: ${dados.servidorNome}`,
+    `Plano: ${dados.planoNome}`,
+    `Valor: R$ ${dados.valorFormatado}`,
+    `Vencimento atual: ${dados.vencimentoFormatado}`,
+    "",
+    "Confirme ou cancele usando os botoes abaixo.",
+  ].join("\n");
+}
+
 export const MENSAGEM_CANCELAMENTO_RENOVACAO =
   "Ok, cancelado! Se quiser renovar depois, é só me chamar novamente.";
 
@@ -136,4 +158,4 @@ export const MENSAGEM_CANCELAMENTO_RENOVACAO =
 // acesso (tokens_renovacao_ativo_unico_por_acesso_idx) -- nunca cria
 // uma segunda, so' lembra o cliente do que ja esta em andamento.
 export const MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO =
-  "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure o link que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
+  "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure os botões que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
