@@ -184,16 +184,35 @@ export async function reivindicarCancelamento(tokenHash: string): Promise<TokenR
 
 // Vincula a cobranca OpenPix criada logo apos o ACEITO -- so' grava se
 // o token ainda estiver 'autorizada' (defesa contra corrida com um
-// cancelamento tardio improvavel).
+// cancelamento tardio improvavel). PRE-REQUISITO: a linha em
+// cobrancas_pix(operacaoId) precisa existir ANTES desta chamada --
+// tokens_renovacao.operacao_id tem foreign key pra cobrancas_pix
+// (migration 20260824130000_tokens_renovacao.sql). Chamar isto antes
+// de criarCobrancaPixRegistro sempre viola a FK (achado real,
+// homologacao 27/08/2026).
+//
+// Verificavel: encadeia .select().maybeSingle() e trata "nenhuma linha
+// afetada" (data null, sem erro de banco) como falha tao real quanto
+// um erro de banco -- nunca retorna silenciosamente sem confirmar que
+// exatamente uma linha foi alterada. O chamador trata qualquer
+// excecao daqui como condicao fatal (Componente 1: nunca best-effort
+// para o vinculo que o restante do fluxo depende).
 export async function vincularOperacaoAoToken(id: string, operacaoId: string): Promise<void> {
   const client = getServiceClient();
-  const { error } = await client
+  const { data, error } = await client
     .from("tokens_renovacao")
     .update({ operacao_id: operacaoId })
     .eq("id", id)
-    .eq("estado", "autorizada");
+    .eq("estado", "autorizada")
+    .select("id")
+    .maybeSingle();
 
   if (error) throw error;
+  if (!data) {
+    throw new Error(
+      `vincularOperacaoAoToken: nenhuma linha afetada (id=${id}, operacaoId=${operacaoId}) -- token pode nao estar mais em 'autorizada', ou a cobranca referenciada ainda nao existe em cobrancas_pix`,
+    );
+  }
 }
 
 // Reivindicacao atomica do INICIO da renovacao -- disparada pelo

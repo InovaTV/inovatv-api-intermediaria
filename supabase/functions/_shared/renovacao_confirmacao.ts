@@ -76,9 +76,14 @@ export async function confirmarRenovacao(params: {
     return { outcome: "falha_cobranca" };
   }
 
-  await vincularOperacaoAoToken(autorizado.id, operacaoId).catch((erro) => {
-    console.log("[renovacao_confirmacao] falha ao vincular operacao ao token", JSON.stringify({ erro: String(erro) }));
-  });
+  // Ordem corrigida (achado real, homologacao 27/08/2026):
+  // tokens_renovacao.operacao_id referencia cobrancas_pix(operacao_id)
+  // via foreign key -- a linha em cobrancas_pix precisa existir ANTES
+  // do vinculo, nunca depois. A ordem antiga (vincular primeiro) violava
+  // essa FK sempre, sem excecao, e a falha ficava engolida por um
+  // .catch() best-effort -- o cliente recebia o Pix normalmente, mas
+  // o pagamento nunca conseguia avancar sozinho (openpix-webhook nunca
+  // encontrava o token, porque operacao_id nunca era gravado).
   await criarCobrancaPixRegistro({
     operacaoId,
     conversationId: autorizado.conversation_id,
@@ -91,6 +96,34 @@ export async function confirmarRenovacao(params: {
   }).catch((erro) => {
     console.log("[renovacao_confirmacao] falha ao persistir cobranca_pix", JSON.stringify({ operacaoId, transactionId: cobranca.transactionId, erro: String(erro) }));
   });
+
+  // Vinculo tratado como condicao FATAL, nunca best-effort -- sem ele,
+  // o pagamento fica orfao (openpix-webhook nunca encontra o token pra
+  // avancar a renovacao), e isso so seria descoberto manualmente. Se
+  // criarCobrancaPixRegistro falhou acima, esta chamada tambem falha
+  // (a FK segue sem satisfazer) -- mesmo caminho de falha cobre os
+  // dois casos, sem duplicar tratamento.
+  try {
+    await vincularOperacaoAoToken(autorizado.id, operacaoId);
+  } catch (erro) {
+    console.log(
+      "[renovacao_confirmacao] falha fatal ao vincular operacao ao token -- pagamento ficaria orfao sem esta transferencia",
+      JSON.stringify({ tokenId: autorizado.id, operacaoId, erro: String(erro) }),
+    );
+    await acionarTransferenciaHumana(
+      autorizado.conversation_id,
+      "renovacao:falha_vincular_operacao_token",
+      "(cliente confirmou ACEITO)",
+      "",
+    ).catch(() => {});
+    await marcarAutorizacaoComoFalha(autorizado.id, "renovacao:falha_vincular_operacao_token").catch((erro2) => {
+      console.log(
+        "[renovacao_confirmacao] falha ao liberar token apos falha de vinculo",
+        JSON.stringify({ tokenId: autorizado.id, erro: String(erro2) }),
+      );
+    });
+    return { outcome: "falha_cobranca" };
+  }
 
   const valor = formatarValorBRL(autorizado.valor_esperado_centavos / 100) ?? "0,00";
   const textoPix = montarMensagemPixRenovacao(valor, cobranca.qrCodeTexto);
