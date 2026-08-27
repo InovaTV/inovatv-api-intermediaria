@@ -149,10 +149,46 @@ Antes de cogitar qualquer deploy do commit `8d85f94`:
      `JANELA_EXPIRACAO_MS`) poderia ler essa mensagem de forma
      imprecisa. Autoexpira em até 2h, não bloqueia funcionamento —
      registrado, não corrigido.
-2. **Comportamento fora da janela de 24h do WhatsApp/Meta** — ainda
-   não definido o que acontece quando a janela de atendimento está
-   fechada: falhar e transferir, usar template aprovado com botões, ou
-   outro caminho aprovado.
+2. **Comportamento fora da janela de 24h do WhatsApp/Meta — DECIDIDO
+   (27/08/2026), NÃO IMPLEMENTADO — segue bloqueando deploy.** Decisão
+   do usuário: fora da janela de 24h, o fluxo não envia mensagem livre
+   nem mensagem interativa de renovação; comunicação proativa nesse
+   cenário usa somente template aprovado, quando fizer sentido
+   iniciar/retomar a conversa; sem template adequado e aprovado pra
+   esse cenário, o sistema aguarda uma nova mensagem do cliente, sem
+   forçar nada; uma vez o cliente reabrindo a janela, o fluxo normal
+   (botões ACEITO/CANCELAR) pode prosseguir normalmente. **Não será
+   criada lógica para contornar a regra de 24h.**
+
+   **Auditoria do código (27/08/2026) encontrou um gap real, ainda não
+   corrigido.** Hoje, quando `enviarMensagemInterativaWhatsApp` falha
+   (`envio2.outcome !== "success"`) dentro de
+   `processarCobrancaRenovacao` (`orchestrator/index.ts`), o código cai
+   em `transferirPorFalha("renovacao:falha_enviar_botoes_confirmacao")`
+   — que marca a conversa `aguardando_humano`, tenta enviar
+   `MENSAGEM_TRANSFERENCIA_CLIENTE` como **texto livre** (que também
+   falharia fora da janela, pelo mesmo motivo) e notifica o José via
+   template. Ou seja: hoje, estar fora da janela de 24h é tratado
+   exatamente como qualquer outra falha genérica de envio — vira
+   transferência humana, não "aguardar nova mensagem do cliente" como
+   a política decidida pede.
+
+   **Causa raiz:** `EnvioWhatsAppResultado` (`_shared/whatsapp_client.ts`)
+   só distingue `success`/`unavailable` — o código de erro real da
+   Graph API (ex.: `131047`, o erro específico da Meta para "fora da
+   janela de 24h") é só logado internamente
+   (`console.log` em `enviarPayloadWhatsApp`), nunca repassado ao
+   chamador. O Orchestrator hoje não tem como saber que uma falha de
+   envio foi especificamente "fora da janela" — trata tudo igual.
+
+   **Implementação pendente, escopo ainda não autorizado.** Expor o
+   motivo real da falha até o Orchestrator, tratar "fora da janela"
+   como caso distinto de qualquer outro `unavailable`, e então esperar
+   a próxima mensagem do cliente em vez de transferir. **Nenhum código
+   foi alterado por este registro** — decisão de produto e achado
+   técnico documentados; a implementação em si fica para quando for
+   explicitamente autorizada, como etapa própria, com sua própria
+   revisão.
 3. **Teste ponta a ponta real pelo WhatsApp** — nenhum dos passos
    abaixo foi validado com cliente/ambiente real: mensagem interativa
    real, clique ACEITO real, clique CANCELAR real, duplicidade,
@@ -280,8 +316,14 @@ continuar na versão do Bloco 1 (seção 0).
    Bloco 2** — reconferir `supabase functions list` (`updated_at` de
    `orchestrator` e `webhook`, e a existência de `renovacao-confirmar`)
    antes de qualquer teste real pelo WhatsApp.
-4. As três pendências da seção 3 precisam de decisão/resolução antes
-   de qualquer deploy — nenhuma foi resolvida por esta auditoria.
+4. Status das três pendências da seção 3, todas ainda bloqueando
+   deploy: item 1 (fallback dos links antigos) **fechado** por
+   auditoria em 27/08/2026, com duas dívidas técnicas aceitas
+   deliberadamente; item 2 (janela de 24h) **decidido, mas não
+   implementado** — a política está definida, o código ainda não a
+   segue (gap real documentado); item 3 (teste ponta a ponta real)
+   **ainda não iniciado**. Nenhum deploy enquanto os itens 2 e 3 não
+   estiverem de fato resolvidos/implementados.
 5. Deploy de `orchestrator`, `webhook` e/ou `renovacao-confirmar` é
    decisão e execução própria, separada — precisa de autorização
    explícita nova, não decorre da aprovação do código em si nem da
