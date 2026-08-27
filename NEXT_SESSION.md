@@ -1,58 +1,134 @@
-# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-24, atualizado pós-Bloco 2)
+# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-27, auditoria do commit `8d85f94`)
 
-> Substitui integralmente a versão anterior deste arquivo (commitada em
-> `99d67aa`, logo após o Bloco 1/OpenPix — dizia explicitamente "Bloco 2
-> continua não iniciado"). **Isso ficou desatualizado**: o Bloco 2 foi
-> implementado e commitado (`6191cab`) na mesma sessão, cerca de 4h
-> depois, sem que este checkpoint fosse reescrito para refletir isso —
-> achado e corrigido só na sessão seguinte, ao retomar o trabalho.
+> Substitui integralmente a versão anterior (commitada em `b5b767b`,
+> 2026-08-24 — "checkpoint pós-Bloco 2"). **Motivo da substituição:**
+> entre aquele checkpoint e esta atualização, uma sessão (usando o
+> Codex) implementou e **publicou em `origin/main`** exatamente o
+> próximo passo que a versão anterior deste arquivo já tinha aprovado
+> (sua seção 4: migrar ACEITO/CANCELAR de link para botões interativos
+> do WhatsApp) — mas o commit resultante (`8d85f94`, 25/08/2026) nunca
+> atualizou este checkpoint. Isso só foi percebido e auditado nesta
+> sessão (27/08/2026), comparando `git log`/`git show` com `supabase
+> functions list` — mesma disciplina que a seção 0 da versão anterior
+> já tinha usado para constatar o atraso do Bloco 2 em produção.
 > **Leia isto primeiro, antes de qualquer suposição ou nova
 > investigação.**
 
-## 0. ALERTA — `orchestrator` em produção está atrás do commit atual
+## 0. ALERTA — código no `origin/main` está à frente da produção, em dois níveis simultâneos
 
-**O código do Bloco 2 já está commitado e a maior parte já foi
-implantada — mas a função `orchestrator` NÃO foi redeployada.**
-
-- O commit `6191cab` alterou `orchestrator/index.ts` (239 linhas):
-  `processarCobrancaRenovacao` deixou de criar a cobrança OpenPix
-  diretamente — agora cria um registro em `tokens_renovacao` e envia
-  ao cliente um **link de confirmação** (ACEITO/CANCELAR). A cobrança
-  só passa a existir depois do ACEITO, dentro de
-  `confirmacao-renovacao/index.ts`.
-- Confirmado via `supabase functions list`: a função `orchestrator` em
-  produção tem `updated_at` = 2026-08-24 09:16 — **anterior** ao
-  commit `6191cab` (13:51). A versão rodando ainda é a do Bloco 1
-  (cria a cobrança direto, sem token/confirmação).
-- As demais peças do Bloco 2 já estão implantadas e ativas:
-  - Migration `20260824130000_tokens_renovacao` — aplicada no banco
-    real (confirmado via `supabase migration list`).
-  - `confirmacao-renovacao`, `renovacao-sigma-resultado`,
-    `renovacao-sigma-watchdog` — todas v1, `ACTIVE`.
-  - `openpix-webhook` — redeployado (v5, 15:18), já reivindicando o
-    início da renovação e disparando o workflow do GitHub Actions
-    (`renovacao-sigma.yml`) quando o pagamento é confirmado de
-    verdade.
-- **Confirmado explicitamente pelo usuário (2026-08-24): isso não foi
-  uma decisão deliberada de manter assim — ficou pra trás sem
-  querer**, não uma escolha de segurar o deploy até revisão.
-- **O redeploy do `orchestrator` continua pendente, não autorizado a
-  ser executado ainda.** Nenhum deploy, migration, commit ou push deve
-  ser feito a partir deste checkpoint sem autorização explícita nova.
+- `origin/main`/`main` local: HEAD em `8d85f94` — "Implementa
+  confirmação de renovação por botões WhatsApp" (25/08/2026 06:45
+  -03). **Confirmado commitado e publicado por leitura direta do
+  Git** (não por relato de sessão) — corrige uma dúvida que um
+  handoff externo (Codex) tinha deixado em aberto.
+- **Nenhum componente desse commit está em produção.** Confirmado via
+  `supabase functions list` nesta sessão (27/08/2026), comparando
+  `updated_at` de cada function com a data dos commits que a tocaram:
+  - **`orchestrator`**: `updated_at` = 24/08/2026 09:16 -03 —
+    **anterior** até ao Bloco 2 (`6191cab`, 13:51 do mesmo dia), quanto
+    mais ao commit dos botões. Continua rodando a versão do **Bloco
+    1** (cria a cobrança OpenPix direto, sem token de confirmação) —
+    o mesmo atraso que a versão anterior deste arquivo já tinha
+    registrado e que **continua não resolvido**.
+  - **`webhook`**: `updated_at` = 22/08/2026 — de **antes do Bloco 2
+    inteiro**. Não reconhece `interactive.button_reply`, não tem a
+    validação de ID `renovacao:(aceitar|cancelar):<64 hex>`.
+  - **`renovacao-confirmar`**: **não existe na lista de Edge Functions
+    implantadas.** Nunca recebeu o primeiro deploy.
+- **Deploy bloqueado até autorização explícita do usuário — para
+  qualquer uma das três functions acima, individualmente.** A
+  aprovação do código (commit já revisado e aceito) **não** autoriza
+  o deploy — são decisões e execuções separadas, mesma regra já em
+  vigor no projeto (`inovatv_central/CLAUDE.md`, seção 0-B).
 
 ## 1. Estado do git
 
-- HEAD: `6191cab` — "Implementa Bloco 2 do fluxo de renovação
-  automática (confirmação ACEITO/CANCELAR + renovação real via GitHub
-  Actions/Playwright)", 2026-08-24 13:51. Branch `main`, sincronizado
-  com `origin/main` (sem divergência).
-- Working tree limpo, exceto duas pastas não rastreadas, ambas já
-  esperadas: `scripts/supabase/.temp/` (vazia, resíduo do CLI do
-  Supabase) e `supabase/functions/poc-sigma-renovacao-real/` (POC
-  abandonada do mecanismo HTTP direto — o próprio commit `6191cab` já
-  registra que ficou de fora de propósito, remoção adiada).
+- HEAD: `8d85f94`, branch `main`, sincronizado com `origin/main` (sem
+  divergência, confirmado nesta sessão).
+- Working tree limpo neste clone. As pastas de teste temporárias que
+  a sessão do Codex mencionou (`scripts/.interactive-test-harness/`,
+  `scripts/supabase/`, `supabase/functions/poc-sigma-renovacao-real/`
+  não rastreado) **não existem neste clone** — nunca foram
+  versionadas (eram descartáveis por design) e não sobrevivem entre
+  clones/máquinas.
 
-## 2. Mudança de provedor: PagBank → OpenPix/Woovi (Bloco 1) — histórico, sem mudança nesta sessão
+## 2. Confirmação de renovação por botões interativos do WhatsApp — implementada e commitada (`8d85f94`), NÃO implantada
+
+Substitui a confirmação de renovação por link/URL (Bloco 2, seção 5
+abaixo) por uma mensagem interativa nativa do WhatsApp, com exatamente
+dois botões — `ACEITO` e `CANCELAR`. O `token_hash` já existente
+(`tokens_renovacao`) é reaproveitado; nenhuma tabela nova, nenhum novo
+mecanismo de token.
+
+IDs dos botões:
+- `renovacao:aceitar:<token_hash>`
+- `renovacao:cancelar:<token_hash>`
+
+**Arquivos alterados/criados, revisados diff por diff nesta sessão:**
+- `webhook/index.ts` — reconhece `interactive.button_reply`; aceita
+  somente IDs no formato estrito
+  `renovacao:(aceitar|cancelar):[0-9a-f]{64}`; `button_reply.title`
+  nunca é tratado como fonte de verdade; IDs fora do formato são
+  ignorados com segurança (log, sem repassar); encaminha a decisão,
+  via `X-Internal-Token`, para a nova function `renovacao-confirmar`
+  — nunca para o orchestrator/Gemini. Mensagens `text` continuam
+  indo para o orchestrator normalmente. Validação de HMAC e
+  deduplicação por `message_id` inalteradas.
+- `renovacao-confirmar/index.ts` (**nova Edge Function**) — borda HTTP
+  interna, nunca chamada pelo cliente; autentica por
+  `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN` compartilhado; delega toda a
+  regra de negócio ao módulo abaixo.
+- `_shared/renovacao_confirmacao.ts` (**novo módulo compartilhado**) —
+  unifica a regra de aceite/cancelamento entre o fluxo antigo (link) e
+  o novo (botão): busca o token por hash, expira se vencido, reivindica
+  aceite/cancelamento de forma atômica (protege contra clique
+  duplicado/corrida), checa telefone de origem contra o telefone do
+  token, cria a cobrança OpenPix **somente após o ACEITO**, vincula a
+  operação ao token, aciona transferência humana em qualquer falha
+  (nunca falha em silêncio).
+- `_shared/whatsapp_client.ts` — nova função
+  `enviarMensagemInterativaWhatsApp` (payload `interactive/button` da
+  Cloud API, exatamente dois botões).
+- `_shared/mensagens_fixas.ts` — nova mensagem
+  `montarMensagemBotoesConfirmacaoRenovacao` (mesmos dados reais já
+  usados no fluxo antigo — cliente, servidor, plano, valor,
+  vencimento —, sem URL).
+- `orchestrator/index.ts` — `processarCobrancaRenovacao` passa a
+  enviar a proposta via `enviarMensagemInterativaWhatsApp` em vez de
+  texto com link; se o envio dos botões falhar, aciona transferência
+  humana (`renovacao:falha_enviar_botoes_confirmacao`) em vez de
+  seguir sem confirmação.
+
+**Validação até aqui: só harness local temporário** (Node, fakes para
+tudo externo — sem `.env`, sem rede real, sem Supabase/Rocket/Sigma/
+Meta reais, sem secrets reais). Evolução registrada pela sessão que
+implementou: 10 testes (4 passando, 6 falhando por bug do próprio
+fake, corrigido) → 10/10 → cobertura ampliada (token expirado, clique
+duplicado, falha simulada de cobrança, processamento real do webhook,
+HMAC local, roteamento interactive×text) → **12/12 passando**. **Isso
+não é evidência de produção** — nenhuma chamada real ao WhatsApp/Meta,
+cobrança, Rocket, Sigma ou Supabase foi feita nesse teste.
+
+## 3. Pendências pré-deploy (nenhuma resolvida ainda)
+
+Antes de cogitar qualquer deploy do commit `8d85f94`:
+
+1. **Fallback dos links antigos** — `confirmacao-renovacao` (a página
+   HTML do fluxo por link) continua implantada e ativa em produção.
+   Ainda não decidido: ela permanece como fallback pra links já
+   emitidos antes da migração, ou é substituída/desligada — e como
+   tratar isso sem voltar a expor o token bruto.
+2. **Comportamento fora da janela de 24h do WhatsApp/Meta** — ainda
+   não definido o que acontece quando a janela de atendimento está
+   fechada: falhar e transferir, usar template aprovado com botões, ou
+   outro caminho aprovado.
+3. **Teste ponta a ponta real pelo WhatsApp** — nenhum dos passos
+   abaixo foi validado com cliente/ambiente real: mensagem interativa
+   real, clique ACEITO real, clique CANCELAR real, duplicidade,
+   telefone divergente, token expirado, cobrança/renovação real no
+   ambiente de teste apropriado, retorno ao cliente.
+
+## 4. Mudança de provedor: PagBank → OpenPix/Woovi (Bloco 1) — histórico, sem mudança nesta sessão
 
 **Causa raiz, comprovada por investigação real (não suposição):** o
 PagBank exige `customer.tax_id` (CPF/CNPJ do cliente pagador) em toda
@@ -90,7 +166,7 @@ duplicado aqui.
 `_shared/pagbank_client.ts` e `poc-pagbank-criar-cobranca/` continuam
 órfãos, preservados — não apagar sem autorização explícita nova.
 
-## 3. Bloco 2 — implementado e commitado (`6191cab`), parcialmente implantado
+## 5. Bloco 2 — implementado e commitado (`6191cab`), parcialmente implantado
 
 **Mudança de fluxo:** depois do pagamento confirmado (Bloco 1), o
 Orquestrador deixa de criar a cobrança OpenPix diretamente. Em vez
@@ -99,7 +175,9 @@ cliente um **link de confirmação** — a cobrança só nasce depois do
 ACEITO, dentro de `confirmacao-renovacao/index.ts`. Essa inversão de
 ordem (ACEITO antes da cobrança existir, não depois do pagamento como
 no desenho original das Lacunas 1-9) foi aprovada explicitamente,
-segundo o comentário do próprio código-fonte.
+segundo o comentário do próprio código-fonte. **Superada
+funcionalmente pelo commit `8d85f94` (seção 2 acima), que troca o link
+por botões — mas nenhum dos dois está em produção ainda (seção 0).**
 
 **Peças novas:**
 - `.github/workflows/renovacao-sigma.yml` + `scripts/renovacao-sigma-workflow.mjs`
@@ -137,37 +215,12 @@ de produção, segundo o commit.
 
 **O que isso NÃO significa:** nenhuma dessas evidências (testes
 locais + POC) é um teste real de ponta a ponta pelo WhatsApp real
-disparando o fluxo completo novo (proposta → link → ACEITO → cobrança
-→ pagamento → workflow → Sigma → callback) — isso ainda não aconteceu,
-e não pode acontecer enquanto o `orchestrator` de produção continuar
-na versão do Bloco 1 (seção 0).
+disparando o fluxo completo novo (proposta → botão/link → ACEITO →
+cobrança → pagamento → workflow → Sigma → callback) — isso ainda não
+aconteceu, e não pode acontecer enquanto o `orchestrator` de produção
+continuar na versão do Bloco 1 (seção 0).
 
-## 4. Próximo trabalho aprovado (2026-08-24): migrar ACEITO/CANCELAR para botões interativos do WhatsApp
-
-**Decisão do usuário, registrada nesta sessão.** O mecanismo atual de
-confirmação (`confirmacao-renovacao/index.ts`) é uma página HTML
-própria, alcançada por um **link** enviado ao cliente — o cliente
-precisa sair do WhatsApp e abrir um navegador para clicar
-ACEITO/CANCELAR. O próximo trabalho aprovado é substituir esse link
-por **botões interativos nativos do WhatsApp** (Interactive Reply
-Buttons da Cloud API), respondidos diretamente na própria conversa,
-sem sair do app.
-
-**Nada disso foi especificado ou implementado ainda** — não inventar
-mecanismo, escopo ou desenho técnico além do que está registrado
-aqui. Antes de qualquer código: especificar como o clique no botão
-chega de volta ao sistema (webhook de `interactive` message, distinto
-de `text`), como isso se relaciona com o token já existente em
-`tokens_renovacao`, e se a página HTML de `confirmacao-renovacao`
-é mantida como fallback ou é substituída — nenhuma dessas perguntas
-foi respondida nesta sessão.
-
-## 5. Pendências registradas, não resolvidas nesta sessão
-
-- **Redeploy do `orchestrator`** — pendente, não autorizado a ser
-  executado ainda (seção 0). Precisa de autorização explícita própria
-  antes de rodar — não presumir que a aprovação da migração para
-  botões interativos (seção 4) já autoriza esse deploy.
+**Pendências herdadas, ainda não resolvidas:**
 - Credencial OpenPix usada não tem permissão para `POST
   /api/v1/webhook` (criar webhook via API) — o webhook foi cadastrado
   manualmente pelo painel do Sandbox. Não afeta produção, só o passo
@@ -186,20 +239,19 @@ foi respondida nesta sessão.
 ## 6. Ao retomar em outra sessão/máquina
 
 1. Ler este arquivo por completo antes de qualquer ação — não repetir
-   a investigação PagBank×OpenPix (seção 2, já concluída) nem a
-   implementação/testes do Bloco 2 (seção 3, já concluídos).
+   a investigação PagBank×OpenPix (seção 4, já concluída) nem a
+   implementação/testes do Bloco 2 (seção 5) ou dos botões interativos
+   (seção 2), ambos já concluídos no código.
 2. Confirmar `git log --oneline -3` e `git status` antes de qualquer
    trabalho novo (regra permanente do projeto,
-   `inovatv_central/CLAUDE.md` seção 0).
-3. **Não presumir que o `orchestrator` em produção já reflete o Bloco
-   2** — reconferir `supabase functions list` (campo `updated_at` da
-   função `orchestrator` contra o commit mais recente que tocou
-   `orchestrator/index.ts`) antes de qualquer teste real pelo
-   WhatsApp.
-4. Próximo passo de desenvolvimento real: especificar e implementar a
-   migração de ACEITO/CANCELAR para botões interativos do WhatsApp
-   (seção 4) — ainda não iniciado.
-5. O redeploy do `orchestrator` (seção 0/5) é uma decisão/execução
-   separada, com checkpoint próprio — não misturar com a especificação
-   dos botões interativos sem confirmação explícita de que os dois
-   devem acontecer juntos.
+   `inovatv_central/CLAUDE.md`, seção 0).
+3. **Não presumir que a produção reflete o commit `8d85f94` nem o
+   Bloco 2** — reconferir `supabase functions list` (`updated_at` de
+   `orchestrator` e `webhook`, e a existência de `renovacao-confirmar`)
+   antes de qualquer teste real pelo WhatsApp.
+4. As três pendências da seção 3 precisam de decisão/resolução antes
+   de qualquer deploy — nenhuma foi resolvida por esta auditoria.
+5. Deploy de `orchestrator`, `webhook` e/ou `renovacao-confirmar` é
+   decisão e execução própria, separada — precisa de autorização
+   explícita nova, não decorre da aprovação do código em si nem da
+   aprovação deste checkpoint.
