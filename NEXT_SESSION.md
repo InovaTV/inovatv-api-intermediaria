@@ -1,45 +1,52 @@
-# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-27, auditoria do commit `8d85f94`)
+# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-27, pós-deploy de preparação do commit `8d85f94`)
 
-> Substitui integralmente a versão anterior (commitada em `b5b767b`,
-> 2026-08-24 — "checkpoint pós-Bloco 2"). **Motivo da substituição:**
-> entre aquele checkpoint e esta atualização, uma sessão (usando o
-> Codex) implementou e **publicou em `origin/main`** exatamente o
-> próximo passo que a versão anterior deste arquivo já tinha aprovado
-> (sua seção 4: migrar ACEITO/CANCELAR de link para botões interativos
-> do WhatsApp) — mas o commit resultante (`8d85f94`, 25/08/2026) nunca
-> atualizou este checkpoint. Isso só foi percebido e auditado nesta
-> sessão (27/08/2026), comparando `git log`/`git show` com `supabase
-> functions list` — mesma disciplina que a seção 0 da versão anterior
-> já tinha usado para constatar o atraso do Bloco 2 em produção.
+> Substitui integralmente a versão anterior (mesma data, pré-deploy).
+> **Motivo da atualização:** o usuário autorizou explicitamente, nesta
+> mesma sessão, a preparação do ambiente para o item 3 (teste ponta a
+> ponta) — geração do secret que faltava e deploy das três functions
+> que ainda estavam atrasadas em relação ao commit `8d85f94`. Isso foi
+> executado e confirmado. **Nenhum teste real foi executado ainda** —
+> a preparação do ambiente é uma etapa própria, distinta da execução
+> do teste (que segue exigindo autorização explícita separada).
 > **Leia isto primeiro, antes de qualquer suposição ou nova
 > investigação.**
 
-## 0. ALERTA — código no `origin/main` está à frente da produção, em dois níveis simultâneos
+## 0. Deploy de preparação concluído (27/08/2026) — ambiente pronto, nenhum teste real executado ainda
 
-- `origin/main`/`main` local: HEAD em `8d85f94` — "Implementa
-  confirmação de renovação por botões WhatsApp" (25/08/2026 06:45
-  -03). **Confirmado commitado e publicado por leitura direta do
-  Git** (não por relato de sessão) — corrige uma dúvida que um
-  handoff externo (Codex) tinha deixado em aberto.
-- **Nenhum componente desse commit está em produção.** Confirmado via
-  `supabase functions list` nesta sessão (27/08/2026), comparando
-  `updated_at` de cada function com a data dos commits que a tocaram:
-  - **`orchestrator`**: `updated_at` = 24/08/2026 09:16 -03 —
-    **anterior** até ao Bloco 2 (`6191cab`, 13:51 do mesmo dia), quanto
-    mais ao commit dos botões. Continua rodando a versão do **Bloco
-    1** (cria a cobrança OpenPix direto, sem token de confirmação) —
-    o mesmo atraso que a versão anterior deste arquivo já tinha
-    registrado e que **continua não resolvido**.
-  - **`webhook`**: `updated_at` = 22/08/2026 — de **antes do Bloco 2
-    inteiro**. Não reconhece `interactive.button_reply`, não tem a
-    validação de ID `renovacao:(aceitar|cancelar):<64 hex>`.
-  - **`renovacao-confirmar`**: **não existe na lista de Edge Functions
-    implantadas.** Nunca recebeu o primeiro deploy.
-- **Deploy bloqueado até autorização explícita do usuário — para
-  qualquer uma das três functions acima, individualmente.** A
-  aprovação do código (commit já revisado e aceito) **não** autoriza
-  o deploy — são decisões e execuções separadas, mesma regra já em
-  vigor no projeto (`inovatv_central/CLAUDE.md`, seção 0-B).
+- **Secret `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN` gerado e configurado**
+  (valor aleatório, `openssl rand -hex 32`, via `supabase secrets
+  set`) — confirmado presente em `supabase secrets list` (só o nome;
+  o valor nunca foi escrito em arquivo, log ou commit deste
+  repositório). Esse secret faltava por completo antes desta sessão —
+  sem ele, o clique em ACEITO/CANCELAR não chegaria a lugar nenhum
+  (o próprio `webhook/index.ts` detecta a ausência e aborta com log,
+  nunca falha de forma perigosa, mas também nunca funciona).
+- **`orchestrator`, `webhook` e `renovacao-confirmar` implantados**,
+  confirmado via `supabase functions list`:
+  - `orchestrator` — v46, `ACTIVE`, `updated_at` 27/08/2026 22:49:48 UTC.
+  - `webhook` — v13, `ACTIVE`, `updated_at` 27/08/2026 22:49:58 UTC.
+  - `renovacao-confirmar` — v1 (**primeiro deploy**), `ACTIVE`,
+    `updated_at` 27/08/2026 22:50:06 UTC.
+  - As demais functions do fluxo (`confirmacao-renovacao`,
+    `openpix-webhook`, `renovacao-sigma-resultado`,
+    `renovacao-sigma-watchdog`) não precisaram de redeploy — já
+    estavam no ar desde o Bloco 2 e não foram tocadas pelo commit
+    `8d85f94`.
+- **Isso foi autorizado explicitamente pelo usuário como preparação de
+  ambiente para o item 3 (teste ponta a ponta), não como abertura
+  geral de produção.** O número oficial (`17996242415`) nunca foi
+  migrado pra Cloud API e não recebe eventos deste Webhook — só o
+  número de teste (`17996286135`) é afetado por este deploy.
+- **Nenhum teste real foi executado ainda.** Nenhuma mensagem
+  enviada, nenhum clique simulado, nenhuma cobrança criada. A
+  execução do teste ponta a ponta (seção 3, item 3) continua exigindo
+  autorização explícita própria, separada desta preparação — mesma
+  regra de sempre (`inovatv_central/CLAUDE.md`, seção 0-B: envio real
+  de WhatsApp e alteração real de dados de produção sempre exigem
+  checkpoint próprio).
+- Pendências que ainda impedem considerar o item 3 concluído: item 2
+  (janela de 24h — decidido, não implementado) e o próprio roteiro de
+  teste do item 3, que ainda não começou a ser executado. Ver seção 3.
 
 ## 1. Estado do git
 
@@ -52,7 +59,7 @@
   versionadas (eram descartáveis por design) e não sobrevivem entre
   clones/máquinas.
 
-## 2. Confirmação de renovação por botões interativos do WhatsApp — implementada e commitada (`8d85f94`), NÃO implantada
+## 2. Confirmação de renovação por botões interativos do WhatsApp — implementada, commitada (`8d85f94`) e IMPLANTADA (27/08/2026)
 
 Substitui a confirmação de renovação por link/URL (Bloco 2, seção 5
 abaixo) por uma mensagem interativa nativa do WhatsApp, com exatamente
@@ -99,15 +106,23 @@ IDs dos botões:
   humana (`renovacao:falha_enviar_botoes_confirmacao`) em vez de
   seguir sem confirmação.
 
-**Validação até aqui: só harness local temporário** (Node, fakes para
-tudo externo — sem `.env`, sem rede real, sem Supabase/Rocket/Sigma/
-Meta reais, sem secrets reais). Evolução registrada pela sessão que
-implementou: 10 testes (4 passando, 6 falhando por bug do próprio
-fake, corrigido) → 10/10 → cobertura ampliada (token expirado, clique
-duplicado, falha simulada de cobrança, processamento real do webhook,
-HMAC local, roteamento interactive×text) → **12/12 passando**. **Isso
-não é evidência de produção** — nenhuma chamada real ao WhatsApp/Meta,
-cobrança, Rocket, Sigma ou Supabase foi feita nesse teste.
+**Validação por harness local (histórico, antes do deploy):** Node,
+fakes para tudo externo — sem `.env`, sem rede real, sem Supabase/
+Rocket/Sigma/Meta reais, sem secrets reais. Evolução registrada pela
+sessão que implementou: 10 testes (4 passando, 6 falhando por bug do
+próprio fake, corrigido) → 10/10 → cobertura ampliada (token expirado,
+clique duplicado, falha simulada de cobrança, processamento real do
+webhook, HMAC local, roteamento interactive×text) → **12/12 passando**.
+**Isso nunca foi evidência de produção** — nenhuma chamada real ao
+WhatsApp/Meta, cobrança, Rocket, Sigma ou Supabase foi feita nesse
+teste.
+
+**Deploy de preparação concluído em 27/08/2026 (seção 0).** O código
+está agora em produção (`orchestrator` v46, `webhook` v13,
+`renovacao-confirmar` v1, todas `ACTIVE`), mas **isso ainda não é
+teste real** — nenhuma mensagem foi enviada, nenhum clique foi dado,
+nenhuma cobrança foi criada desde o deploy. O teste ponta a ponta
+real (seção 3, item 3) é a próxima etapa, ainda não iniciada.
 
 ## 3. Pendências pré-deploy
 
@@ -189,11 +204,88 @@ Antes de cogitar qualquer deploy do commit `8d85f94`:
    técnico documentados; a implementação em si fica para quando for
    explicitamente autorizada, como etapa própria, com sua própria
    revisão.
-3. **Teste ponta a ponta real pelo WhatsApp** — nenhum dos passos
-   abaixo foi validado com cliente/ambiente real: mensagem interativa
-   real, clique ACEITO real, clique CANCELAR real, duplicidade,
-   telefone divergente, token expirado, cobrança/renovação real no
-   ambiente de teste apropriado, retorno ao cliente.
+3. **Teste ponta a ponta real pelo WhatsApp — ambiente pronto
+   (27/08/2026), execução ainda NÃO iniciada.** Roteiro aprovado pelo
+   usuário, registrado aqui na íntegra pra não se perder entre
+   sessões/máquinas:
+
+   **Fluxo principal (ACEITO):** cliente de teste inicia conversa real
+   pelo WhatsApp → IA identifica intenção de renovação → Orchestrator
+   apresenta os dados reais → cliente recebe a mensagem interativa
+   (botões ACEITO/CANCELAR) → cliente toca ACEITO → webhook real
+   recebe `interactive.button_reply` → webhook encaminha só o ID
+   válido pra `renovacao-confirmar` → confirmação aceita uma única vez
+   → cobrança criada no ambiente de teste apropriado (OpenPix Sandbox)
+   → pagamento realizado/simulado (mecanismo já validado, botão
+   "Simular Pagamento") → webhook de pagamento confirma a cobrança →
+   renovação real executada no Sigma via Rocket (GitHub Actions/
+   Playwright) → novo vencimento reconsultado e confirmado → mensagem
+   final chega ao cliente pelo WhatsApp.
+
+   **Testes negativos obrigatórios:**
+   - CANCELAR: cliente toca CANCELAR; nenhuma cobrança criada, nenhuma
+     renovação ocorre.
+   - Clique duplicado: repetir o clique/provocar concorrência; só uma
+     transição aceita.
+   - Telefone divergente: resposta cujo telefone não corresponde ao
+     token; nenhuma renovação ocorre.
+   - Token expirado: tentar aceitar após expiração; nenhuma cobrança/
+     renovação ocorre.
+   - Falha de renovação: condição de falha controlada no Rocket/Sigma;
+     confirmar transferência pra atendimento humano, sem o sistema
+     inventar sucesso.
+
+   **Critério de conclusão:** o teste principal precisa terminar com
+   WhatsApp real → ACEITO → cobrança → pagamento → webhook → renovação
+   real no Sigma → reconsulta confirmando novo vencimento → mensagem
+   final no WhatsApp — tudo com evidência real, sem intervenção manual
+   no meio do caminho feliz. CANCELAR e os cenários negativos também
+   precisam apresentar o comportamento esperado. **Harness local
+   passando não conta como conclusão deste item.**
+
+   **Preparação de ambiente já concluída (seção 0):** secret
+   `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN` configurado; `orchestrator`,
+   `webhook`, `renovacao-confirmar` implantados.
+
+   **Cliente de teste — auditoria só-leitura concluída (27/08/2026),
+   nada modificado.** Consultado via `/match`/`/status` (endpoints já
+   implantados, chave anon pública, zero mutação):
+
+   Telefone de teste: `5517981625486`. `/match` retornou
+   `multiple_matches` — **dois acessos ativos no mesmo telefone**:
+
+   | Nome | Plano | Servidor | Valor | Vencimento | Telas | `publicId` |
+   |---|---|---|---|---|---|---|
+   | Meu Uso Testes | Mensal | BLAZE | R$ 35,00 | 13/09/2026 23:59 -03:00 | 1 | `01a0271b-5a54-7d7e-8e4a-ef4c39730e0b` |
+   | Js Informática Rp | Mensal | NewOne | R$ 35,00 | 08/03/2027 23:59 -03:00 | 1 | `01a026ef-8bdd-7641-a4f2-2ae37b184ac0` |
+
+   **ALERTA — `publicId` obsoleto, não reutilizar por suposição:** o
+   `publicId` hardcoded em `teste-patch-renovacao-newone/index.ts`
+   (`019ff025-ae5a-7e96-a037-8cfec84178d1`, de uma sessão de teste de
+   21/08) foi reconfirmado via `/status` como **obsoleto**
+   (`linkState: "unlinked"`, 404 no Rocket) — não existe mais. O
+   cadastro real atual de "Js Informática Rp / NewOne" tem um
+   `publicId` diferente (`01a026ef-...`, tabela acima). Qualquer
+   script/valor hardcoded de sessões antigas precisa ser reconfirmado
+   antes de usar, nunca reaproveitado por suposição.
+
+   **Decisão do usuário (27/08/2026): o acesso escolhido para o fluxo
+   principal do teste ponta a ponta é o NewOne**
+   (`publicId 01a026ef-8bdd-7641-a4f2-2ae37b184ac0`, "Js Informática
+   Rp", Mensal, R$ 35,00, vencimento 08/03/2027). **O cenário de
+   múltiplos acessos permanece no roteiro — não deve ser contornado.**
+   Como o telefone tem 2 acessos ativos, a primeira mensagem do
+   cliente vai naturalmente cair nesse cenário (a IA lista os dois e
+   pergunta qual); o teste precisa passar por essa etapa de verdade
+   (identificar/escolher o NewOne) antes de chegar na proposta
+   ACEITO/CANCELAR — não pular direto pro acesso único assumindo que
+   já está resolvido.
+
+   **Ainda pendente antes de iniciar a execução:** nada além da
+   autorização explícita para começar. Execução do teste em si (
+   qualquer mensagem, clique, cobrança ou pagamento reais) exige
+   autorização própria, separada desta preparação — **nada disso foi
+   iniciado ainda**.
 
 ## 4. Mudança de provedor: PagBank → OpenPix/Woovi (Bloco 1) — histórico, sem mudança nesta sessão
 
@@ -308,23 +400,26 @@ continuar na versão do Bloco 1 (seção 0).
 1. Ler este arquivo por completo antes de qualquer ação — não repetir
    a investigação PagBank×OpenPix (seção 4, já concluída) nem a
    implementação/testes do Bloco 2 (seção 5) ou dos botões interativos
-   (seção 2), ambos já concluídos no código.
+   (seção 2), ambos já concluídos no código **e já implantados**.
 2. Confirmar `git log --oneline -3` e `git status` antes de qualquer
    trabalho novo (regra permanente do projeto,
    `inovatv_central/CLAUDE.md`, seção 0).
-3. **Não presumir que a produção reflete o commit `8d85f94` nem o
-   Bloco 2** — reconferir `supabase functions list` (`updated_at` de
-   `orchestrator` e `webhook`, e a existência de `renovacao-confirmar`)
-   antes de qualquer teste real pelo WhatsApp.
-4. Status das três pendências da seção 3, todas ainda bloqueando
-   deploy: item 1 (fallback dos links antigos) **fechado** por
-   auditoria em 27/08/2026, com duas dívidas técnicas aceitas
+3. **Produção já reflete o commit `8d85f94`** (`orchestrator` v46,
+   `webhook` v13, `renovacao-confirmar` v1, deploy de 27/08/2026) —
+   mas reconferir `supabase functions list` mesmo assim antes de
+   qualquer teste real, caso a sessão que retomar não seja a mesma que
+   fez este deploy.
+4. Status das pendências da seção 3: item 1 (fallback dos links
+   antigos) **fechado**, com duas dívidas técnicas aceitas
    deliberadamente; item 2 (janela de 24h) **decidido, mas não
    implementado** — a política está definida, o código ainda não a
    segue (gap real documentado); item 3 (teste ponta a ponta real)
-   **ainda não iniciado**. Nenhum deploy enquanto os itens 2 e 3 não
-   estiverem de fato resolvidos/implementados.
-5. Deploy de `orchestrator`, `webhook` e/ou `renovacao-confirmar` é
-   decisão e execução própria, separada — precisa de autorização
-   explícita nova, não decorre da aprovação do código em si nem da
-   aprovação deste checkpoint.
+   **ambiente pronto, execução ainda não iniciada** — roteiro completo
+   registrado na própria seção 3.
+5. **Próxima ação real, quando autorizada:** auditoria só-leitura do
+   cliente de teste no Rocket (telefone, plano, valor, vencimento),
+   e só depois, com autorização explícita separada, o início da
+   execução do roteiro de teste (seção 3, item 3). Nenhuma mensagem
+   real, clique ou cobrança deve acontecer sem essa autorização
+   específica — a aprovação do deploy de preparação **não** autoriza a
+   execução do teste em si.
