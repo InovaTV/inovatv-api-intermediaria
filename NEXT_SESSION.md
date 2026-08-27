@@ -109,15 +109,46 @@ HMAC local, roteamento interactive×text) → **12/12 passando**. **Isso
 não é evidência de produção** — nenhuma chamada real ao WhatsApp/Meta,
 cobrança, Rocket, Sigma ou Supabase foi feita nesse teste.
 
-## 3. Pendências pré-deploy (nenhuma resolvida ainda)
+## 3. Pendências pré-deploy
 
 Antes de cogitar qualquer deploy do commit `8d85f94`:
 
-1. **Fallback dos links antigos** — `confirmacao-renovacao` (a página
-   HTML do fluxo por link) continua implantada e ativa em produção.
-   Ainda não decidido: ela permanece como fallback pra links já
-   emitidos antes da migração, ou é substituída/desligada — e como
-   tratar isso sem voltar a expor o token bruto.
+1. **Fallback dos links antigos — AUDITADO (27/08/2026), decisão
+   fechada.** Auditoria código por código confirmou: `confirmacao-
+   renovacao/index.ts` não foi tocado pelo commit `8d85f94` e continua
+   aceitando/processando links já emitidos exatamente como antes;
+   nenhuma dependência compartilhada que ele usa (`tokens_renovacao.ts`,
+   `openpix_client.ts`, `cobrancas_pix.ts`, `conversas_estado.ts`,
+   `mensagens_atendimento.ts`) teve mudança incompatível; o
+   Orchestrator não gera mais nenhuma URL nova
+   (`montarMensagemLinkConfirmacaoRenovacao` ficou órfã, zero
+   chamador em todo `supabase/functions`); nenhum caminho de produção
+   depende de algo que a nova arquitetura quebre. **Decisão do
+   usuário: manter `confirmacao-renovacao` como fallback por enquanto,
+   sem prazo de desligamento definido** — decidir isso é etapa futura
+   separada, não parte deste deploy. Duas dívidas técnicas aceitas
+   deliberadamente, registradas aqui, não bloqueiam deploy:
+   - **Duplicação de lógica** — `confirmacao-renovacao/index.ts`
+     mantém sua própria cópia completa da regra de negócio (hash,
+     busca, expira, reivindica, cria cobrança) em vez de chamar
+     `_shared/renovacao_confirmacao.ts` (usado só pelo fluxo novo, via
+     `renovacao-confirmar`). O desenho original previa que o endpoint
+     web reaproveitasse o módulo compartilhado com `origem: "web"` —
+     isso nunca foi implementado. **Aceito deliberadamente:**
+     refatorar agora acrescentaria risco sem benefício necessário pro
+     deploy; migrar `confirmacao-renovacao` pra usar o módulo
+     compartilhado fica para uma etapa posterior, própria, com sua
+     própria revisão — não fazer essa mudança de passagem dentro de
+     outro trabalho.
+   - **Imprecisão de mensagem, baixo risco** —
+     `MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO` (enviada quando já
+     existe um token ativo pro mesmo acesso) foi alterada pra dizer
+     "procure os botões", mas `tokens_renovacao` não distingue se o
+     token ativo foi emitido como link ou como botão. Um cliente que
+     ainda tenha um link antigo válido (janela de até ~2h,
+     `JANELA_EXPIRACAO_MS`) poderia ler essa mensagem de forma
+     imprecisa. Autoexpira em até 2h, não bloqueia funcionamento —
+     registrado, não corrigido.
 2. **Comportamento fora da janela de 24h do WhatsApp/Meta** — ainda
    não definido o que acontece quando a janela de atendimento está
    fechada: falhar e transferir, usar template aprovado com botões, ou
