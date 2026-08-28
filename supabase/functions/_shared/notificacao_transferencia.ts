@@ -24,16 +24,25 @@
 //   comportamento e herdado deliberadamente, nao um bug novo desta
 //   funcao.
 import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "./whatsapp_client.ts";
+import { inserirMensagem } from "./mensagens_atendimento.ts";
 import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
 } from "./mensagens_fixas.ts";
 
+// conversationId e' OPCIONAL e aditivo (bloco de renovacao 2026-08-28,
+// C5): quando o chamador o passa e o aviso ao cliente foi enviado de
+// verdade, a frase fixa MENSAGEM_TRANSFERENCIA_CLIENTE tambem e'
+// gravada no historico do Painel -- hoje o cliente recebe essa
+// mensagem mas ela nunca aparece na conversa do Painel. Best-effort,
+// nunca desfaz nem bloqueia o aviso. Chamadores sem conversationId
+// mantem o comportamento antigo, sem persistir.
 export async function notificarTransferenciaHumana(
   telefone: string,
   motivo: string,
   acionadaAgora: boolean,
+  conversationId?: string,
 ): Promise<{ clienteAvisado: boolean; joseAvisado: boolean }> {
   if (!acionadaAgora) return { clienteAvisado: false, joseAvisado: false };
 
@@ -43,6 +52,12 @@ export async function notificarTransferenciaHumana(
     clienteAvisado = envio.outcome === "success";
   } catch (erro) {
     console.log("[notificacao_transferencia] falha ao avisar cliente", JSON.stringify({ motivo, erro: String(erro) }));
+  }
+
+  if (clienteAvisado && conversationId) {
+    await inserirMensagem(conversationId, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch((erro) => {
+      console.log("[notificacao_transferencia] falha ao gravar frase fixa no historico", JSON.stringify({ motivo, erro: String(erro) }));
+    });
   }
 
   let joseAvisado = false;

@@ -49,6 +49,9 @@ export async function atualizarSessao(conversationId, dados) {
   if (Object.prototype.hasOwnProperty.call(dados, "acessoSelecionado")) {
     conversaAtual.acesso_selecionado = dados.acessoSelecionado;
   }
+  if (Object.prototype.hasOwnProperty.call(dados, "intencaoAtual")) {
+    conversaAtual.intencao_atual = dados.intencaoAtual;
+  }
 }
 
 export async function expirarSessaoAtomicamente() {

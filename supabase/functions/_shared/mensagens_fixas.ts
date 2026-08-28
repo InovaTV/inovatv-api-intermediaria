@@ -75,9 +75,17 @@ export const MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO =
 
 // Mensagem 2 -- so' enviada DEPOIS que a cobranca real existe (valor e
 // codigo Pix vem sempre de dado real: valorFormatado do Rocket,
-// codigoPix do PagBank -- nunca inventados). Reforca que a renovacao
-// so' e' confirmada depois que o PagBank reconhecer o pagamento (duas
+// codigoPix do provedor -- nunca inventados). Reforca que a renovacao
+// so' e' confirmada depois que o provedor reconhecer o pagamento (duas
 // confirmacoes, nunca uma so).
+//
+// UX (bloco de renovacao 2026-08-28, inovatv_central/CLAUDE.md, C1):
+// UMA unica mensagem. O BR Code sai do meio do texto e vai pra dentro
+// de um bloco de codigo do WhatsApp (tres crases em linha propria antes
+// e depois) -- fica visualmente isolado e, nos clientes que suportam,
+// ganha o icone de copiar. `codigoPix` entra BYTE A BYTE, sem trim,
+// sem quebra, sem escape. Sem QR Code, sem segunda mensagem, sem
+// pagina externa.
 export function montarMensagemPixRenovacao(
   valorFormatado: string,
   codigoPix: string,
@@ -85,17 +93,22 @@ export function montarMensagemPixRenovacao(
   return [
     "💳 *PAGAMENTO DA RENOVAÇÃO*",
     "",
-    `*Valor: R$ ${valorFormatado}*`,
+    `*Valor:* R$ ${valorFormatado}`,
     "",
-    "📱 *Como pagar:*",
-    "Abra o aplicativo do seu banco e escolha a opção *PIX Copia e Cola*.",
+    "📱 *Como pagar*",
+    "Abra o aplicativo do seu banco.",
+    "Escolha PIX.",
+    "Escolha PIX Copia e Cola.",
+    "Cole o código abaixo.",
     "",
-    "📋 *Código PIX:*",
+    "📋 *Código PIX*",
+    "```",
     codigoPix,
+    "```",
     "",
-    "✅ Depois de realizar o pagamento, *não precisa enviar o comprovante*.",
+    "✅ Não é necessário enviar o comprovante.",
     "",
-    "🔄 Assim que o pagamento for confirmado, *sua renovação será processada automaticamente*.",
+    "🔄 Após a confirmação, sua renovação será processada automaticamente.",
   ].join("\n");
 }
 
@@ -117,8 +130,7 @@ export function montarMensagemMultiplosAcessosRenovacao(
 ): string {
   const blocos = acessos.map((acesso, indice) =>
     [
-      `${indice + 1}. ${acesso.nome}`,
-      "",
+      `*${indice + 1}. ${acesso.nome}*`,
       `Usuário: ${acesso.usuario}`,
       `Servidor: ${acesso.servidorNome}`,
       `Plano: ${acesso.planoNome}`,
@@ -180,16 +192,48 @@ export function montarMensagemBotoesConfirmacaoRenovacao(dados: {
   vencimentoFormatado: string;
 }): string {
   return [
-    "Aqui estão os dados da sua renovação, confira antes de confirmar:",
+    "📋 *Confira os dados da sua renovação*",
     "",
-    `*Cliente:* ${dados.clienteNome}`,
-    `*Usuário:* ${dados.usuario}`,
-    `*Servidor:* ${dados.servidorNome}`,
-    `*Plano:* ${dados.planoNome}`,
-    `*Valor:* R$ ${dados.valorFormatado}`,
-    `*Vencimento atual:* ${dados.vencimentoFormatado}`,
+    `👤 *Cliente:* ${dados.clienteNome}`,
+    `🔑 *Usuário:* ${dados.usuario}`,
+    `🖥️ *Servidor:* ${dados.servidorNome}`,
+    `📦 *Plano:* ${dados.planoNome}`,
+    `💰 *Valor:* R$ ${dados.valorFormatado}`,
+    `📅 *Vencimento atual:* ${dados.vencimentoFormatado}`,
     "",
-    "Confirme ou cancele usando os botões abaixo.",
+    "Toque em *ACEITO* para gerar o PIX, ou em *CANCELAR* para desistir.",
+  ].join("\n");
+}
+
+// Molde do corpo do Message Template `pagamento_confirmado` (acima) com
+// os 4 parametros ja substituidos. NAO e' usado pra enviar nada -- o
+// envio real continua sendo enviarTemplateWhatsApp. Serve SO' pra
+// gravar no historico do Painel EXATAMENTE o texto que o cliente
+// recebeu (bug de historico, bloco de renovacao 2026-08-28, C4): hoje
+// a confirmacao chega no WhatsApp mas nao aparece na conversa do
+// Painel. Espelha o corpo aprovado pela Meta byte a byte -- inclusive
+// a ausencia de espaco depois de "Olá,", "Plano:", "Servidor:" e
+// "vencimento:", porque o objetivo e' registrar o que foi enviado, nao
+// corrigi-lo (polimento do texto = reenvio do template a Meta, trilha
+// separada). Se o template for reenviado/alterado, atualizar aqui
+// junto.
+export function montarTextoConfirmacaoPagamentoRenovacao(dados: {
+  clienteNome: string;
+  planoNome: string;
+  servidorNome: string;
+  vencimentoFormatado: string;
+}): string {
+  return [
+    "✅ Pagamento confirmado!",
+    "",
+    `Olá,${dados.clienteNome}! Sua renovação foi registrada com sucesso.`,
+    "",
+    `📋 Plano:${dados.planoNome}`,
+    `🖥️ Servidor:${dados.servidorNome}`,
+    `📅 Novo vencimento:${dados.vencimentoFormatado}`,
+    "",
+    "Qualquer dúvida, estamos à disposição.",
+    "InovaTV — Sempre pensando em você! 📺",
   ].join("\n");
 }
 

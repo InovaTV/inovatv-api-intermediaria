@@ -14,8 +14,12 @@ import { register } from "node:module";
 
 register("./mock-loader.mjs", import.meta.url);
 
-const { resetarConversa, getConversaAtual, acionamentosRegistrados } =
-  await import("./fake_conversas_estado.mjs");
+const {
+  resetarConversa,
+  getConversaAtual,
+  acionamentosRegistrados,
+  atualizacoesSessaoRegistradas,
+} = await import("./fake_conversas_estado.mjs");
 const { resetarMensagens, mensagensRegistradas } = await import("./fake_mensagens_atendimento.mjs");
 const { configurarMatch, configurarStatus, resetarRocketIntermediaria } =
   await import("./fake_rocket_intermediaria.mjs");
@@ -268,10 +272,145 @@ async function testeD() {
   );
 }
 
+function configurarUmAcesso() {
+  configurarMatch({
+    outcome: "single_match",
+    candidates: [{ publicId: PUBLIC_ID_A, nome: "Meu Uso Testes", usuario: "828667229" }],
+  });
+  configurarStatus(PUBLIC_ID_A, {
+    outcome: "success",
+    linkState: "linked",
+    publicId: PUBLIC_ID_A,
+    syncedAt: new Date().toISOString(),
+    cliente: {
+      nome: "Meu Uso Testes",
+      vencimento: "2026-09-13T23:59:00-03:00",
+      planoNome: "Mensal",
+      servidorNome: "BLAZE",
+      telas: 1,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------
+// C3 -- Teste E: interceptor DETERMINISTICO. Gemini classifica como
+// "responder" (prosa livre) mas: 2+ acessos + cliente disse "renovar"
+// + nenhum acesso citado -> a lista fixa e' o que vai ao cliente,
+// NUNCA a prosa do Gemini. Sem transferencia.
+// ---------------------------------------------------------------------
+async function testeE() {
+  resetarTudo();
+  configurarDoisAcessos();
+  const PROSA_GEMINI =
+    "Você tem mais de um acesso vinculado a este número. Poderia me dizer qual deles você quer renovar?";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "responder", texto: PROSA_GEMINI },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Teste E: HTTP 200");
+  ok(body?.validacao?.aprovado === true, "Teste E: Validador REAL aprovou o 'responder'");
+  ok(acionamentosRegistrados().length === 0, "Teste E: NENHUMA transferencia humana");
+  ok(getConversaAtual().estado !== "aguardando_humano", "Teste E: conversa nao vai para aguardando_humano");
+
+  const enviadas = getMensagensEnviadas();
+  ok(enviadas.length === 1, "Teste E: exatamente 1 mensagem de texto ao cliente");
+  const texto = enviadas[0]?.texto ?? "";
+  ok(texto.includes("Qual desses acessos você gostaria de renovar?"), "Teste E: e' a lista fixa deterministica");
+  ok(texto.includes("*1. Meu Uso Testes*") && texto.includes("BLAZE"), "Teste E: bloco 1 (BLAZE) presente");
+  ok(texto.includes("*2. Js Informática Rp*") && texto.includes("NewOne"), "Teste E: bloco 2 (NewOne) presente");
+  ok(texto.includes("─────────────────"), "Teste E: separador presente");
+  ok(!texto.includes("Poderia me dizer qual deles"), "Teste E: a PROSA do Gemini NUNCA chega ao cliente");
+
+  const log = mensagensRegistradas();
+  ok(log.some((m) => m.origem === "ia" && m.texto === texto), "Teste E: lista fixa registrada no historico como 'ia'");
+  ok(
+    log.some((m) => m.origem === "cliente" && m.texto === "quero renovar meu plano"),
+    "Teste E: mensagem do cliente registrada",
+  );
+  ok(
+    !log.some((m) => m.origem === "ia" && m.texto === PROSA_GEMINI),
+    "Teste E: a prosa do Gemini NUNCA e' gravada no historico",
+  );
+  ok(
+    atualizacoesSessaoRegistradas().some((a) => a.dados?.intencaoAtual === "renovacao"),
+    "Teste E: intencao de renovar registrada na sessao (como o caminho propor_renovacao ja faz)",
+  );
+  ok(body?.renovacao?.acessoResolvido === null, "Teste E: diagnostico marca acessoResolvido=null");
+}
+
+// ---------------------------------------------------------------------
+// C3 -- Teste F (negativo): "responder" + 2 acessos, mas SEM intencao
+// de renovar (nenhuma palavra, nenhuma sessao) -> prosa do Gemini vai
+// ao cliente normalmente. O 'responder' geral NAO muda.
+// ---------------------------------------------------------------------
+async function testeF() {
+  resetarTudo();
+  configurarDoisAcessos();
+  const PROSA = "Seu plano Mensal está ativo. Posso ajudar com mais alguma coisa?";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "meu plano está funcionando?" }));
+  await resp.json();
+
+  const enviadas = getMensagensEnviadas();
+  ok(enviadas.length === 1 && enviadas[0].texto === PROSA, "Teste F: prosa do Gemini enviada como hoje (sem intencao de renovar)");
+  ok(!enviadas.some((m) => m.texto.includes("Qual desses acessos")), "Teste F: lista fixa NAO e' enviada");
+  ok(acionamentosRegistrados().length === 0, "Teste F: nenhuma transferencia");
+}
+
+// ---------------------------------------------------------------------
+// C3 -- Teste G (negativo): "responder" + "quero renovar" mas SO' 1
+// acesso -> interceptor NAO dispara (precisa de 2+); prosa do Gemini
+// segue normal.
+// ---------------------------------------------------------------------
+async function testeG() {
+  resetarTudo();
+  configurarUmAcesso();
+  const PROSA = "Claro! Seu acesso BLAZE pode ser renovado. Deseja seguir?";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
+  await resp.json();
+
+  const enviadas = getMensagensEnviadas();
+  ok(enviadas.length === 1 && enviadas[0].texto === PROSA, "Teste G: com 1 acesso, prosa do Gemini segue normal");
+  ok(!enviadas.some((m) => m.texto.includes("Qual desses acessos")), "Teste G: lista fixa nunca aparece com 1 acesso");
+}
+
+// ---------------------------------------------------------------------
+// C3 -- Teste H: intencao ja' estabelecida na sessao (mensagem
+// anterior). Mensagem atual NAO tem a palavra "renovar", mas
+// conversa.intencao_atual === "renovacao" -> interceptor dispara.
+// ---------------------------------------------------------------------
+async function testeH() {
+  resetarTudo();
+  configurarDoisAcessos();
+  getConversaAtual().intencao_atual = "renovacao"; // estabelecida antes desta mensagem
+  const PROSA = "Certo! Sobre qual acesso você gostaria de falar?";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "vamos lá então" }));
+  await resp.json();
+
+  const enviadas = getMensagensEnviadas();
+  ok(enviadas.length === 1, "Teste H: exatamente 1 mensagem ao cliente");
+  ok(enviadas[0].texto.includes("Qual desses acessos você gostaria de renovar?"), "Teste H: lista fixa disparada pela intencao de sessao");
+  ok(!enviadas[0].texto.includes("Sobre qual acesso você gostaria de falar"), "Teste H: prosa do Gemini nao vai ao cliente");
+  ok(acionamentosRegistrados().length === 0, "Teste H: nenhuma transferencia");
+}
+
 await testeA();
 await testeB();
 await testeC();
 await testeD();
+await testeE();
+await testeF();
+await testeG();
+await testeH();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);

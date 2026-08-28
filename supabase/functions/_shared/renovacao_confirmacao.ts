@@ -78,7 +78,7 @@ export async function confirmarRenovacao(params: {
     } catch (erro) {
       console.log("[renovacao_confirmacao] falha ao registrar transferencia (falha de cobranca)", JSON.stringify({ erro: String(erro) }));
     }
-    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada);
+    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada, autorizado.conversation_id);
     await marcarAutorizacaoComoFalha(autorizado.id, motivoFalha).catch((erro) => {
       console.log("[renovacao_confirmacao] falha ao liberar token apos falha de cobranca", JSON.stringify({ tokenId: autorizado.id, erro: String(erro) }));
     });
@@ -127,7 +127,7 @@ export async function confirmarRenovacao(params: {
     } catch (erro2) {
       console.log("[renovacao_confirmacao] falha ao registrar transferencia (falha de vinculo)", JSON.stringify({ erro: String(erro2) }));
     }
-    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada);
+    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada, autorizado.conversation_id);
     await marcarAutorizacaoComoFalha(autorizado.id, motivoFalha).catch((erro3) => {
       console.log(
         "[renovacao_confirmacao] falha ao liberar token apos falha de vinculo",

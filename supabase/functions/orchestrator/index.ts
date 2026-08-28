@@ -345,6 +345,13 @@ async function processarCobrancaRenovacao(
     if (transferenciaResultado.acionada) {
       const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
       envioResultado = { enviado: envio.outcome === "success" };
+      if (envioResultado.enviado) {
+        // C5 (bloco de renovacao 2026-08-28): grava no historico do
+        // Painel a frase fixa que o cliente efetivamente recebeu. A RPC
+        // acionar_transferencia_humana ja gravou cliente + texto de
+        // contexto; isto adiciona o que foi de fato enviado. Best-effort.
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch(() => {});
+      }
 
       const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
       if (numeroJose) {
@@ -863,6 +870,31 @@ Deno.serve(async (req: Request) => {
     // aprovado=false, o outro aprovado=true).
     const multiplosAcessosParaEscolher = acessoNaoDeterminado || propostaRenovacaoSemAcesso;
 
+    // C3 (bloco de UX de renovacao, 2026-08-28, inovatv_central/CLAUDE.md)
+    // -- interceptor DETERMINISTICO. O prompt congelado do Gemini
+    // instrui a listar os acessos em prosa livre (tipo "responder")
+    // quando o cliente demonstra intencao de renovar com 2+ acessos e
+    // nao diz qual (gemini_client.ts). O Ciclo 3 mostrou esse caso ao
+    // vivo. Aqui, em vez de deixar a prosa do Gemini ir ao cliente,
+    // trocamos pela MESMA lista fixa deterministica ja usada no caminho
+    // propor_renovacao (montarMensagemMultiplosAcessosRenovacao) --
+    // quando, e SO' quando: Validador aprovou + tipo "responder" + 2+
+    // acessos + cliente demonstrou intencao de renovar (palavra na
+    // mensagem atual OU intencao_atual ja' na sessao) + nenhum acesso
+    // citado na mensagem atual. Fora dessa condicao, "responder" segue
+    // 100% inalterado. NAO toca prompt do Gemini, maquina de estados,
+    // cobranca, webhook, Sigma nem Validador.
+    const clienteDemonstrouIntencaoRenovar =
+      REGEX_INTENCAO_RENOVACAO.test(conteudo) || conversa.intencao_atual === "renovacao";
+    const haMultiplosAcessos =
+      statusResults.filter((s) => s.outcome === "success" && !!s.cliente).length >= 2;
+    const interceptarListaMultiplosAcessos =
+      validacao.aprovado &&
+      geminiData.tipo === "responder" &&
+      haMultiplosAcessos &&
+      clienteDemonstrouIntencaoRenovar &&
+      resolverAcessoRenovacao(conteudo, statusResults, acessoSelecionadoServidor) === null;
+
     // Etapa 6, terceira fatia: reprovado (exceto acessoNaoDeterminado,
     // tratado a parte acima), Gemini decidiu transferir -- marca
     // aguardando_humano de verdade e registra as duas mensagens
@@ -898,13 +930,16 @@ Deno.serve(async (req: Request) => {
       // episodio_id certo quando aciona de verdade (Componente 5 §12)
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
-    } else if (multiplosAcessosParaEscolher) {
+    } else if (multiplosAcessosParaEscolher || interceptarListaMultiplosAcessos) {
       // Ajuste de apresentacao (2026-08-28): nada aqui de proposito --
       // mesmo padrao de propostaRenovacaoComAcesso logo abaixo. O texto
       // final (mensagem fixa de multiplos acessos) so' existe depois de
       // montado no bloco de envio, e o log de cliente+ia acontece la',
       // so' depois de confirmar que o envio funcionou. Cobre os dois
-      // casos (acessoNaoDeterminado e propostaRenovacaoSemAcesso).
+      // casos (acessoNaoDeterminado e propostaRenovacaoSemAcesso) e o
+      // interceptor C3 (Gemini "responder" + intencao + 2+ acessos) --
+      // nos tres, a mensagem fixa e' quem vai ao cliente, entao a
+      // prosa do Gemini nunca e' pre-gravada aqui.
     } else if (propostaRenovacaoComAcesso) {
       // Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23):
       // AO CONTRARIO dos outros branches, a mensagem do cliente NAO e'
@@ -941,7 +976,7 @@ Deno.serve(async (req: Request) => {
     // e a RPC acionou AGORA (nunca em "ja_transferida"/erro, decisao
     // confirmada 2026-08-16) -> mensagem fixa, nunca o texto do
     // Gemini sobre a transferencia.
-    if (validacao.aprovado && geminiData.tipo === "responder") {
+    if (validacao.aprovado && geminiData.tipo === "responder" && !interceptarListaMultiplosAcessos) {
       const conversaAtual = await buscarOuCriarConversa(telefone);
       if (conversaAtual.estado === "aguardando_humano") {
         envioResultado = { enviado: false };
@@ -971,6 +1006,13 @@ Deno.serve(async (req: Request) => {
         MENSAGEM_TRANSFERENCIA_CLIENTE,
       );
       envioResultado = { enviado: envio.outcome === "success" };
+      if (envioResultado.enviado) {
+        // C5 (bloco de renovacao 2026-08-28): a RPC ja gravou cliente +
+        // texto do Gemini como "ia"; esta linha adiciona a frase fixa
+        // que o cliente de fato recebeu, pra o historico do Painel bater
+        // com a conversa real. Best-effort.
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch(() => {});
+      }
 
       // Aviso ao Jose (Componente 1 §16-A) -- so' quando a RPC
       // realmente acionou agora (nunca em "ja_transferida"/erro, ja
@@ -986,7 +1028,7 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
-    } else if (multiplosAcessosParaEscolher) {
+    } else if (multiplosAcessosParaEscolher || interceptarListaMultiplosAcessos) {
       // Ajuste de apresentacao (2026-08-28): multiplos acessos, nenhum
       // resolvido com certeza (via rejeicao do Validador -- caso
       // comum -- ou via resolverAcessoRenovacao pos-aprovacao -- caso
@@ -1021,6 +1063,18 @@ Deno.serve(async (req: Request) => {
           await inserirMensagem(conversa.conversation_id, "ia", textoMultiplosAcessos, null);
         } catch {
           // best-effort, mesma filosofia do resto do arquivo
+        }
+        if (interceptarListaMultiplosAcessos) {
+          // C3: o Gemini classificou como "responder", entao nenhum
+          // outro ponto registra a intencao de renovar na sessao --
+          // fazemos aqui, como o caminho propor_renovacao ja faz via
+          // gravarIntencaoRenovacaoSeDemonstrada. So' escreve se a
+          // palavra estiver na mensagem atual; best-effort.
+          await gravarIntencaoRenovacaoSeDemonstrada(
+            conversa.conversation_id,
+            conteudo,
+            statusResults,
+          );
         }
       }
       renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
@@ -1109,6 +1163,12 @@ Deno.serve(async (req: Request) => {
     if (transferenciaResultado.acionada) {
       const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
       envioResultado = { enviado: envio.outcome === "success" };
+      if (envioResultado.enviado) {
+        // C5 (bloco de renovacao 2026-08-28): mesma disciplina do branch
+        // deveTransferir -- grava a frase fixa recebida pelo cliente no
+        // historico do Painel. Best-effort.
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch(() => {});
+      }
 
       const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
       if (numeroJose) {

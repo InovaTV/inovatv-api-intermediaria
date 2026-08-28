@@ -36,6 +36,7 @@ import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
 import {
   NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
   IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
+  montarTextoConfirmacaoPagamentoRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 
 const RESULTADOS_VALIDOS: ResultadoRenovacaoSigma[] = [
@@ -110,11 +111,12 @@ Deno.serve(async (req: Request) => {
   }
 
   if (resultado === "sucesso") {
+    const vencimentoFormatado = vencimentoConfirmado ? formatarDataBr(vencimentoConfirmado) : "";
     const parametrosTemplate = [
       atualizado.cliente_nome,
       atualizado.plano_nome,
       atualizado.servidor_nome,
-      vencimentoConfirmado ? formatarDataBr(vencimentoConfirmado) : "",
+      vencimentoFormatado,
     ];
     const envio = await enviarTemplateWhatsApp(
       atualizado.telefone,
@@ -122,6 +124,23 @@ Deno.serve(async (req: Request) => {
       IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
       parametrosTemplate,
     );
+    if (envio.outcome === "success") {
+      // Bloco de renovacao 2026-08-28 (C4): grava no historico do
+      // Painel exatamente o texto que o cliente recebeu. O envio real
+      // e' o template acima; isto e' so' registro. Best-effort, nunca
+      // desfaz nem bloqueia o resultado ja processado.
+      await inserirMensagem(
+        atualizado.conversation_id,
+        "ia",
+        montarTextoConfirmacaoPagamentoRenovacao({
+          clienteNome: atualizado.cliente_nome,
+          planoNome: atualizado.plano_nome,
+          servidorNome: atualizado.servidor_nome,
+          vencimentoFormatado,
+        }),
+        null,
+      ).catch(() => {});
+    }
     return jsonResponse({ outcome: "sucesso_processado", mensagemEnviada: envio.outcome === "success" });
   }
 
@@ -141,7 +160,7 @@ Deno.serve(async (req: Request) => {
   } catch (erro) {
     console.log("[renovacao-sigma-resultado] falha ao acionar transferencia humana", String(erro));
   }
-  await notificarTransferenciaHumana(atualizado.telefone, motivoTransferencia, transferenciaAcionada);
+  await notificarTransferenciaHumana(atualizado.telefone, motivoTransferencia, transferenciaAcionada, atualizado.conversation_id);
 
   return jsonResponse({ outcome: `${resultado}_processado` });
 });

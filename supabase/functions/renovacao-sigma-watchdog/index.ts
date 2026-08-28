@@ -84,7 +84,7 @@ Deno.serve(async (req: Request) => {
     } catch (erro) {
       console.log("[renovacao-sigma-watchdog] falha ao acionar transferencia humana", String(erro));
     }
-    await notificarTransferenciaHumana(atualizado.telefone, motivoTimeout, transferenciaAcionada);
+    await notificarTransferenciaHumana(atualizado.telefone, motivoTimeout, transferenciaAcionada, atualizado.conversation_id);
 
     processados.push(token.operacao_id);
   }
@@ -121,7 +121,7 @@ Deno.serve(async (req: Request) => {
     } catch (erro) {
       console.log("[renovacao-sigma-watchdog] falha ao acionar transferencia humana (autorizacao orfa)", String(erro));
     }
-    await notificarTransferenciaHumana(atualizado.telefone, motivoOrfa, transferenciaAcionada);
+    await notificarTransferenciaHumana(atualizado.telefone, motivoOrfa, transferenciaAcionada, atualizado.conversation_id);
 
     autorizacoesProcessadas.push(token.id);
   }

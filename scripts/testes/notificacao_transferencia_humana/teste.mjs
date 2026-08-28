@@ -40,6 +40,7 @@ const {
   resetar: resetarWhats,
 } = await import("./fake_whatsapp_client.mjs");
 const { configurarCriar: configurarOpenpixCriar, resetar: resetarOpenpix } = await import("./fake_openpix_client.mjs");
+const { mensagens: mensagensHistorico, resetarMensagensFake } = await import("./fake_mensagens_atendimento.mjs");
 
 const { notificarTransferenciaHumana } = await import("../../../supabase/functions/_shared/notificacao_transferencia.ts");
 const { confirmarRenovacao } = await import("../../../supabase/functions/_shared/renovacao_confirmacao.ts");
@@ -83,6 +84,15 @@ function ok(condicao, mensagem) {
 function limparRegistrosComuns() {
   resetarWhats();
   resetarOpenpix();
+  resetarMensagensFake();
+}
+
+// C5: a frase fixa MENSAGEM_TRANSFERENCIA_CLIENTE ("...atendentes...")
+// foi gravada no historico como "ia" para aquela conversa?
+function transferenciaPersistida(conversationId) {
+  return mensagensHistorico.some(
+    (m) => m.conversationId === conversationId && m.origem === "ia" && m.texto.includes("atendentes"),
+  );
 }
 
 async function criarTokenDeTeste(conversationId, overrides = {}) {
@@ -148,6 +158,40 @@ async function grupo1() {
   r = await notificarTransferenciaHumana(TELEFONE, "motivo:teste", true);
   ok(r.clienteAvisado === true, "G1: falha no envio ao Jose NAO impede o aviso ao cliente (independente)");
   ok(r.joseAvisado === false, "G1: falha isolada no envio ao JOSE reportada corretamente");
+
+  // C5 -- persistencia opcional/aditiva da frase fixa no historico
+  limparRegistrosComuns();
+  await notificarTransferenciaHumana(TELEFONE, "motivo:teste", true);
+  ok(
+    !transferenciaPersistida("conv-c5"),
+    "G1 (C5): sem conversationId, comportamento antigo -- NADA e' persistido no historico",
+  );
+
+  limparRegistrosComuns();
+  await notificarTransferenciaHumana(TELEFONE, "motivo:teste", true, "conv-c5");
+  ok(
+    transferenciaPersistida("conv-c5"),
+    "G1 (C5): com conversationId + envio ok, a frase fixa e' gravada como 'ia' no historico",
+  );
+  ok(
+    mensagensHistorico.filter((m) => m.origem === "ia" && m.texto.includes("atendentes")).length === 1,
+    "G1 (C5): grava exatamente 1 linha (nao duplica)",
+  );
+
+  limparRegistrosComuns();
+  forcarFalhaProximoTexto();
+  await notificarTransferenciaHumana(TELEFONE, "motivo:teste", true, "conv-c5");
+  ok(
+    !transferenciaPersistida("conv-c5"),
+    "G1 (C5): se o envio ao cliente FALHOU, nada e' gravado no historico (so' persiste o que o cliente recebeu)",
+  );
+
+  limparRegistrosComuns();
+  await notificarTransferenciaHumana(TELEFONE, "motivo:teste", false, "conv-c5");
+  ok(
+    !transferenciaPersistida("conv-c5"),
+    "G1 (C5): acionadaAgora=false nunca persiste (retorno antecipado)",
+  );
 }
 
 // =======================================================================
@@ -168,6 +212,7 @@ async function grupo2() {
     "G2 Ponto A: cliente foi notificado da transferencia (achado do Ciclo 1, agora corrigido)",
   );
   ok(templatesEnviados.length >= 1, "G2 Ponto A: Jose foi notificado");
+  ok(transferenciaPersistida(conv2a), "G2 Ponto A (C5): frase fixa de transferencia gravada no historico do Painel");
 
   // Ponto B -- falha ao vincular operacao_id (o bug do Ciclo 1)
   resetarEstado();
@@ -187,6 +232,7 @@ async function grupo2() {
     templatesEnviados[templatesEnviados.length - 1].parametros[0] === "renovacao:falha_vincular_operacao_token",
     "G2 Ponto B: motivo enviado a Jose e' especificamente o de falha de vinculo",
   );
+  ok(transferenciaPersistida(conv2b), "G2 Ponto B (C5): frase fixa de transferencia gravada no historico do Painel");
 
   // Sem duplicacao -- conversa ja em aguardando_humano (RPC real
   // recusaria com P0001) quando a falha de vinculo acontece de novo
@@ -206,6 +252,10 @@ async function grupo2() {
   ok(
     !mensagensEnviadas.some((m) => m.texto.includes("atendentes")) && templatesEnviados.length === 0,
     "G2: sem duplicacao -- conversa ja transferida (RPC real retornaria P0001) nao gera nova notificacao de transferencia",
+  );
+  ok(
+    !transferenciaPersistida(conv2c),
+    "G2 (C5): sem duplicacao -- transferencia nao acionada agora nao grava frase fixa no historico",
   );
 }
 
@@ -270,6 +320,7 @@ async function grupo3() {
     templatesEnviados.some((t) => t.nomeTemplate === "nova_transferencia_humana" && t.parametros[0] === "renovacao_sigma:falha"),
     "G3: Jose notificado com o motivo correto",
   );
+  ok(transferenciaPersistida(conv3), "G3 (C5): frase fixa de transferencia gravada no historico do Painel (falha Sigma)");
 
   // Sem duplicacao -- callback repetido (idempotencia da propria
   // camada de dados, marcarResultadoRenovacao so' afeta estado
@@ -281,9 +332,11 @@ async function grupo3() {
   ok(mensagensEnviadas.length === 0 && templatesEnviados.length === 0, "G3: sem duplicacao -- callback repetido nao notifica de novo");
 
   // Regressao -- sucesso continua enviando o template de pagamento
-  // confirmado normalmente (nao afetado por esta mudanca)
+  // confirmado normalmente (nao afetado por esta mudanca) + C4:
+  // agora tambem persiste o texto no historico do Painel
   resetarEstado();
   resetarWhats();
+  resetarMensagensFake();
   const conv3b = crypto.randomUUID();
   const operacaoId2 = crypto.randomUUID();
   inserirDireto("tokens_renovacao", {
@@ -318,6 +371,20 @@ async function grupo3() {
   ok(
     templatesEnviados.some((t) => t.nomeTemplate === "pagamento_confirmado"),
     "G3 (regressao): template de pagamento confirmado continua sendo enviado ao cliente no sucesso",
+  );
+  ok(
+    mensagensHistorico.some(
+      (m) =>
+        m.conversationId === conv3b &&
+        m.origem === "ia" &&
+        m.texto.startsWith("✅ Pagamento confirmado!") &&
+        m.texto.includes("Olá,Cliente Teste!"),
+    ),
+    "G3 (C4): texto de confirmacao de pagamento agora e' gravado no historico do Painel (bug corrigido)",
+  );
+  ok(
+    mensagensHistorico.filter((m) => m.origem === "ia" && m.texto.startsWith("✅ Pagamento confirmado!")).length === 1,
+    "G3 (C4): grava exatamente 1 linha de confirmacao (nao duplica)",
   );
 }
 
@@ -354,6 +421,7 @@ async function grupo4() {
     templatesEnviados.some((t) => t.parametros[0] === "renovacao:watchdog_autorizacao_orfa"),
     "G4 (Ciclo 1 real): Jose notificado com o motivo especifico da autorizacao orfa",
   );
+  ok(transferenciaPersistida(conv4a), "G4 (C5): frase fixa de transferencia gravada no historico (autorizacao orfa)");
 
   const tokenDepois = lerTabela("tokens_renovacao").find((t) => t.conversation_id === conv4a);
   ok(tokenDepois?.estado === "renovacao_falhou", "G4 (Ciclo 1 real): token marcado como renovacao_falhou (comportamento do watchdog inalterado)");
@@ -405,6 +473,7 @@ async function grupo4() {
     templatesEnviados.some((t) => t.parametros[0] === "renovacao_sigma:watchdog_timeout"),
     "G4 (timeout): Jose notificado com o motivo especifico do timeout",
   );
+  ok(transferenciaPersistida(conv4b), "G4 (C5): frase fixa de transferencia gravada no historico (timeout)");
 }
 
 await grupo1();
