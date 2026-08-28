@@ -24,8 +24,6 @@ import { chromium } from "playwright";
 const OPERACAO_ID = process.env.OPERACAO_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const ROCKET_BASE_URL = process.env.ROCKET_BASE_URL;
-const ROCKET_API_KEY = process.env.ROCKET_API_KEY;
 const CALLBACK_TOKEN = process.env.RENOVACAO_SIGMA_CALLBACK_TOKEN;
 
 const USER_AGENT =
@@ -36,8 +34,6 @@ function requireEnv() {
     ["OPERACAO_ID", OPERACAO_ID],
     ["SUPABASE_URL", SUPABASE_URL],
     ["SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE_ROLE_KEY],
-    ["ROCKET_BASE_URL", ROCKET_BASE_URL],
-    ["ROCKET_API_KEY", ROCKET_API_KEY],
     ["RENOVACAO_SIGMA_CALLBACK_TOKEN", CALLBACK_TOKEN],
   ].filter(([, v]) => !v).map(([k]) => k);
   if (faltando.length > 0) {
@@ -110,12 +106,27 @@ async function verificarSessaoRocket(sessionid, csrftoken) {
   }
 }
 
+// Le o cliente via funcao interna (renovacao-sigma-cliente), nao mais
+// direto no Rocket -- a chamada direta do runner do GitHub Actions
+// era bloqueada pela borda/Cloudflare (investigado e caracterizado em
+// 2026-08-27/28, NEXT_SESSION.md). Mesma assinatura de retorno de
+// antes ({ok, cliente}), nenhuma mudanca nos dois pontos que chamam
+// esta funcao.
 async function lerClienteRocket(publicId) {
-  const resp = await fetch(`${ROCKET_BASE_URL}/gerenciador/api/v1/cliente/${publicId}`, {
-    headers: { "X-API-Key": ROCKET_API_KEY },
-  });
-  const body = await resp.json().catch(() => null);
-  return { ok: resp.ok, cliente: body?.cliente ?? null };
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-cliente`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
+      body: JSON.stringify({ publicId }),
+    });
+    const body = await resp.json().catch(() => null);
+    if (!resp.ok || !body || body.outcome !== "success") {
+      return { ok: false, cliente: null };
+    }
+    return { ok: true, cliente: body.cliente };
+  } catch {
+    return { ok: false, cliente: null };
+  }
 }
 
 function normalizarTelefonePagina(telefoneBruto) {

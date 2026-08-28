@@ -51,7 +51,5 @@ jobs:
           OPERACAO_ID: ${{ github.event.inputs.operacao_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          ROCKET_BASE_URL: ${{ secrets.ROCKET_BASE_URL }}
-          ROCKET_API_KEY: ${{ secrets.ROCKET_API_KEY }}
           RENOVACAO_SIGMA_CALLBACK_TOKEN: ${{ secrets.RENOVACAO_SIGMA_CALLBACK_TOKEN }}
         run: node scripts/renovacao-sigma-workflow.mjs
