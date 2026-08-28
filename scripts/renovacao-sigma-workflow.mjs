@@ -26,9 +26,6 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CALLBACK_TOKEN = process.env.RENOVACAO_SIGMA_CALLBACK_TOKEN;
 
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-
 function requireEnv() {
   const faltando = [
     ["OPERACAO_ID", OPERACAO_ID],
@@ -82,30 +79,6 @@ async function lerSessaoRocket() {
   return { sessionid: linha?.sessionid ?? null, csrftoken: linha?.csrftoken ?? null };
 }
 
-// Mesma logica/criterio de _shared/rocket_session_check.ts (Deno) --
-// reescrita aqui em Node porque o job roda fora do runtime Deno.
-async function verificarSessaoRocket(sessionid, csrftoken) {
-  const cookieHeader = `sessionid=${sessionid}; csrftoken=${csrftoken}`;
-  try {
-    const res = await fetch("https://app.rocketgestor.com/gerenciador/", {
-      method: "GET",
-      redirect: "manual",
-      headers: { Cookie: cookieHeader, "User-Agent": USER_AGENT },
-    });
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location") ?? "";
-      return !location.includes("/accounts/login/");
-    }
-    if (res.status === 200) {
-      const corpo = await res.text();
-      return !(corpo.includes('id="login-form"') || corpo.includes('name="username"'));
-    }
-    return null; // status inesperado -- tratado como incerto, nao invalido
-  } catch {
-    return null; // erro de rede -- NUNCA marca invalida
-  }
-}
-
 // Le o cliente via funcao interna (renovacao-sigma-cliente), nao mais
 // direto no Rocket -- a chamada direta do runner do GitHub Actions
 // era bloqueada pela borda/Cloudflare (investigado e caracterizado em
@@ -129,65 +102,39 @@ async function lerClienteRocket(publicId) {
   }
 }
 
-function normalizarTelefonePagina(telefoneBruto) {
-  return String(telefoneBruto ?? "").replace(/\D/g, "");
-}
-
-// Correcao de risco (2026-08-24, achado real durante a preparacao da
-// POC scripts/poc-confirmar-expires-at-renovacao.mjs): a versao
-// antiga coletava TODOS os numeros que pareciam id_cliente na pagina
-// inteira, exigindo "exatamente 1 numero na pagina" -- a pagina do
-// cliente hoje renderiza o botao "Adicionar pagamento" repetido pra
-// ~100 clientes (mesmo widget que motivou a correcao do seletor de
-// clique, ver mais abaixo), entao esse criterio antigo sempre falhava
-// (achava ~100 candidatos), mesmo depois de corrigido o clique.
+// Contexto Sigma (id_cliente interno, pacote atual, expires_at) e
+// checagem de sessao vem da Edge Function interna
+// renovacao-sigma-contexto -- roda DENTRO do Supabase, nao no runner.
+// O runner nao fala mais direto com app.rocketgestor.com fora do
+// Playwright (o fetch direto da pagina autenticada era bloqueado pela
+// borda/Cloudflare no trafego do GitHub Actions -- mesma causa que ja
+// tinha movido a leitura do cliente para renovacao-sigma-cliente).
 //
-// Reescrito pra associar deterministicamente ao cliente certo via
-// dois atributos estruturais reais, ambos ja conhecidos de forma
-// independente (nunca inferidos por posicao/ordem): `nome` (atributo
-// do proprio botao "Adicionar pagamento") e `telefone` (atributo de
-// um elemento na mesma linha, textualmente antes do botao, mesmo
-// grupo de acoes) -- comparados contra token.cliente_nome e
-// token.telefone (snapshot ja gravado no momento da criacao do token,
-// _shared/tokens_renovacao.ts, sem nenhuma chamada nova).
+// Duas fases, mesmo endpoint:
+//   - sem idClienteInterno: manda { publicId, clienteNome, telefone }
+//     (snapshot de tokens_renovacao) e recebe { idClienteInterno,
+//     pacoteAtual, expiresAt, sessaoValida }.
+//   - com idClienteInterno: manda { publicId, idClienteInterno } e
+//     recebe { sessaoValida, expiresAt } (reconsulta pos-clique).
 //
-// `telefone` sozinho NAO e' suficiente -- achado real, comprovado com
-// o cliente de teste: 2 clientes REAIS distintos ("Js Informática Rp",
-// cliente_id 1569097, e "Meu Uso Testes", cliente_id 1569178)
-// compartilham o mesmo telefone (provavelmente o mesmo titular com
-// dois cadastros no Rocket). Por isso a combinacao nome+telefone e'
-// exigida, nunca so' um dos dois isoladamente.
-//
-// Continua nunca escolhendo por posicao/ordem -- exige exatamente 1
-// correspondencia, senao resultado_ambiguo, exatamente como antes
-// (main() abaixo nao mudou esse criterio).
-function resolverIdInterno(html, nomeAlvo, telefoneAlvo) {
-  const telefoneAlvoNormalizado = normalizarTelefonePagina(telefoneAlvo);
-  const regexBotao = /<button[^>]*\bid="btn_add_pagamento_(\d+)"[^>]*\bnome="([^"]*)"[^>]*>/g;
-  const regexTelefone = /\btelefone="([^"]*)"/g;
-  const candidatos = new Set();
-
-  let m;
-  while ((m = regexBotao.exec(html)) !== null) {
-    const clienteId = m[1];
-    const nome = m[2];
-    if (nome !== nomeAlvo) continue;
-
-    // Telefone da mesma linha: atributo mais proximo ANTES deste
-    // botao (estrutura real observada -- o item "Agendar Mensagem",
-    // que carrega telefone, sempre aparece antes do botao "Adicionar
-    // pagamento" dentro do mesmo grupo de acoes da linha).
-    const janelaAntes = html.slice(Math.max(0, m.index - 3000), m.index);
-    regexTelefone.lastIndex = 0;
-    let ultimoTelefone = null;
-    let mt;
-    while ((mt = regexTelefone.exec(janelaAntes)) !== null) ultimoTelefone = mt[1];
-
-    if (ultimoTelefone && normalizarTelefonePagina(ultimoTelefone) === telefoneAlvoNormalizado) {
-      candidatos.add(clienteId);
+// A correlacao nome+telefone (nunca so' um; nunca por posicao/ordem;
+// exatamente 1 correspondencia ou ambiguo) mora agora em
+// _shared/rocket_sigma_contexto.ts (resolverIdInterno).
+async function lerContextoSigma(corpo) {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-contexto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
+      body: JSON.stringify(corpo),
+    });
+    const body = await resp.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return { outcome: "unavailable", etapa: "resposta-invalida" };
     }
+    return body;
+  } catch {
+    return { outcome: "unavailable", etapa: "excecao-fetch" };
   }
-  return [...candidatos];
 }
 
 async function main() {
@@ -205,17 +152,12 @@ async function main() {
     return;
   }
 
-  const sessaoValida = await verificarSessaoRocket(sessionid, csrftoken);
-  if (sessaoValida === false) {
-    await reportarResultado("sessao_expirada", { detalhe: "sessao do Rocket invalida (redirect pra login)" });
-    return;
-  }
-  // sessaoValida === null (erro de rede na checagem) NAO aborta --
-  // segue tentando, mesma disciplina de "falha de rede nunca marca
-  // invalida" ja usada no monitoramento.
-
+  // A checagem de validade da sessao acontece dentro de
+  // renovacao-sigma-contexto (abaixo) -- ela roda no Supabase, onde o
+  // GET /gerenciador/ nao e' bloqueado pela borda. Aqui so' garantimos
+  // que a sessao existe no Vault (necessaria pros cookies do
+  // Playwright).
   const publicId = token.public_id;
-  const cookieHeader = `sessionid=${sessionid}; csrftoken=${csrftoken}`;
 
   const { ok: okAntes, cliente: clienteAntes } = await lerClienteRocket(publicId);
   if (!okAntes || !clienteAntes) {
@@ -225,33 +167,53 @@ async function main() {
   const vencimentoAntes = clienteAntes.vencimento;
 
   try {
-    // Resolve id_cliente interno -- so' na pagina autenticada por
-    // sessao (nao existe em nenhum schema da API publica, achado real
-    // da investigacao desta mesma frente).
-    const paginaClienteUrl = `https://app.rocketgestor.com/gerenciador/cliente/info/${publicId}/`;
-    const paginaRes = await fetch(paginaClienteUrl, { headers: { Cookie: cookieHeader, "User-Agent": USER_AGENT } });
-    const paginaHtml = await paginaRes.text();
-    const candidatosId = resolverIdInterno(paginaHtml, token.cliente_nome, token.telefone);
-    if (candidatosId.length !== 1) {
-      await reportarResultado("resultado_ambiguo", {
-        detalhe: `id_cliente interno ${candidatosId.length === 0 ? "nao encontrado" : "ambiguo"}`,
-      });
+    // id_cliente interno + pacote atual + expires_at do Sigma +
+    // validade da sessao -- tudo pela Edge Function interna
+    // renovacao-sigma-contexto (roda no Supabase, nao no runner).
+    const ctxAntes = await lerContextoSigma({
+      publicId,
+      clienteNome: token.cliente_nome,
+      telefone: token.telefone,
+    });
+
+    if (ctxAntes.outcome === "sessao_expirada") {
+      await reportarResultado("sessao_expirada", { detalhe: ctxAntes.detalhe ?? "sessao invalida" });
       return;
     }
-    const idClienteInterno = candidatosId[0];
-
-    // Pacote atual, direto do Sigma -- fonte de verdade comprovada por
-    // teste real controlado (nunca server_id, so' o texto de "package").
-    const sigmaInfoRes = await fetch(
-      `https://app.rocketgestor.com/gerenciador/cliente/sigma/info/?cliente_id=${idClienteInterno}`,
-      { headers: { Cookie: cookieHeader, "User-Agent": USER_AGENT, Referer: "https://app.rocketgestor.com/gerenciador/", "X-Requested-With": "XMLHttpRequest" } },
-    );
-    const sigmaInfoBody = await sigmaInfoRes.json().catch(() => null);
-    const pacoteAtualTexto = String(sigmaInfoBody?.data?.package ?? "").trim();
-    if (!pacoteAtualTexto) {
+    if (ctxAntes.outcome === "id_nao_encontrado") {
+      console.log(
+        "[renovacao-sigma-workflow] id_cliente interno nao encontrado",
+        JSON.stringify(ctxAntes.diagnostico ?? {}),
+      );
+      await reportarResultado("resultado_ambiguo", { detalhe: "id_cliente interno nao encontrado" });
+      return;
+    }
+    if (ctxAntes.outcome === "id_ambiguo") {
+      console.log(
+        "[renovacao-sigma-workflow] id_cliente interno ambiguo",
+        JSON.stringify({ candidatos: Array.isArray(ctxAntes.candidatos) ? ctxAntes.candidatos.length : 0 }),
+      );
+      await reportarResultado("resultado_ambiguo", { detalhe: "id_cliente interno ambiguo" });
+      return;
+    }
+    if (ctxAntes.outcome === "pacote_vazio") {
       await reportarResultado("resultado_ambiguo", { detalhe: "Sigma nao informou o pacote atual (package vazio)" });
       return;
     }
+    if (ctxAntes.outcome !== "success" || !ctxAntes.idClienteInterno || !ctxAntes.pacoteAtual) {
+      await reportarResultado("resultado_ambiguo", {
+        detalhe: `falha ao obter contexto Sigma (${ctxAntes.etapa ?? ctxAntes.outcome})`,
+      });
+      return;
+    }
+
+    const idClienteInterno = String(ctxAntes.idClienteInterno);
+    const pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
+    const expiresAtAntes = ctxAntes.expiresAt ?? null;
+
+    // URL so' para navegacao do Playwright (navegador real passa pela
+    // borda -- nao e' um fetch direto do runner).
+    const paginaClienteUrl = `https://app.rocketgestor.com/gerenciador/cliente/info/${publicId}/`;
 
     // Playwright real -- mesma sequencia ja comprovada em
     // executar-renovacao-controlada.mjs, so' parametrizada.
@@ -322,23 +284,19 @@ async function main() {
       return;
     }
 
-    // Reconsulta INDEPENDENTE -- Rocket e Sigma, os dois, nunca confia
-    // so' no clique/toast da UI.
+    // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
+    // Sigma (via renovacao-sigma-contexto, fase "depois"), os dois,
+    // nunca confia so' no clique/toast da UI.
     const { ok: okDepois, cliente: clienteDepois } = await lerClienteRocket(publicId);
-    const sigmaInfoDepoisRes = await fetch(
-      `https://app.rocketgestor.com/gerenciador/cliente/sigma/info/?cliente_id=${idClienteInterno}`,
-      { headers: { Cookie: cookieHeader, "User-Agent": USER_AGENT, Referer: "https://app.rocketgestor.com/gerenciador/", "X-Requested-With": "XMLHttpRequest" } },
-    );
-    const sigmaInfoDepoisBody = await sigmaInfoDepoisRes.json().catch(() => null);
+    const ctxDepois = await lerContextoSigma({ publicId, idClienteInterno });
 
-    if (!okDepois || !clienteDepois || !sigmaInfoDepoisBody?.data) {
+    if (!okDepois || !clienteDepois || ctxDepois.outcome !== "success" || !ctxDepois.expiresAt) {
       await reportarResultado("resultado_ambiguo", { detalhe: "falha ao reconsultar Rocket/Sigma apos o clique" });
       return;
     }
 
     const vencimentoDepois = clienteDepois.vencimento;
-    const expiresAtAntes = sigmaInfoBody?.data?.expires_at;
-    const expiresAtDepois = sigmaInfoDepoisBody.data.expires_at;
+    const expiresAtDepois = ctxDepois.expiresAt;
 
     const rocketMudou = vencimentoDepois !== vencimentoAntes;
     const sigmaMudou = expiresAtDepois !== expiresAtAntes;
