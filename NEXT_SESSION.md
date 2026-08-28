@@ -1,4 +1,14 @@
-# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-28, pós-Ciclo 2 do teste ponta a ponta)
+# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-28, pós-Ciclo 3 do teste ponta a ponta)
+
+> **ATUALIZAÇÃO 28/08 (fim do dia) — Ciclo 3 rodou e DEU CERTO.** A
+> falha do `resolverIdInterno` descrita neste cabeçalho e na seção 3
+> foi corrigida em dois passos (commits `3bce8ff` e `72e7e20`) e o
+> Ciclo 3 validou a renovação Sigma ponta a ponta, com pagamento real
+> no Sandbox e `expires_at` do Sigma efetivamente alterado. Um único
+> problema aberto ficou: a mensagem final de sucesso enviada ao
+> cliente não é gravada no histórico do Painel de Atendimento.
+> **Detalhe completo na nova seção 0-A — leia-a antes da seção 3, que
+> agora é histórico da falha já resolvida.**
 
 > Substitui integralmente a versão anterior (27/08, pós-Ciclo 1).
 > **Motivo da atualização:** sessão de 28/08 fechou a causa raiz da
@@ -55,11 +65,120 @@
   `.github/workflows/diagnostico-rocket-leitura.yml` (hoje na v3,
   testa a nova ponte, não mais o Rocket direto).
 
+## 0-A. Ciclo 3 — SUCESSO REAL ponta a ponta + correção do `idClienteInterno` (28/08/2026)
+
+**Estado: renovação automática validada de ponta a ponta em produção
+pela primeira vez.** O Ciclo 3 partiu da falha do Ciclo 2
+(`resolverIdInterno` → `"id_cliente interno nao encontrado"`, seção 3),
+corrigiu-a em dois passos e fechou o fluxo completo com pagamento real
+no Sandbox e renovação efetivamente aplicada no Sigma.
+
+### O que estava quebrado e por quê
+
+1. **Edge-block do fetch cru do runner.** O `scripts/renovacao-sigma-workflow.mjs`
+   buscava a página autenticada do cliente no Rocket com `fetch()` a
+   partir do runner do GitHub Actions. A Cloudflare do
+   `app.rocketgestor.com` devolve conteúdo de borda (não a página real
+   autenticada) para IP de datacenter — só um browser real
+   (`page.goto` do Playwright) passa.
+2. **A UI do Rocket mudou.** Mesmo lendo a página pelo browser, o
+   marcador antigo `#btn_add_pagamento_<id>` não existe mais. A página
+   do cliente virou uma tela de detalhe single-client hidratada por
+   JavaScript (Vue), e o id interno da conta vive num atributo
+   `cliente_id` do botão "Add Pagamento"
+   (`button[data-bs-target="#modal-add-pagamento"]`), presente **só no
+   DOM renderizado**, nunca no HTML cru.
+
+### Correção aplicada (3 commits)
+
+| Commit | O que fez |
+|---|---|
+| `ae89969` | Criou a Edge Function **`renovacao-sigma-contexto`** — move todas as leituras runner→Rocket (sessão do Vault + `sigma/info`) para trás de uma função interna. Contrato inicial recebia `publicId`. |
+| `3bce8ff` | `renovacao-sigma-contexto` passa a receber **`{ idClienteInterno }`** (contrato v4). Novo módulo puro `scripts/lib/resolver-id-interno-dom.mjs` (`resolverIdInternoDoDom`) — resolve o id interno a partir de elementos **já lidos do DOM renderizado** pelo Playwright, com disciplina nome exato + telefone normalizado + exatamente 1 correspondência. |
+| `72e7e20` | Ajuste do seletor para a UI atual: `[data-bs-target="#modal-add-pagamento"][cliente_id]`, lendo `n.getAttribute("cliente_id")`. Mesmo seletor (com o `cliente_id` resolvido) usado no clique. `resolverIdInternoDoDom()` e a disciplina nome+telefone+1 permanecem intactas; só a origem do dado mudou. |
+
+- **`renovacao-sigma-contexto` v4** implantada e validada com uma
+  chamada read-only real (BLAZE) antes do Ciclo 3 — retornou
+  `outcome:"success"`, `sessaoValida:true`, `pacoteAtual` e `expiresAt`
+  corretos. Não foi alterada em `72e7e20`.
+- O workflow (`scripts/renovacao-sigma-workflow.mjs`) roda pelo GitHub
+  Actions — **não há deploy de Edge Function para ele**; o "deploy" é o
+  push para `origin/main`. O próximo dispatch usa `72e7e20`.
+
+### Ciclo 3 — execução real (BLAZE, 28/08/2026)
+
+- Cliente: `Meu Uso Testes` / Servidor **BLAZE** / Mensal — `publicId`
+  `01a0271b-5a54-7d7e-8e4a-ef4c39730e0b`, telefone `5517981625486`.
+- WhatsApp real → nova apresentação dos múltiplos acessos → seleção do
+  BLAZE → proposta com Cliente/Usuário/Servidor/Plano/Valor/Vencimento
+  → **ACEITO**.
+- Antes de pagar, confirmado por SQL:
+  `tokens_renovacao.operacao_id == cobrancas_pix.operacao_id ==
+  893ee1b8-2d0f-41cf-9009-3e626a752412`.
+- Pagamento no Sandbox OpenPix → `cobrancas_pix.status = pago`
+  (`2026-08-28 12:36:22.722+00`).
+- Cadeia 100% automática: OpenPix → `openpix-webhook` →
+  `renovacao_em_andamento` → GitHub Actions "Renovação Sigma" →
+  Playwright (`page.goto` da página do cliente → `resolverIdInternoDoDom`
+  → `idClienteInterno` **1569178** → `renovacao-sigma-contexto` (contexto
+  antes) → clique "Add Pagamento" → modal `#modal-add-pagamento` →
+  `renovar_painel` marcado → pacote Sigma selecionado por prefixo →
+  `#btn_adicionar_pagamento`) → reconsulta independente (Rocket
+  vencimento + Sigma `expires_at`) → `renovacao-sigma-resultado`.
+- **Veredito: `sucesso`.** Sigma `expires_at`
+  `2026-09-14T02:59:59Z` → `2026-10-14T02:59:59Z` (+1 mês). Vencimento
+  do Rocket também avançou. Token terminal em `renovado`.
+- **Mensagem final "✅ Pagamento confirmado!" recebida de verdade no
+  WhatsApp do cliente** (template `pagamento_confirmado`).
+
+### Único problema aberto — histórico do Painel de Atendimento
+
+A mensagem final de sucesso **não é gravada** em `mensagens_conversa`.
+O Painel mostra só a linha de sistema `Resultado da renovação Sigma:
+sucesso`.
+
+- **Causa (investigação read-only, 28/08):** em
+  `supabase/functions/renovacao-sigma-resultado/index.ts`, o ramo
+  `resultado === "sucesso"` chama `enviarTemplateWhatsApp(...)` (só
+  Graph API) e **não** chama `inserirMensagem(...)` para esse texto. A
+  única escrita no histórico nesse fluxo é o
+  `inserirMensagem(conversation_id, "sistema", "Resultado da renovação
+  Sigma: sucesso", null)` feito antes, para todos os `resultado`.
+- `listarMensagens` (`_shared/mensagens_atendimento.ts`) e
+  `painel-atendimento-abrir` **não têm filtro** por `origem` — nada
+  esconde a mensagem; ela simplesmente não é inserida. A migration
+  `20260819000000_painel_previa_ignora_sistema.sql` mexe só na prévia
+  da 1ª coluna (`ultima_mensagem_texto`), não na thread.
+- **Mesmo gap no caminho de falha:** `_shared/notificacao_transferencia.ts`
+  envia `MENSAGEM_TRANSFERENCIA_CLIENTE` via `enviarMensagemWhatsApp`
+  sem `inserirMensagem` — numa falha, o Painel também mostra só a
+  linha de sistema, não o aviso que o cliente recebeu.
+- Conclusão: **A — a mensagem não é persistida no histórico** (não é
+  filtro, não é dado errado).
+- **Correção proposta (não aplicada, aguardando decisão):** no ramo
+  `sucesso` de `renovacao-sigma-resultado`, após `enviarTemplateWhatsApp`
+  bem-sucedido, gravar o texto efetivamente enviado com
+  `inserirMensagem(conversation_id, "ia", <texto>, null)` (ou `"sistema"`
+  — a definir); idem para `MENSAGEM_TRANSFERENCIA_CLIENTE` no caminho
+  de falha, em `notificacao_transferencia.ts`. Decidir também se o
+  texto persistido é a mensagem renderizada final ou os parâmetros do
+  template.
+
+### Resíduos do Ciclo 3
+
+- Pagamento Sandbox `893ee1b8-2d0f-41cf-9009-3e626a752412` permanece
+  `pago` (esperado — renovação foi aplicada).
+- Conversa `43fcff07-80e5-4d0a-b814-62323ef6c3a9` — sem intervenção
+  manual; token terminal, nada preso em `renovacao_em_andamento`.
+- Nenhum `UPDATE` manual, nenhuma recuperação de token antigo.
+
 ## 1. Estado do git
 
-- HEAD: `411cc6a`, branch `main`, sincronizado com `origin/main` até
-  este ponto (o commit que registra este próprio checkpoint vem
-  depois deste hash — confirmar `git log -1` ao retomar).
+- HEAD: `72e7e20`, branch `main`, sincronizado com `origin/main`
+  (correção do seletor `[data-bs-target="#modal-add-pagamento"][cliente_id]`
+  do Ciclo 3; cadeia `ae89969` → `3bce8ff` → `72e7e20`). O commit que
+  registrar este próprio checkpoint vem depois deste hash — confirmar
+  `git log -1` ao retomar.
 - Working tree limpo neste clone.
 
 ## 2. Confirmação de renovação por botões interativos do WhatsApp — implementada, commitada (`8d85f94`) e IMPLANTADA (27/08/2026)
