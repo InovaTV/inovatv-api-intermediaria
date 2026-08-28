@@ -325,11 +325,98 @@ Antes de cogitar qualquer deploy do commit `8d85f94`:
    - ✅ Fix implantado (`renovacao-confirmar` v2)
    - ✅ Watchdog funcionando como projetado
    - ⚠️ Comunicação ao cliente em falha automática ainda precisa ser tratada (pendência obrigatória, acima)
-   - ⏳ Ciclo 2 do teste ponta a ponta ainda não iniciado
+   - ⏳ Ciclo 2 iniciado e pausado — bloqueado por divergência de
+     leitura do Rocket entre Supabase e GitHub Actions, não resolvida
+     pela rotação de `ROCKET_API_KEY` (ver subseções abaixo)
 
    **Execução do Ciclo 2 exige autorização explícita própria** —
    nenhuma mensagem, clique, cobrança ou pagamento deve acontecer sem
    ela.
+
+   ### Ciclo 2 — iniciado, pausado por falha real do Rocket (não WhatsApp/pagamento) durante a execução (27/08/2026)
+
+   Ciclo 2 chegou a ser iniciado de fato (mensagem ambígua real →
+   identificação → BLAZE selecionado → proposta → ACEITO → cobrança
+   criada → pagamento confirmado pelo cliente de teste). Antes de o
+   workflow de renovação (GitHub Actions/Sigma) concluir, a execução
+   real de `renovacao-sigma-workflow.mjs` retornou `resultado_ambiguo`
+   com detalhe **"falha ao ler cliente no Rocket antes da tentativa"**
+   — `lerClienteRocket(publicId)` (chamada real, `GET
+   /gerenciador/api/v1/cliente/{publicId}` com `X-API-Key:
+   ROCKET_API_KEY`) não encontrou o cliente BLAZE dentro do ambiente do
+   GitHub Actions, mesmo com HTTP 200 (sem exceção de rede/DNS — o
+   próprio `try/catch` amplo do script, que logaria qualquer exceção
+   não prevista, nunca disparou).
+
+   **Nenhum novo disparo do workflow de renovação foi feito depois
+   disso.** A investigação a partir daqui foi deliberadamente restrita
+   a diagnóstico isolado e somente leitura (subseção seguinte), sem
+   repetir Sigma/cobrança/pagamento no cliente real.
+
+   ### Rotação de `ROCKET_API_KEY` + diagnóstico isolado — NÃO resolveu a divergência (27-28/08/2026)
+
+   Hipótese trabalhada: a credencial `ROCKET_API_KEY` configurada no
+   GitHub Actions estava errada/desatualizada (nunca validada de fato
+   até a primeira execução real do workflow, 24/08/2026).
+
+   **Ações realizadas, cada uma com autorização explícita própria:**
+   1. Nova chave gerada diretamente na UI do Rocket Gestor (Opções →
+      APIKEY) — pelo próprio usuário; o Claude nunca leu nem exibiu o
+      valor em nenhum momento (regra permanente de segurança).
+   2. `ROCKET_API_KEY` reconfigurado no Supabase e no GitHub Actions
+      com o mesmo valor novo — também pelo próprio usuário, pelo mesmo
+      motivo. `ROCKET_BASE_URL` intencionalmente **não** tocado (uma
+      variável por vez, sem evidência de que estivesse incorreto).
+   3. Diagnóstico descartável criado
+      (`scripts/diagnostico-leitura-rocket.mjs` +
+      `.github/workflows/diagnostico-rocket-leitura.yml`, commit
+      `01b77ac`) — reaproveita literalmente a mesma chamada de
+      `lerClienteRocket` (mesmo endpoint, mesmo header), sem
+      Playwright/Sigma/cobrança/banco, para o `publicId` do BLAZE.
+   4. **Duas execuções do diagnóstico, antes e depois da rotação —
+      resultado idêntico nas duas:**
+      ```json
+      { "http_status": 200, "ok": true, "cliente_encontrado": false,
+        "nome": null, "servidor": null, "vencimento": null }
+      ```
+      (runs `33132776520` e `33133412500` do GitHub Actions.)
+
+   **Investigação read-only adicional, confirmando duas coisas por
+   fontes independentes:**
+   - **Não é bug de parser** — `supabase/functions/status/index.ts`
+     (produção, comprovadamente funcional) usa exatamente o mesmo
+     campo (`data?.cliente`) que o diagnóstico e
+     `renovacao-sigma-workflow.mjs` já usavam.
+   - **Não é `publicId` desatualizado** — confirmado por duas fontes
+     independentes: `GET /status/{publicId}` (Supabase, mesma chave já
+     rotacionada) devolveu o cliente completo e correto
+     (`"Meu Uso Testes"`/BLAZE/vencimento `13/09/2026`); `GET
+     /match?telefone=5517981625486` (caminho diferente, por telefone)
+     devolveu o mesmo `publicId` como um dos 2 candidatos.
+
+   **Conclusão: a rotação/recolagem do `ROCKET_API_KEY` NÃO resolveu a
+   divergência.** O ambiente do GitHub Actions continua recebendo
+   `HTTP 200` do Rocket sem encontrar o cliente, enquanto o ambiente do
+   Supabase, para o mesmíssimo `publicId`, encontra normalmente — com
+   uma chave supostamente igual nos dois lados. Hipótese mais provável,
+   **não confirmada** (comparar os dois valores de secret diretamente
+   não é possível de forma segura): a chave usada pelo GitHub Actions
+   pode pertencer a um escopo/conta do Rocket diferente daquele onde
+   esse cliente de teste existe — plausível por dar 200 (autenticação
+   aceita) sem dado (busca vazia), diferente de uma chave inválida
+   (que costuma dar 401/403).
+
+   **Próxima investigação definida, NÃO iniciada:** comparação de
+   contexto/conta do Rocket entre o ambiente do Supabase e o do GitHub
+   Actions, somente leitura, começando pela origem exata de cada
+   secret (quem gerou, quando, associado a qual conta/revenda) e pela
+   `ROCKET_BASE_URL`/URL efetivamente usada em cada ambiente. **Nenhuma
+   nova tentativa no cliente real (mensagem, Sigma, cobrança,
+   pagamento) até essa diferença ser explicada.**
+
+   Diagnóstico descartável (`01b77ac`) **mantido no repositório**,
+   ainda não removido — decisão deliberada, para permitir reuso na
+   próxima rodada de investigação sem recriar os arquivos.
 
 ## 4. Mudança de provedor: PagBank → OpenPix/Woovi (Bloco 1) — histórico, sem mudança nesta sessão
 
