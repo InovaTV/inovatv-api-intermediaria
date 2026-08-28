@@ -115,7 +115,7 @@ async function teste1() {
   ok(!!cobranca, "Teste 1: existe uma linha em cobrancas_pix com o mesmo operacao_id do token");
   ok(cobranca?.status === "pendente", "Teste 1: cobranca criada com status 'pendente'");
 
-  const enviouPix = mensagensEnviadas.some((m) => m.texto?.includes("Aqui está o Pix"));
+  const enviouPix = mensagensEnviadas.some((m) => m.texto?.includes("PAGAMENTO DA RENOVAÇÃO"));
   ok(enviouPix, "Teste 1: cliente recebeu a mensagem final do Pix (fluxo feliz completo)");
 }
 
@@ -218,7 +218,7 @@ async function teste3() {
     "Teste 3: transferencia humana foi acionada com o motivo correto (alertavel, nunca silencioso)",
   );
 
-  const prometeuPix = mensagensEnviadas.some((m) => m.texto?.includes("Aqui está o Pix"));
+  const prometeuPix = mensagensEnviadas.some((m) => m.texto?.includes("PAGAMENTO DA RENOVAÇÃO"));
   ok(!prometeuPix, "Teste 3: cliente NUNCA recebe a mensagem final do Pix quando o vinculo falha (nao promete o que nao pode cumprir)");
 }
 

@@ -83,11 +83,51 @@ export function montarMensagemPixRenovacao(
   codigoPix: string,
 ): string {
   return [
-    `Pronto! Aqui está o Pix para renovar seu plano: R$ ${valorFormatado}`,
+    "💳 *PAGAMENTO DA RENOVAÇÃO*",
     "",
+    `*Valor: R$ ${valorFormatado}*`,
+    "",
+    "📱 *Como pagar:*",
+    "Abra o aplicativo do seu banco e escolha a opção *PIX Copia e Cola*.",
+    "",
+    "📋 *Código PIX:*",
     codigoPix,
     "",
-    "Assim que o pagamento for confirmado, vou te avisar por aqui.",
+    "✅ Depois de realizar o pagamento, *não precisa enviar o comprovante*.",
+    "",
+    "🔄 Assim que o pagamento for confirmado, *sua renovação será processada automaticamente*.",
+  ].join("\n");
+}
+
+// Ajuste de apresentacao (2026-08-28, inovatv_central/CLAUDE.md) --
+// listagem de multiplos acessos no fluxo de renovacao (propor_renovacao
+// aprovado, mas o Gemini nao citou um servidor especifico que resolva
+// a exatamente 1 acesso). Antes, esse caso caia direto em transferencia
+// humana; agora, mensagem fixa deterministica lista os acessos reais
+// (dados ja disponiveis em statusResults/matchResult.candidates, sem
+// nova consulta) e deixa o cliente escolher -- nunca gerada pelo
+// Gemini, mesma disciplina ja usada nas mensagens 2/3 deste arquivo.
+// Deliberadamente restrita a este ponto do fluxo (propor_renovacao) --
+// nao altera o comportamento geral das respostas do Gemini (tipo
+// "responder" continua em prosa livre, sem mudanca).
+const SEPARADOR_ACESSOS = "─────────────────";
+
+export function montarMensagemMultiplosAcessosRenovacao(
+  acessos: { nome: string; usuario: string; servidorNome: string; planoNome: string }[],
+): string {
+  const blocos = acessos.map((acesso, indice) =>
+    [
+      `${indice + 1}. ${acesso.nome}`,
+      "",
+      `Usuário: ${acesso.usuario}`,
+      `Servidor: ${acesso.servidorNome}`,
+      `Plano: ${acesso.planoNome}`,
+    ].join("\n"),
+  );
+  return [
+    blocos.join(`\n\n${SEPARADOR_ACESSOS}\n\n`),
+    "",
+    "Qual desses acessos você gostaria de renovar?",
   ].join("\n");
 }
 
@@ -133,21 +173,23 @@ export function montarMensagemLinkConfirmacaoRenovacao(dados: {
 // usado tanto no corpo da mensagem interativa quanto no historico local.
 export function montarMensagemBotoesConfirmacaoRenovacao(dados: {
   clienteNome: string;
+  usuario: string;
   servidorNome: string;
   planoNome: string;
   valorFormatado: string;
   vencimentoFormatado: string;
 }): string {
   return [
-    "Aqui estao os dados da sua renovacao, confira antes de confirmar:",
+    "Aqui estão os dados da sua renovação, confira antes de confirmar:",
     "",
-    `Cliente: ${dados.clienteNome}`,
-    `Servidor: ${dados.servidorNome}`,
-    `Plano: ${dados.planoNome}`,
-    `Valor: R$ ${dados.valorFormatado}`,
-    `Vencimento atual: ${dados.vencimentoFormatado}`,
+    `*Cliente:* ${dados.clienteNome}`,
+    `*Usuário:* ${dados.usuario}`,
+    `*Servidor:* ${dados.servidorNome}`,
+    `*Plano:* ${dados.planoNome}`,
+    `*Valor:* R$ ${dados.valorFormatado}`,
+    `*Vencimento atual:* ${dados.vencimentoFormatado}`,
     "",
-    "Confirme ou cancele usando os botoes abaixo.",
+    "Confirme ou cancele usando os botões abaixo.",
   ].join("\n");
 }
 

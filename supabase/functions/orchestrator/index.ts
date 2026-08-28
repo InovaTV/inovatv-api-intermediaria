@@ -164,6 +164,7 @@ import {
   formatarValorBRL,
   paraCentavos,
   montarMensagemBotoesConfirmacaoRenovacao,
+  montarMensagemMultiplosAcessosRenovacao,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
@@ -307,6 +308,7 @@ async function processarCobrancaRenovacao(
   conteudo: string,
   geminiTexto: string,
   acessoResolvido: StatusResult,
+  usuarioResolvido: string | null,
 ): Promise<{
   envioResultado: { enviado: boolean };
   transferenciaResultado?: { acionada: boolean; motivo: string };
@@ -504,6 +506,7 @@ async function processarCobrancaRenovacao(
   });
   const texto2 = montarMensagemBotoesConfirmacaoRenovacao({
     clienteNome: registro.cliente_nome,
+    usuario: usuarioResolvido ?? "não informado",
     servidorNome: registro.servidor_nome,
     planoNome: registro.plano_nome,
     valorFormatado,
@@ -840,24 +843,43 @@ Deno.serve(async (req: Request) => {
     const propostaRenovacaoComAcesso = propostaRenovacao && !!acessoResolvidoRenovacao;
     const propostaRenovacaoSemAcesso = propostaRenovacao && !propostaRenovacaoComAcesso;
 
-    // Etapa 6, terceira fatia: reprovado, Gemini decidiu transferir, OU
-    // propor_renovacao aprovado mas o acesso nao pode ser resolvido com
-    // certeza (defensivo -- Validador ja deveria ter barrado isso) --
-    // marca aguardando_humano de verdade e registra as duas mensagens
+    // Ajuste de apresentacao (2026-08-28, extensao aprovada apos achado
+    // real): o caso COMUM de "multiplos acessos, cliente demonstrou
+    // intencao de renovar mas nao citou qual" e' rejeitado pelo proprio
+    // Validador (validarPropostaRenovacao, _shared/validador.ts) com
+    // motivo "renovacao:acesso_nao_determinado" -- ANTES de chegar em
+    // propostaRenovacaoSemAcesso (que e' so' o caso defensivo/raro, ja
+    // pos-aprovacao). So' este motivo especifico de reprovacao sai do
+    // caminho de transferencia -- todos os outros motivos do Validador
+    // (credencial, telefone de outro cliente, valor/data inventados,
+    // contagem de acessos divergente, plano/servidor rotulado errado,
+    // "gemini:transferir") continuam transferindo exatamente como
+    // sempre.
+    const acessoNaoDeterminado =
+      !validacao.aprovado && validacao.motivo === "renovacao:acesso_nao_determinado";
+    // Uniao dos dois casos onde a resposta certa e' listar os acessos e
+    // esperar a escolha do cliente, nunca transferir nem prosseguir com
+    // cobranca -- mutuamente exclusivos por construcao (um exige
+    // aprovado=false, o outro aprovado=true).
+    const multiplosAcessosParaEscolher = acessoNaoDeterminado || propostaRenovacaoSemAcesso;
+
+    // Etapa 6, terceira fatia: reprovado (exceto acessoNaoDeterminado,
+    // tratado a parte acima), Gemini decidiu transferir -- marca
+    // aguardando_humano de verdade e registra as duas mensagens
     // (Componente 1 §16, Componente 5 §12). Aprovado + tipo==="responder"
     // nunca entra aqui. Falha na criacao da cobranca/valor ausente
     // (Bloco 1) sao tratadas DENTRO de processarCobrancaRenovacao, mais
     // abaixo -- nao passam por aqui, porque so' sao descobertas depois
     // de a mensagem 1 (fixa) ja ter sido enviada.
     const deveTransferir =
-      !validacao.aprovado || geminiData.tipo === "transferir" || propostaRenovacaoSemAcesso;
+      (!validacao.aprovado && !acessoNaoDeterminado) || geminiData.tipo === "transferir";
 
     if (deveTransferir) {
+      // acessoNaoDeterminado ja' excluido de deveTransferir acima --
+      // validacao.motivo aqui nunca e' "renovacao:acesso_nao_determinado".
       const motivoTransferencia = !validacao.aprovado
         ? validacao.motivo
-        : geminiData.tipo === "transferir"
-          ? "gemini:transferir"
-          : "renovacao:acesso_nao_resolvido_apos_aprovacao";
+        : "gemini:transferir";
       try {
         const resultado = await acionarTransferenciaHumana(
           conversa.conversation_id,
@@ -876,6 +898,13 @@ Deno.serve(async (req: Request) => {
       // episodio_id certo quando aciona de verdade (Componente 5 §12)
       // -- nao duplicar aqui, mesmo se "ja_transferida"/erro (nesses
       // casos outra requisicao ja gravou, ou nada foi transferido).
+    } else if (multiplosAcessosParaEscolher) {
+      // Ajuste de apresentacao (2026-08-28): nada aqui de proposito --
+      // mesmo padrao de propostaRenovacaoComAcesso logo abaixo. O texto
+      // final (mensagem fixa de multiplos acessos) so' existe depois de
+      // montado no bloco de envio, e o log de cliente+ia acontece la',
+      // so' depois de confirmar que o envio funcionou. Cobre os dois
+      // casos (acessoNaoDeterminado e propostaRenovacaoSemAcesso).
     } else if (propostaRenovacaoComAcesso) {
       // Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23):
       // AO CONTRARIO dos outros branches, a mensagem do cliente NAO e'
@@ -957,18 +986,64 @@ Deno.serve(async (req: Request) => {
         );
         avisoJoseResultado = { enviado: aviso.outcome === "success" };
       }
+    } else if (multiplosAcessosParaEscolher) {
+      // Ajuste de apresentacao (2026-08-28): multiplos acessos, nenhum
+      // resolvido com certeza (via rejeicao do Validador -- caso
+      // comum -- ou via resolverAcessoRenovacao pos-aprovacao -- caso
+      // defensivo/raro) -- em vez de transferir pra humano so' por
+      // ambiguidade (comportamento antigo), lista os acessos reais e
+      // deixa o cliente escolher. Dados 100% ja disponiveis nesta
+      // mesma requisicao (statusResults + matchResult.candidates) --
+      // nenhuma nova consulta ao Rocket/match/status. A proxima
+      // mensagem do cliente citando um servidor resolve via
+      // resolverAcessoRenovacao/gravarAcessoSelecionadoSeCitado, sem
+      // nenhuma mudanca nelas. Nunca texto gerado pelo Gemini aqui --
+      // mesma disciplina das mensagens 2/3 (mensagens_fixas.ts).
+      const acessosParaSelecao = statusResults
+        .filter(
+          (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
+            s.outcome === "success" && !!s.cliente,
+        )
+        .map((s) => ({
+          nome: s.cliente.nome ?? "não informado",
+          usuario:
+            matchResult.candidates.find((c) => c.publicId === s.publicId)?.usuario ??
+            "não informado",
+          servidorNome: s.cliente.servidorNome ?? "não informado",
+          planoNome: s.cliente.planoNome ?? "não informado",
+        }));
+      const textoMultiplosAcessos = montarMensagemMultiplosAcessosRenovacao(acessosParaSelecao);
+      const envioLista = await enviarMensagemWhatsApp(telefone, textoMultiplosAcessos);
+      envioResultado = { enviado: envioLista.outcome === "success" };
+      if (envioResultado.enviado) {
+        try {
+          await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+          await inserirMensagem(conversa.conversation_id, "ia", textoMultiplosAcessos, null);
+        } catch {
+          // best-effort, mesma filosofia do resto do arquivo
+        }
+      }
+      renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
     } else if (propostaRenovacaoComAcesso) {
       // Bloco 1 do fluxo de renovacao com PagBank real (2026-08-23) --
       // substitui integralmente a orientacao GENERICA de Pix de 23/08
       // (nunca vinculada a uma cobranca real). Toda a logica de
       // cobranca/persistencia/mensagens fica em processarCobrancaRenovacao
       // (module-level, acima) -- aqui so' encaminha e usa o resultado.
+      // usuario real do acesso resolvido -- ja disponivel em
+      // matchResult.candidates (chamarMatch, mesma requisicao, sem
+      // segunda consulta): /status nao devolve usuario (allowlist
+      // propria, nunca expandida so' pra isso), mas /match sim.
+      const usuarioResolvido =
+        matchResult.candidates.find((c) => c.publicId === acessoResolvidoRenovacao?.publicId)
+          ?.usuario ?? null;
       const resultado = await processarCobrancaRenovacao(
         conversa,
         telefone,
         conteudo,
         geminiData.texto,
         acessoResolvidoRenovacao,
+        usuarioResolvido,
       );
       envioResultado = resultado.envioResultado;
       if (resultado.transferenciaResultado) transferenciaResultado = resultado.transferenciaResultado;
