@@ -33,7 +33,11 @@ const { vincularOperacaoAoToken, hashToken } = await import("../../../supabase/f
 const { criarCobrancaPixRegistro } = await import("../../../supabase/functions/_shared/cobrancas_pix.ts");
 
 let handlerWebhook;
-globalThis.Deno = { serve: (fn) => { handlerWebhook = fn; } };
+// env.get sempre undefined -- suficiente pro que este arquivo testa
+// (WHATSAPP_JOSE_NUMERO undefined so pula o aviso ao Jose dentro de
+// notificarTransferenciaHumana, gate ja coberto pela suite dedicada
+// scripts/testes/notificacao_transferencia_humana/).
+globalThis.Deno = { serve: (fn) => { handlerWebhook = fn; }, env: { get: () => undefined } };
 globalThis.EdgeRuntime = { waitUntil: (p) => { globalThis.__ultimoWaitUntil = p; } };
 await import("../../../supabase/functions/openpix-webhook/index.ts");
 

@@ -13,6 +13,7 @@ import { criarCobrancaOpenPix } from "./openpix_client.ts";
 import { criarCobrancaPixRegistro } from "./cobrancas_pix.ts";
 import { enviarMensagemWhatsApp } from "./whatsapp_client.ts";
 import { acionarTransferenciaHumana } from "./conversas_estado.ts";
+import { notificarTransferenciaHumana } from "./notificacao_transferencia.ts";
 import { inserirMensagem } from "./mensagens_atendimento.ts";
 import {
   formatarValorBRL,
@@ -69,8 +70,16 @@ export async function confirmarRenovacao(params: {
   const descricaoItem = `Renovacao InovaTV - Plano ${autorizado.plano_nome}`.trim();
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_esperado_centavos, descricaoItem);
   if (cobranca.outcome !== "success") {
-    await acionarTransferenciaHumana(autorizado.conversation_id, "renovacao:falha_criar_cobranca_apos_aceite", "(cliente confirmou ACEITO)", "").catch(() => {});
-    await marcarAutorizacaoComoFalha(autorizado.id, "renovacao:falha_criar_cobranca_apos_aceite").catch((erro) => {
+    const motivoFalha = "renovacao:falha_criar_cobranca_apos_aceite";
+    let transferenciaAcionada = false;
+    try {
+      const resultado = await acionarTransferenciaHumana(autorizado.conversation_id, motivoFalha, "(cliente confirmou ACEITO)", "");
+      transferenciaAcionada = resultado.outcome === "acionada";
+    } catch (erro) {
+      console.log("[renovacao_confirmacao] falha ao registrar transferencia (falha de cobranca)", JSON.stringify({ erro: String(erro) }));
+    }
+    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada);
+    await marcarAutorizacaoComoFalha(autorizado.id, motivoFalha).catch((erro) => {
       console.log("[renovacao_confirmacao] falha ao liberar token apos falha de cobranca", JSON.stringify({ tokenId: autorizado.id, erro: String(erro) }));
     });
     return { outcome: "falha_cobranca" };
@@ -110,16 +119,19 @@ export async function confirmarRenovacao(params: {
       "[renovacao_confirmacao] falha fatal ao vincular operacao ao token -- pagamento ficaria orfao sem esta transferencia",
       JSON.stringify({ tokenId: autorizado.id, operacaoId, erro: String(erro) }),
     );
-    await acionarTransferenciaHumana(
-      autorizado.conversation_id,
-      "renovacao:falha_vincular_operacao_token",
-      "(cliente confirmou ACEITO)",
-      "",
-    ).catch(() => {});
-    await marcarAutorizacaoComoFalha(autorizado.id, "renovacao:falha_vincular_operacao_token").catch((erro2) => {
+    const motivoFalha = "renovacao:falha_vincular_operacao_token";
+    let transferenciaAcionada = false;
+    try {
+      const resultado = await acionarTransferenciaHumana(autorizado.conversation_id, motivoFalha, "(cliente confirmou ACEITO)", "");
+      transferenciaAcionada = resultado.outcome === "acionada";
+    } catch (erro2) {
+      console.log("[renovacao_confirmacao] falha ao registrar transferencia (falha de vinculo)", JSON.stringify({ erro: String(erro2) }));
+    }
+    await notificarTransferenciaHumana(autorizado.telefone, motivoFalha, transferenciaAcionada);
+    await marcarAutorizacaoComoFalha(autorizado.id, motivoFalha).catch((erro3) => {
       console.log(
         "[renovacao_confirmacao] falha ao liberar token apos falha de vinculo",
-        JSON.stringify({ tokenId: autorizado.id, erro: String(erro2) }),
+        JSON.stringify({ tokenId: autorizado.id, erro: String(erro3) }),
       );
     });
     return { outcome: "falha_cobranca" };

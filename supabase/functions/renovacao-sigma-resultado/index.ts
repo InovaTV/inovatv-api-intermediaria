@@ -30,6 +30,7 @@ import {
   type ResultadoRenovacaoSigma,
 } from "../_shared/tokens_renovacao.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
+import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
 import {
@@ -127,16 +128,20 @@ Deno.serve(async (req: Request) => {
   // falha / sessao_expirada / resultado_ambiguo -- todas caem no mesmo
   // mecanismo generico ja existente de transferencia humana, nunca um
   // mecanismo novo.
+  const motivoTransferencia = `renovacao_sigma:${resultado}`;
+  let transferenciaAcionada = false;
   try {
-    await acionarTransferenciaHumana(
+    const transferencia = await acionarTransferenciaHumana(
       atualizado.conversation_id,
-      `renovacao_sigma:${resultado}`,
+      motivoTransferencia,
       "(renovacao Sigma pos-pagamento)",
       detalhe ?? "",
     );
+    transferenciaAcionada = transferencia.outcome === "acionada";
   } catch (erro) {
     console.log("[renovacao-sigma-resultado] falha ao acionar transferencia humana", String(erro));
   }
+  await notificarTransferenciaHumana(atualizado.telefone, motivoTransferencia, transferenciaAcionada);
 
   return jsonResponse({ outcome: `${resultado}_processado` });
 });

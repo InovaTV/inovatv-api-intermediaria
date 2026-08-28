@@ -24,6 +24,7 @@ import {
   marcarAutorizacaoComoFalha,
 } from "../_shared/tokens_renovacao.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
+import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 
 const JANELA_MINUTOS = 15;
@@ -70,16 +71,20 @@ Deno.serve(async (req: Request) => {
       // best-effort
     }
 
+    const motivoTimeout = "renovacao_sigma:watchdog_timeout";
+    let transferenciaAcionada = false;
     try {
-      await acionarTransferenciaHumana(
+      const transferencia = await acionarTransferenciaHumana(
         atualizado.conversation_id,
-        "renovacao_sigma:watchdog_timeout",
+        motivoTimeout,
         "(renovacao Sigma pos-pagamento)",
         "",
       );
+      transferenciaAcionada = transferencia.outcome === "acionada";
     } catch (erro) {
       console.log("[renovacao-sigma-watchdog] falha ao acionar transferencia humana", String(erro));
     }
+    await notificarTransferenciaHumana(atualizado.telefone, motivoTimeout, transferenciaAcionada);
 
     processados.push(token.operacao_id);
   }
@@ -103,16 +108,20 @@ Deno.serve(async (req: Request) => {
       // best-effort
     }
 
+    const motivoOrfa = "renovacao:watchdog_autorizacao_orfa";
+    let transferenciaAcionada = false;
     try {
-      await acionarTransferenciaHumana(
+      const transferencia = await acionarTransferenciaHumana(
         atualizado.conversation_id,
-        "renovacao:watchdog_autorizacao_orfa",
+        motivoOrfa,
         "(renovacao Sigma -- ACEITO sem cobranca vinculada)",
         "",
       );
+      transferenciaAcionada = transferencia.outcome === "acionada";
     } catch (erro) {
       console.log("[renovacao-sigma-watchdog] falha ao acionar transferencia humana (autorizacao orfa)", String(erro));
     }
+    await notificarTransferenciaHumana(atualizado.telefone, motivoOrfa, transferenciaAcionada);
 
     autorizacoesProcessadas.push(token.id);
   }
