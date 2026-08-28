@@ -1,51 +1,34 @@
-// Diagnostico DESCARTAVEL -- valida, isoladamente, que o ambiente do
-// GitHub Actions consegue ler um cliente real no Rocket Gestor apos a
-// rotacao de ROCKET_API_KEY (inovatv_central/CLAUDE.md, 2026-08-28).
+// Diagnostico DESCARTAVEL -- v3 (2026-08-28): valida que o ambiente do
+// GitHub Actions consegue chamar a nova ponte renovacao-sigma-cliente
+// (Supabase, commit d528377) para ler o vencimento do cliente no
+// Rocket, em vez de bater direto em app.rocketgestor.com -- chamada
+// direta bloqueada pela borda/Cloudflare especificamente para trafego
+// do GitHub Actions (investigado e caracterizado em 2026-08-27/28,
+// NEXT_SESSION.md).
 //
-// Reaproveita exatamente a mesma chamada de scripts/renovacao-sigma-workflow.mjs
-// (lerClienteRocket) -- mesmo endpoint, mesmo header de autenticacao.
-// Deliberadamente NAO faz nada alem disso: sem Playwright, sem Sigma,
-// sem Supabase, sem cobranca, sem escrita em banco. Nunca imprime
-// ROCKET_API_KEY nem ROCKET_BASE_URL.
+// v1/v2 (ate commit 9f64170) chamavam o Rocket diretamente -- superado.
+// Este script agora exercita exatamente o mesmo caminho que
+// scripts/renovacao-sigma-workflow.mjs usa hoje pra lerClienteRocket.
 //
-// v2 (2026-08-28) -- investigacao da divergencia Supabase x GitHub
-// Actions (HTTP 200 sem cliente, achado nas duas primeiras execucoes
-// deste mesmo diagnostico). Passa a capturar headers e o corpo bruto
-// da resposta (como texto, antes do parse), pra distinguir "Rocket
-// respondeu JSON valido sem cliente" de "resposta nao-JSON / pagina de
-// erro / bloqueio silencioso" -- distincao que a v1 nao permitia (o
-// `.catch(() => null)` do parse mascarava os dois casos com o mesmo
-// output). Headers potencialmente sensiveis (cookie, token, key, auth,
-// secret no nome) sao redigidos, nunca impressos.
+// Nunca imprime RENOVACAO_SIGMA_CALLBACK_TOKEN.
 //
 // Remover este arquivo (e o workflow correspondente) apos a validacao.
 
-const ROCKET_BASE_URL = process.env.ROCKET_BASE_URL;
-const ROCKET_API_KEY = process.env.ROCKET_API_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const RENOVACAO_SIGMA_CALLBACK_TOKEN = process.env.RENOVACAO_SIGMA_CALLBACK_TOKEN;
 const PUBLIC_ID = "01a0271b-5a54-7d7e-8e4a-ef4c39730e0b"; // BLAZE (Meu Uso Testes)
 
-if (!ROCKET_BASE_URL || !ROCKET_API_KEY) {
-  console.error("Faltando ROCKET_BASE_URL ou ROCKET_API_KEY no ambiente.");
+if (!SUPABASE_URL || !RENOVACAO_SIGMA_CALLBACK_TOKEN) {
+  console.error("Faltando SUPABASE_URL ou RENOVACAO_SIGMA_CALLBACK_TOKEN no ambiente.");
   process.exit(1);
 }
 
-const PADRAO_HEADER_SENSIVEL = /cookie|token|key|auth|secret/i;
-const TAMANHO_MAX_PREVIEW = 2000;
-
-function headersSeguros(headers) {
-  const resultado = {};
-  for (const [nome, valor] of headers.entries()) {
-    resultado[nome] = PADRAO_HEADER_SENSIVEL.test(nome) ? "[REDIGIDO]" : valor;
-  }
-  return resultado;
-}
-
-const resp = await fetch(`${ROCKET_BASE_URL}/gerenciador/api/v1/cliente/${PUBLIC_ID}`, {
-  headers: { "X-API-Key": ROCKET_API_KEY },
+const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-cliente`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Internal-Token": RENOVACAO_SIGMA_CALLBACK_TOKEN },
+  body: JSON.stringify({ publicId: PUBLIC_ID }),
 });
 
-// Corpo lido como texto primeiro -- nunca chama resp.json() direto,
-// pra nao perder a evidencia bruta se o parse falhar.
 const corpoBruto = await resp.text();
 
 let corpoJson = null;
@@ -57,18 +40,11 @@ try {
   jsonValido = false;
 }
 
-const clientePresente = jsonValido ? Boolean(corpoJson?.cliente) : null;
-
 console.log(JSON.stringify({
   http_status: resp.status,
   ok: resp.ok,
-  content_type: resp.headers.get("content-type"),
-  headers: headersSeguros(resp.headers),
-  corpo_bruto_tamanho: corpoBruto.length,
-  corpo_bruto_preview: corpoBruto.slice(0, TAMANHO_MAX_PREVIEW),
   json_valido: jsonValido,
-  cliente_presente: clientePresente,
-  nome: clientePresente ? (corpoJson?.cliente?.nome ?? null) : null,
-  servidor: clientePresente ? (corpoJson?.cliente?.servidor ?? null) : null,
-  vencimento: clientePresente ? (corpoJson?.cliente?.vencimento ?? null) : null,
+  outcome: jsonValido ? (corpoJson?.outcome ?? null) : null,
+  vencimento: jsonValido ? (corpoJson?.cliente?.vencimento ?? null) : null,
+  corpo_bruto_preview: corpoBruto.slice(0, 500),
 }, null, 2));
