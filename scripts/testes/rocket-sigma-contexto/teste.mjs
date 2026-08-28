@@ -4,13 +4,11 @@
 // _shared/rocket_session_check.ts e _shared/http.ts sao os arquivos
 // REAIS. O fetch global e' interceptado aqui.
 //
-// Cobre: contrato de protocolo (401/405/400), sessao do Vault
-// ausente / rpc lancando / sessao invalida (login) / erro de rede na
-// checagem (nao aborta), fase "antes" (happy, id_nao_encontrado com
-// diagnostico so-inteiros, id_ambiguo, ordem id/nome trocada,
-// sigma/info invalido, pacote_vazio, pagina !ok / pagina lanca) e
-// fase "depois". Garante que nenhuma resposta contem cookie/sessao/
-// senha/device_key/HTML bruto.
+// Contrato NOVO (2026-08-28): a function recebe SO' { idClienteInterno }
+// (ja resolvido pelo DOM do Playwright, dentro do workflow) e devolve
+// { outcome, sessaoValida, pacoteAtual, expiresAt }. Nao ha mais
+// scrape de pagina, nao ha mais resolucao de id, nao ha mais
+// diagnostico estrutural -- tudo isso saiu com a nova arquitetura.
 //
 // Como rodar: npx tsx scripts/testes/rocket-sigma-contexto/teste.mjs
 
@@ -23,9 +21,6 @@ const { definirSessaoVault, definirRpcLanca, resetarFakeSupabase } = await impor
 );
 
 const TOKEN_VALIDO = "token-interno-de-teste-valor-longo";
-const PUBLIC_ID = "01a0271b-5a54-7d7e-8e4a-ef4c39730e0b";
-const NOME_ALVO = "Meu Uso Testes";
-const TEL_ALVO = "5517981625486";
 const ID_INTERNO = "1569178";
 
 // ---------------------------------------------------------------------
@@ -38,8 +33,6 @@ function resetCfg() {
   cfg = {
     // "valida" | "login" | "erroRede"
     sessaoCheck: "valida",
-    // Response | "throw" para GET /gerenciador/cliente/info/{id}/
-    pagina: null,
     // Response | "throw" para GET .../sigma/info/?cliente_id=...
     sigma: null,
   };
@@ -56,11 +49,6 @@ globalThis.fetch = async (url, opts = {}) => {
       return new Response('<form id="login-form"><input name="username"></form>', { status: 200 });
     }
     return new Response("<html><body>dashboard ok</body></html>", { status: 200 });
-  }
-
-  if (u.startsWith("https://app.rocketgestor.com/gerenciador/cliente/info/")) {
-    if (cfg.pagina === "throw") throw new Error("pagina down");
-    return cfg.pagina;
   }
 
   if (u.startsWith("https://app.rocketgestor.com/gerenciador/cliente/sigma/info/")) {
@@ -140,16 +128,6 @@ function respStatus(status, texto = "") {
   return new Response(texto, { status });
 }
 
-function botao(id, nome, { ordemTrocada = false } = {}) {
-  return ordemTrocada
-    ? `<button type="button" nome="${nome}" id="btn_add_pagamento_${id}" class="b">Adicionar pagamento</button>`
-    : `<button type="button" id="btn_add_pagamento_${id}" nome="${nome}" class="b">Adicionar pagamento</button>`;
-}
-function linha(id, nome, telefone, opts) {
-  // telefone aparece ANTES do botao, dentro da janela de 3000 chars
-  return `<tr><td>${nome}</td><td telefone="${telefone}">tel</td><td>${botao(id, nome, opts)}</td></tr>`;
-}
-
 async function chamar(reqObj) {
   const r = await handler(reqObj);
   const txt = await r.text();
@@ -163,7 +141,7 @@ async function chamar(reqObj) {
 }
 
 // ---------------------------------------------------------------------
-// 1-8: contrato de protocolo
+// 1-6: contrato de protocolo
 // ---------------------------------------------------------------------
 {
   resetCfg();
@@ -190,195 +168,126 @@ async function chamar(reqObj) {
 }
 {
   resetCfg();
-  const r = await chamar(req({ corpo: { publicId: "nao-uuid", clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 400, "5: publicId invalido -> 400");
-  ok(chamadas.length === 0, "5: nenhum fetch externo com publicId invalido");
+  const r = await chamar(req({ corpo: {} }));
+  ok(r.status === 400, "5: idClienteInterno ausente -> 400");
+  ok(chamadas.length === 0, "5: nenhum fetch externo sem idClienteInterno");
 }
 {
   resetCfg();
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, telefone: TEL_ALVO } }));
-  ok(r.status === 400, "6: fase antes sem clienteNome -> 400");
+  const r = await chamar(req({ corpo: { idClienteInterno: "12ab" } }));
+  ok(r.status === 400, "6: idClienteInterno nao-digitos -> 400");
+  ok(chamadas.length === 0, "6: nenhum fetch externo com idClienteInterno invalido");
 }
 {
+  // idClienteInterno com espacos em volta -> trim -> aceito
   resetCfg();
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO } }));
-  ok(r.status === 400, "7: fase antes sem telefone -> 400");
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: "2026-09-13T20:59:59-03:00" } });
+  const r = await chamar(req({ corpo: { idClienteInterno: "  1569178  " } }));
+  ok(r.status === 200 && r.json?.outcome === "success", "6b: idClienteInterno com espacos -> trim -> success");
+  ok(chamadas.some((c) => c.url.includes("sigma/info/?cliente_id=1569178")), "6b: sigma/info chamado com o id trimado");
 }
 {
+  // campos obsoletos (publicId/clienteNome/telefone) sao ignorados
   resetCfg();
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, idClienteInterno: "12ab" } }));
-  ok(r.status === 400, "8: idClienteInterno nao-digitos -> 400");
-  ok(chamadas.length === 0, "8: nenhum fetch externo com idClienteInterno invalido");
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: "2026-10-01T00:00:00-03:00" } });
+  const r = await chamar(
+    req({ corpo: { idClienteInterno: ID_INTERNO, publicId: "qualquer", clienteNome: "Fulano", telefone: "5511999999999" } }),
+  );
+  ok(r.status === 200 && r.json?.outcome === "success", "7: campos obsoletos no corpo sao ignorados, nao quebram");
+  ok(!r.txt.includes("Fulano") && !r.txt.includes("qualquer"), "7: campos obsoletos nao aparecem na resposta");
 }
 
 // ---------------------------------------------------------------------
-// 9-12: sessao do Vault / checagem de sessao
+// 8-11: sessao do Vault / checagem de sessao
 // ---------------------------------------------------------------------
 {
   resetCfg();
   resetarFakeSupabase();
   definirSessaoVault({ sessionid: null, csrftoken: null });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 200 && r.json?.outcome === "sessao_expirada", "9: sessao do Vault ausente -> 200 sessao_expirada");
-  ok(r.json?.detalhe === "sessao do Vault ausente", "9: detalhe = 'sessao do Vault ausente'");
-  ok(chamadas.length === 0, "9: nao chega a bater no Rocket sem sessao");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.status === 200 && r.json?.outcome === "sessao_expirada", "8: sessao do Vault ausente -> 200 sessao_expirada");
+  ok(r.json?.detalhe === "sessao do Vault ausente", "8: detalhe = 'sessao do Vault ausente'");
+  ok(chamadas.length === 0, "8: nao chega a bater no Rocket sem sessao");
 }
 {
   resetCfg();
   resetarFakeSupabase();
   definirRpcLanca(true);
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 200 && r.json?.outcome === "unavailable" && r.json?.etapa === "sessao_vault", "10: rpc rocket_sessao_ler lanca -> unavailable etapa sessao_vault");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.status === 200 && r.json?.outcome === "unavailable" && r.json?.etapa === "sessao_vault", "9: rpc rocket_sessao_ler lanca -> unavailable etapa sessao_vault");
 }
 {
   resetCfg();
   resetarFakeSupabase();
   cfg.sessaoCheck = "login";
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 200 && r.json?.outcome === "sessao_expirada" && r.json?.detalhe === "sessao invalida (login)", "11: GET /gerenciador/ = tela de login -> sessao_expirada (login)");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.status === 200 && r.json?.outcome === "sessao_expirada" && r.json?.detalhe === "sessao invalida (login)", "10: GET /gerenciador/ = tela de login -> sessao_expirada (login)");
 }
 {
   // erro de rede na checagem NAO aborta -- segue e resolve normalmente
   resetCfg();
   resetarFakeSupabase();
   cfg.sessaoCheck = "erroRede";
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO)}</table>`);
   cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: "2026-09-13T20:59:59-03:00" } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 200 && r.json?.outcome === "success", "12: erro de rede na checagem de sessao NAO aborta (resolve normalmente)");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.status === 200 && r.json?.outcome === "success", "11: erro de rede na checagem de sessao NAO aborta (resolve normalmente)");
 }
 
 // ---------------------------------------------------------------------
-// 13-22: fase "antes"
+// 12-16: consulta ao Sigma
 // ---------------------------------------------------------------------
 {
   // happy
   resetCfg();
   resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha("999999", "Outro Cliente", "551199990000")}${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO)}</table>`);
   cfg.sigma = resp200Json({ data: { package: "1 MES - P2P & IPTV COM ADULTOS", expires_at: "2026-09-13T20:59:59-03:00", status: "ACTIVE" } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.status === 200 && r.json?.outcome === "success", "13: antes happy -> success");
-  ok(r.json?.sessaoValida === true, "13: sessaoValida = true");
-  ok(r.json?.idClienteInterno === ID_INTERNO, "13: idClienteInterno correto");
-  ok(r.json?.pacoteAtual === "1 MES - P2P & IPTV COM ADULTOS", "13: pacoteAtual = data.package");
-  ok(r.json?.expiresAt === "2026-09-13T20:59:59-03:00", "13: expiresAt = data.expires_at");
-  ok(r.json?.status === undefined, "13: data.status NAO vaza (fora do contrato)");
-  semVazamento(r.txt, "13");
-  const chamouSigmaComId = chamadas.some((c) => c.url.includes(`sigma/info/?cliente_id=${ID_INTERNO}`));
-  ok(chamouSigmaComId, "13: sigma/info chamado com o id resolvido");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.status === 200 && r.json?.outcome === "success", "12: happy -> success");
+  ok(r.json?.sessaoValida === true, "12: sessaoValida = true");
+  ok(r.json?.pacoteAtual === "1 MES - P2P & IPTV COM ADULTOS", "12: pacoteAtual = data.package");
+  ok(r.json?.expiresAt === "2026-09-13T20:59:59-03:00", "12: expiresAt = data.expires_at");
+  ok(r.json?.status === undefined && r.json?.idClienteInterno === undefined, "12: data.status / idClienteInterno NAO aparecem (fora do contrato)");
+  ok(!chamadas.some((c) => c.url.includes("/cliente/info/")), "12: NUNCA busca a pagina do cliente (/cliente/info/)");
+  ok(chamadas.some((c) => c.url.includes(`sigma/info/?cliente_id=${ID_INTERNO}`)), "12: sigma/info chamado com o id recebido");
+  semVazamento(r.txt, "12");
 }
 {
-  // id_nao_encontrado: 2 botoes, nenhum casa nome+telefone
+  // expires_at null -> success com expiresAt null
   resetCfg();
   resetarFakeSupabase();
-  const html = `<table>${linha("111", "Fulano", "551100000001")}${linha("222", "Beltrano", "551100000002")}</table>`;
-  cfg.pagina = respStatus(200, html);
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "id_nao_encontrado", "14: nenhum botao casa -> id_nao_encontrado");
-  const d = r.json?.diagnostico ?? {};
-  ok(d.totalBotoes === 2, "14: diagnostico.totalBotoes = 2");
-  ok(d.botoesComNomeAlvo === 0, "14: diagnostico.botoesComNomeAlvo = 0");
-  ok(typeof d.paginaStatus === "number" && typeof d.paginaTamanho === "number", "14: paginaStatus/paginaTamanho sao numeros");
-  ok(Object.values(d).every((v) => typeof v === "number"), "14: diagnostico so' tem inteiros (nenhuma string)");
-  semVazamento(r.txt, "14");
-  ok(!r.txt.includes("Fulano") && !r.txt.includes("Beltrano"), "14: nenhum nome de cliente na resposta");
+  cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: null } });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "success" && r.json?.expiresAt === null, "13: sigma/info sem expires_at -> success com expiresAt null");
 }
 {
-  // nome casa mas telefone nao -> botoesComNomeAlvo=1, ids vazio
   resetCfg();
   resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, "551100009999")}</table>`);
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "id_nao_encontrado", "15: nome casa mas telefone diverge -> id_nao_encontrado");
-  ok(r.json?.diagnostico?.totalBotoes === 1 && r.json?.diagnostico?.botoesComNomeAlvo === 1, "15: totalBotoes=1, botoesComNomeAlvo=1");
-}
-{
-  // id_ambiguo: 2 botoes com o MESMO nome+telefone, ids diferentes
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha("100", NOME_ALVO, TEL_ALVO)}${linha("200", NOME_ALVO, TEL_ALVO)}</table>`);
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "id_ambiguo", "16: 2 ids p/ mesmo nome+telefone -> id_ambiguo");
-  ok(Array.isArray(r.json?.candidatos) && r.json.candidatos.length === 2, "16: candidatos = 2 ids");
-  ok(r.json.candidatos.every((c) => /^\d+$/.test(c)), "16: candidatos sao so' digitos (id interno)");
-}
-{
-  // ordem nome/id trocada dentro da tag <button> -> ainda casa
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO, { ordemTrocada: true })}</table>`);
-  cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: "2026-10-01T00:00:00-03:00" } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "success" && r.json?.idClienteInterno === ID_INTERNO, "17: nome= antes de id= na tag <button> -> ainda resolve");
-}
-{
-  // sigma/info !ok
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO)}</table>`);
   cfg.sigma = respStatus(500, "erro interno");
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "18: sigma/info HTTP 500 -> unavailable etapa sigma_info");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "14: sigma/info HTTP 500 -> unavailable etapa sigma_info");
 }
 {
-  // sigma/info 200 mas nao-JSON
   resetCfg();
   resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO)}</table>`);
   cfg.sigma = new Response("<html>bloqueio da borda</html>", { status: 200 });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "19: sigma/info 200 nao-JSON -> unavailable etapa sigma_info");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "15: sigma/info 200 nao-JSON -> unavailable etapa sigma_info");
 }
 {
-  // sigma/info package vazio
   resetCfg();
   resetarFakeSupabase();
-  cfg.pagina = respStatus(200, `<table>${linha(ID_INTERNO, NOME_ALVO, TEL_ALVO)}</table>`);
   cfg.sigma = resp200Json({ data: { package: "   ", expires_at: "2026-10-01T00:00:00-03:00" } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "pacote_vazio", "20: sigma/info package vazio -> pacote_vazio");
-}
-{
-  // pagina !ok
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.pagina = respStatus(403, "forbidden");
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "pagina_cliente" && r.json?.status === 403, "21: pagina do cliente HTTP 403 -> unavailable etapa pagina_cliente status 403");
-  const chamouSigma = chamadas.some((c) => c.url.includes("sigma/info/"));
-  ok(!chamouSigma, "21: nao chega a chamar sigma/info se a pagina falhou");
-}
-{
-  // pagina lanca
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.pagina = "throw";
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, clienteNome: NOME_ALVO, telefone: TEL_ALVO } }));
-  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "pagina_cliente" && r.json?.status === 0, "22: fetch da pagina lanca -> unavailable etapa pagina_cliente status 0");
-}
-
-// ---------------------------------------------------------------------
-// 23-24: fase "depois"
-// ---------------------------------------------------------------------
-{
-  resetCfg();
-  resetarFakeSupabase();
-  cfg.sigma = resp200Json({ data: { package: "1 MES - X", expires_at: "2026-12-08T20:59:59-03:00" } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, idClienteInterno: ID_INTERNO } }));
-  ok(r.json?.outcome === "success" && r.json?.expiresAt === "2026-12-08T20:59:59-03:00", "23: depois -> success com expiresAt");
-  ok(r.json?.sessaoValida === true, "23: sessaoValida = true");
-  ok(r.json?.idClienteInterno === undefined && r.json?.pacoteAtual === undefined, "23: fase depois retorna so' sessaoValida + expiresAt");
-  const chamouPagina = chamadas.some((c) => c.url.includes("/cliente/info/"));
-  ok(!chamouPagina, "23: fase depois NUNCA faz o scrape da pagina (nenhum GET /cliente/info/)");
-  semVazamento(r.txt, "23");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "pacote_vazio", "16: sigma/info package vazio -> pacote_vazio");
 }
 {
   resetCfg();
   resetarFakeSupabase();
-  cfg.sigma = resp200Json({ data: { package: "", expires_at: null } });
-  const r = await chamar(req({ corpo: { publicId: PUBLIC_ID, idClienteInterno: ID_INTERNO } }));
-  ok(r.json?.outcome === "pacote_vazio", "24: depois com package vazio -> pacote_vazio");
+  cfg.sigma = "throw";
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "17: fetch do sigma/info lanca -> unavailable etapa sigma_info");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

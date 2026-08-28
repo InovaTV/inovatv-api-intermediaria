@@ -21,6 +21,8 @@
 
 import { chromium } from "playwright";
 
+import { resolverIdInternoDoDom } from "./lib/resolver-id-interno-dom.mjs";
+
 const OPERACAO_ID = process.env.OPERACAO_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -102,30 +104,22 @@ async function lerClienteRocket(publicId) {
   }
 }
 
-// Contexto Sigma (id_cliente interno, pacote atual, expires_at) e
-// checagem de sessao vem da Edge Function interna
-// renovacao-sigma-contexto -- roda DENTRO do Supabase, nao no runner.
-// O runner nao fala mais direto com app.rocketgestor.com fora do
-// Playwright (o fetch direto da pagina autenticada era bloqueado pela
-// borda/Cloudflare no trafego do GitHub Actions -- mesma causa que ja
-// tinha movido a leitura do cliente para renovacao-sigma-cliente).
+// Pacote atual + expires_at do Sigma + validade da sessao vem da Edge
+// Function interna renovacao-sigma-contexto -- roda DENTRO do Supabase,
+// nao no runner. O runner nao fala com app.rocketgestor.com fora do
+// Playwright.
 //
-// Duas fases, mesmo endpoint:
-//   - sem idClienteInterno: manda { publicId, clienteNome, telefone }
-//     (snapshot de tokens_renovacao) e recebe { idClienteInterno,
-//     pacoteAtual, expiresAt, sessaoValida }.
-//   - com idClienteInterno: manda { publicId, idClienteInterno } e
-//     recebe { sessaoValida, expiresAt } (reconsulta pos-clique).
-//
-// A correlacao nome+telefone (nunca so' um; nunca por posicao/ordem;
-// exatamente 1 correspondencia ou ambiguo) mora agora em
-// _shared/rocket_sigma_contexto.ts (resolverIdInterno).
-async function lerContextoSigma(corpo) {
+// Contrato unico: manda { idClienteInterno } (ja resolvido pelo DOM do
+// Playwright -- ver resolverIdInternoDoDom) e recebe
+// { outcome, sessaoValida, pacoteAtual, expiresAt }. Chamada antes do
+// clique (usa pacoteAtual + expiresAt) e de novo depois (usa so'
+// expiresAt).
+async function lerContextoSigma(idClienteInterno) {
   try {
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-contexto`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
-      body: JSON.stringify(corpo),
+      body: JSON.stringify({ idClienteInterno }),
     });
     const body = await resp.json().catch(() => null);
     if (!body || typeof body !== "object") {
@@ -166,78 +160,84 @@ async function main() {
   }
   const vencimentoAntes = clienteAntes.vencimento;
 
+  let idClienteInterno = null;
+  let pacoteAtualTexto = null;
+  let expiresAtAntes = null;
+  let clicouSalvar = false;
+
   try {
-    // id_cliente interno + pacote atual + expires_at do Sigma +
-    // validade da sessao -- tudo pela Edge Function interna
-    // renovacao-sigma-contexto (roda no Supabase, nao no runner).
-    const ctxAntes = await lerContextoSigma({
-      publicId,
-      clienteNome: token.cliente_nome,
-      telefone: token.telefone,
-    });
-
-    if (ctxAntes.outcome === "sessao_expirada") {
-      await reportarResultado("sessao_expirada", { detalhe: ctxAntes.detalhe ?? "sessao invalida" });
-      return;
-    }
-    if (ctxAntes.outcome === "id_nao_encontrado") {
-      console.log(
-        "[renovacao-sigma-workflow] id_cliente interno nao encontrado",
-        JSON.stringify(ctxAntes.diagnostico ?? {}),
-      );
-      await reportarResultado("resultado_ambiguo", { detalhe: "id_cliente interno nao encontrado" });
-      return;
-    }
-    if (ctxAntes.outcome === "id_ambiguo") {
-      console.log(
-        "[renovacao-sigma-workflow] id_cliente interno ambiguo",
-        JSON.stringify({ candidatos: Array.isArray(ctxAntes.candidatos) ? ctxAntes.candidatos.length : 0 }),
-      );
-      await reportarResultado("resultado_ambiguo", { detalhe: "id_cliente interno ambiguo" });
-      return;
-    }
-    if (ctxAntes.outcome === "pacote_vazio") {
-      await reportarResultado("resultado_ambiguo", { detalhe: "Sigma nao informou o pacote atual (package vazio)" });
-      return;
-    }
-    if (ctxAntes.outcome !== "success" || !ctxAntes.idClienteInterno || !ctxAntes.pacoteAtual) {
-      await reportarResultado("resultado_ambiguo", {
-        detalhe: `falha ao obter contexto Sigma (${ctxAntes.etapa ?? ctxAntes.outcome})`,
-      });
-      return;
-    }
-
-    const idClienteInterno = String(ctxAntes.idClienteInterno);
-    const pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
-    const expiresAtAntes = ctxAntes.expiresAt ?? null;
-
-    // URL so' para navegacao do Playwright (navegador real passa pela
-    // borda -- nao e' um fetch direto do runner).
+    // URL so' para navegacao do Playwright (navegador real executa o JS
+    // da pagina -- nao e' um fetch direto do runner).
     const paginaClienteUrl = `https://app.rocketgestor.com/gerenciador/cliente/info/${publicId}/`;
 
     // Playwright real -- mesma sequencia ja comprovada em
     // executar-renovacao-controlada.mjs, so' parametrizada.
     const browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
-    await context.addCookies([
-      { name: "sessionid", value: sessionid, domain: "app.rocketgestor.com", path: "/", httpOnly: true, secure: true },
-      { name: "csrftoken", value: csrftoken, domain: "app.rocketgestor.com", path: "/", httpOnly: false, secure: true },
-    ]);
-    const page = await context.newPage();
-
-    let clicouSalvar = false;
     try {
+      const context = await browser.newContext();
+      await context.addCookies([
+        { name: "sessionid", value: sessionid, domain: "app.rocketgestor.com", path: "/", httpOnly: true, secure: true },
+        { name: "csrftoken", value: csrftoken, domain: "app.rocketgestor.com", path: "/", httpOnly: false, secure: true },
+      ]);
+      const page = await context.newPage();
+
       await page.goto(paginaClienteUrl, { waitUntil: "load", timeout: 20000 });
-      // Correcao de risco (2026-08-24, comprovada em
-      // scripts/poc-confirmar-expires-at-renovacao.mjs, dry-run real):
-      // o seletor generico `[data-bs-target="#modal-add-pagamento"]`
-      // deixou de ser unico -- a pagina do cliente hoje renderiza esse
-      // botao repetido pra varios clientes (widget cresceu com o
-      // volume de testes desta investigacao), causando "strict mode
-      // violation" no Playwright. Cada botao carrega seu proprio
-      // cliente_id como atributo HTML
-      // (id="btn_add_pagamento_{cliente_id}") -- escopado aqui pelo
-      // mesmo idClienteInterno ja resolvido acima, nunca ambiguo.
+
+      // --- Resolve o idClienteInterno pelo DOM RENDERIZADO (o runtime
+      // Vue da pagina materializa a lista de clientes DEPOIS do load --
+      // o #btn_add_pagamento_{id} nao existe no HTML cru, so' aqui).
+      // Le todos os elementos [id^="btn_add_pagamento_"] e desambigua
+      // por nome+telefone, nunca por posicao/ordem, exatamente 1.
+      await page
+        .waitForSelector('[id^="btn_add_pagamento_"]', { timeout: 15000 })
+        .catch(() => {}); // sem nenhum elemento -> lista abaixo vira [] -> "nao encontrado"
+      const elementos = await page.$$eval('[id^="btn_add_pagamento_"]', (nodes) =>
+        nodes.map((n) => {
+          const m = /^btn_add_pagamento_(\d+)$/.exec(n.id);
+          return { id: m ? m[1] : "", nome: n.getAttribute("nome"), telefone: n.getAttribute("telefone") };
+        }),
+      );
+      const { ids, totalBotoes, botoesComNomeAlvo } = resolverIdInternoDoDom(
+        elementos,
+        token.cliente_nome,
+        token.telefone,
+      );
+      if (ids.length !== 1) {
+        console.log(
+          `[renovacao-sigma-workflow] id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
+          JSON.stringify({ totalBotoes, botoesComNomeAlvo, candidatos: ids.length }),
+        );
+        await reportarResultado("resultado_ambiguo", {
+          detalhe: `id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
+        });
+        return;
+      }
+      idClienteInterno = ids[0];
+
+      // --- Pacote atual + expires_at (baseline) via renovacao-sigma-contexto
+      // (Supabase), agora com o id ja resolvido pelo DOM.
+      const ctxAntes = await lerContextoSigma(idClienteInterno);
+      if (ctxAntes.outcome === "sessao_expirada") {
+        await reportarResultado("sessao_expirada", { detalhe: ctxAntes.detalhe ?? "sessao invalida" });
+        return;
+      }
+      if (ctxAntes.outcome === "pacote_vazio") {
+        await reportarResultado("resultado_ambiguo", { detalhe: "Sigma nao informou o pacote atual (package vazio)" });
+        return;
+      }
+      if (ctxAntes.outcome !== "success" || !ctxAntes.pacoteAtual) {
+        await reportarResultado("resultado_ambiguo", {
+          detalhe: `falha ao obter contexto Sigma (${ctxAntes.etapa ?? ctxAntes.outcome})`,
+        });
+        return;
+      }
+      pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
+      expiresAtAntes = ctxAntes.expiresAt ?? null;
+
+      // --- Clique real (Playwright), na MESMA pagina ja aberta. Cada
+      // botao carrega seu proprio cliente_id no id
+      // (#btn_add_pagamento_{id}) -- escopado pelo idClienteInterno
+      // resolvido acima, nunca ambiguo.
       await page.locator(`#btn_add_pagamento_${idClienteInterno}`).click({ timeout: 10000 });
       await page.waitForTimeout(1000);
 
@@ -285,10 +285,11 @@ async function main() {
     }
 
     // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
-    // Sigma (via renovacao-sigma-contexto, fase "depois"), os dois,
-    // nunca confia so' no clique/toast da UI.
+    // Sigma (via renovacao-sigma-contexto, mesmo endpoint, so' o
+    // expiresAt e' usado aqui), os dois, nunca confia so' no clique/
+    // toast da UI.
     const { ok: okDepois, cliente: clienteDepois } = await lerClienteRocket(publicId);
-    const ctxDepois = await lerContextoSigma({ publicId, idClienteInterno });
+    const ctxDepois = await lerContextoSigma(idClienteInterno);
 
     if (!okDepois || !clienteDepois || ctxDepois.outcome !== "success" || !ctxDepois.expiresAt) {
       await reportarResultado("resultado_ambiguo", { detalhe: "falha ao reconsultar Rocket/Sigma apos o clique" });

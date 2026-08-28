@@ -1,15 +1,20 @@
-// Leitura do "contexto Sigma" de um cliente para o workflow
-// renovacao-sigma.yml (GitHub Actions) -- devolve o id_cliente
-// interno (numerico), o pacote atual e o expires_at do Sigma, a
-// partir da sessao autenticada do Rocket. Substitui os fetch diretos
-// que o runner fazia a app.rocketgestor.com para:
-//   - GET /gerenciador/                              (checagem de sessao)
-//   - GET /gerenciador/cliente/info/{public_id}/     (id_cliente interno)
-//   - GET /gerenciador/cliente/sigma/info/?cliente_id=...  (antes e depois)
-// esses eram bloqueados pela borda/Cloudflare no trafego do GitHub
-// Actions (mesmo motivo que criou renovacao-sigma-cliente, commit
-// d528377). Rodando aqui, dentro do Supabase, a resposta e' a pagina
-// real.
+// Contexto Sigma de um cliente para o workflow renovacao-sigma.yml
+// (GitHub Actions) -- dado o idClienteInterno JA' RESOLVIDO pelo
+// Playwright, devolve o pacote atual, o expires_at do Sigma e a
+// validade da sessao. Roda DENTRO do Supabase (o runner do GitHub
+// Actions e' bloqueado pela borda/Cloudflare no trafego direto ao
+// Rocket -- mesma causa que criou renovacao-sigma-cliente).
+//
+// Chamada nas duas pontas do fluxo, com o MESMO contrato:
+//   - antes do clique: usa `pacoteAtual` (pra achar a opcao do
+//     <select>) e `expiresAt` (baseline);
+//   - depois do clique: usa so' `expiresAt` (reconsulta).
+//
+// A resolucao do idClienteInterno NAO acontece mais aqui -- a lista de
+// clientes do Rocket passou a ser materializada por JavaScript (Vue),
+// entao o #btn_add_pagamento_{id} so' existe no DOM renderizado, nunca
+// no HTML cru. Isso e' feito pelo Playwright, dentro do workflow
+// (scripts/renovacao-sigma-workflow.mjs + scripts/lib/resolver-id-interno-dom.mjs).
 //
 // Auth: X-Internal-Token dedicado (RENOVACAO_SIGMA_CALLBACK_TOKEN) --
 // o MESMO secret ja compartilhado por renovacao-sigma-cliente e
@@ -20,28 +25,13 @@
 //
 // Somente leitura. A resposta NUNCA contem cookie, sessionid,
 // csrftoken, senha, device_key/OTP nem HTML autenticado bruto -- so'
-// os campos ja extraidos. O "diagnostico" de id_nao_encontrado e' so'
-// contadores inteiros.
-//
-// Duas fases, um unico endpoint:
-//   - sem idClienteInterno (exige clienteNome + telefone): faz o
-//     scrape da pagina e devolve { idClienteInterno, pacoteAtual,
-//     expiresAt, sessaoValida }.
-//   - com idClienteInterno (digitos): pula o scrape e devolve so'
-//     { sessaoValida, expiresAt } -- reconsulta pos-clique.
+// pacoteAtual e expiresAt.
 
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { getServiceClient } from "../_shared/supabase_client.ts";
 import { verificarSessaoRocket } from "../_shared/rocket_session_check.ts";
-import {
-  lerPaginaClienteHtml,
-  lerSigmaInfo,
-  montarCookieHeader,
-  resolverIdInterno,
-} from "../_shared/rocket_sigma_contexto.ts";
+import { lerSigmaInfo, montarCookieHeader } from "../_shared/rocket_sigma_contexto.ts";
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID_INTERNO_PATTERN = /^\d+$/;
 
 Deno.serve(async (req: Request) => {
@@ -55,33 +45,16 @@ Deno.serve(async (req: Request) => {
     return errorResponse("Metodo nao suportado, use POST", 405);
   }
 
-  let body: {
-    publicId?: string;
-    clienteNome?: string;
-    telefone?: string;
-    idClienteInterno?: string;
-  };
+  let body: { idClienteInterno?: string };
   try {
     body = await req.json();
   } catch {
     return errorResponse("Corpo da requisicao precisa ser JSON valido");
   }
 
-  const publicId = (body.publicId ?? "").trim();
-  if (!UUID_PATTERN.test(publicId)) {
-    return errorResponse("Campo obrigatorio: publicId (uuid valido)");
-  }
-
-  const idClienteInternoEntrada = (body.idClienteInterno ?? "").trim();
-  const faseDepois = idClienteInternoEntrada.length > 0;
-  if (faseDepois && !ID_INTERNO_PATTERN.test(idClienteInternoEntrada)) {
-    return errorResponse("idClienteInterno deve conter somente digitos");
-  }
-
-  const clienteNome = (body.clienteNome ?? "").trim();
-  const telefone = (body.telefone ?? "").trim();
-  if (!faseDepois && (clienteNome.length === 0 || telefone.length === 0)) {
-    return errorResponse("Fase 'antes' exige clienteNome e telefone");
+  const idClienteInterno = (body.idClienteInterno ?? "").trim();
+  if (!ID_INTERNO_PATTERN.test(idClienteInterno)) {
+    return errorResponse("Campo obrigatorio: idClienteInterno (somente digitos)");
   }
 
   // --- Sessao do Vault (unico caminho de leitura) ---
@@ -111,39 +84,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    if (faseDepois) {
-      const sigma = await lerSigmaInfo(cookieHeader, idClienteInternoEntrada);
-      if (sigma.outcome === "unavailable") {
-        return jsonResponse({ outcome: "unavailable", etapa: "sigma_info" });
-      }
-      if (sigma.outcome === "pacote_vazio") {
-        return jsonResponse({ outcome: "pacote_vazio" });
-      }
-      return jsonResponse({ outcome: "success", sessaoValida: true, expiresAt: sigma.expiresAt });
-    }
-
-    const pagina = await lerPaginaClienteHtml(cookieHeader, publicId);
-    if (!pagina.ok) {
-      return jsonResponse({ outcome: "unavailable", etapa: "pagina_cliente", status: pagina.status });
-    }
-
-    const resolucao = resolverIdInterno(pagina.html, clienteNome, telefone);
-    if (resolucao.ids.length === 0) {
-      return jsonResponse({
-        outcome: "id_nao_encontrado",
-        diagnostico: {
-          paginaStatus: pagina.status,
-          paginaTamanho: pagina.html.length,
-          totalBotoes: resolucao.totalBotoes,
-          botoesComNomeAlvo: resolucao.botoesComNomeAlvo,
-        },
-      });
-    }
-    if (resolucao.ids.length > 1) {
-      return jsonResponse({ outcome: "id_ambiguo", candidatos: resolucao.ids });
-    }
-    const idClienteInterno = resolucao.ids[0];
-
     const sigma = await lerSigmaInfo(cookieHeader, idClienteInterno);
     if (sigma.outcome === "unavailable") {
       return jsonResponse({ outcome: "unavailable", etapa: "sigma_info" });
@@ -151,11 +91,9 @@ Deno.serve(async (req: Request) => {
     if (sigma.outcome === "pacote_vazio") {
       return jsonResponse({ outcome: "pacote_vazio" });
     }
-
     return jsonResponse({
       outcome: "success",
       sessaoValida: true,
-      idClienteInterno,
       pacoteAtual: sigma.package,
       expiresAt: sigma.expiresAt,
     });
