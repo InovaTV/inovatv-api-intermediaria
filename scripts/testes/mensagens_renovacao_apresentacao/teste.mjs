@@ -161,13 +161,18 @@ function checarLista(rotulo, acessos) {
     // Sem linha em branco entre o titulo numerado e "Usuário:".
     const iTitulo = linhas.indexOf(`*${i + 1}. ${a.nome}*`);
     ok(linhas[iTitulo + 1] === `Usuário: ${a.usuario}`, `${rotulo}: bloco ${i + 1} -- Usuario logo apos o titulo, sem linha vazia`);
-    // Valor -- ULTIMA linha do bloco, logo apos "Plano:", e' o valor
-    // DESTE acesso (nunca trocado com o de outro bloco).
+    // Ordem do bloco: ... Plano -> Vencimento -> Valor (Valor continua
+    // sendo a ULTIMA linha). Cada campo e' o DESTE acesso, nunca
+    // trocado com outro bloco.
     const iPlano = linhas.indexOf(`Plano: ${a.planoNome}`, iTitulo);
+    const linhaVencEsperada = a.vencimentoFormatado
+      ? `📅 Vencimento: ${a.vencimentoFormatado}`
+      : "📅 Vencimento: não informado";
+    ok(linhas[iPlano + 1] === linhaVencEsperada, `${rotulo}: bloco ${i + 1} -- "${linhaVencEsperada}" logo apos o Plano`);
     const linhaValorEsperada = a.valorFormatado
       ? `💰 Valor: R$ ${a.valorFormatado}`
       : "💰 Valor: não informado";
-    ok(linhas[iPlano + 1] === linhaValorEsperada, `${rotulo}: bloco ${i + 1} -- "${linhaValorEsperada}" logo apos o Plano`);
+    ok(linhas[iPlano + 2] === linhaValorEsperada, `${rotulo}: bloco ${i + 1} -- "${linhaValorEsperada}" logo apos o Vencimento`);
   });
 
   const sepCount = texto.split(SEP).length - 1;
@@ -183,20 +188,48 @@ function checarLista(rotulo, acessos) {
   );
 }
 checarLista("C3(2 acessos)", [
-  { nome: "Meu Uso Testes", usuario: "828667229", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00" },
-  { nome: "Js Informática Rp", usuario: "112233", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "42,00" },
+  { nome: "Meu Uso Testes", usuario: "828667229", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: "13/10/2026" },
+  { nome: "Js Informática Rp", usuario: "112233", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "42,00", vencimentoFormatado: "08/03/2027" },
 ]);
 checarLista("C3(3 acessos)", [
-  { nome: "A", usuario: "1", servidorNome: "S1", planoNome: "Mensal", valorFormatado: "19,90" },
-  { nome: "B", usuario: "2", servidorNome: "S2", planoNome: "Anual", valorFormatado: "199,00" },
-  { nome: "C", usuario: "3", servidorNome: "S3", planoNome: "Semestral", valorFormatado: "99,90" },
+  { nome: "A", usuario: "1", servidorNome: "S1", planoNome: "Mensal", valorFormatado: "19,90", vencimentoFormatado: "01/09/2026" },
+  { nome: "B", usuario: "2", servidorNome: "S2", planoNome: "Anual", valorFormatado: "199,00", vencimentoFormatado: "15/12/2026" },
+  { nome: "C", usuario: "3", servidorNome: "S3", planoNome: "Semestral", valorFormatado: "99,90", vencimentoFormatado: "20/06/2027" },
 ]);
+// C3 -- vencimento null -> "📅 Vencimento: não informado" (fallback,
+// mesmo padrao do valor). Cada bloco mantem o SEU vencimento.
+checarLista("C3(venc null)", [
+  { nome: "SemVenc", usuario: "7", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: null },
+  { nome: "ComVenc", usuario: "8", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: "09/11/2026" },
+]);
+{
+  const texto = montarMensagemMultiplosAcessosRenovacao([
+    { nome: "SemVenc", usuario: "7", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: null },
+    { nome: "ComVenc", usuario: "8", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: "09/11/2026" },
+  ]);
+  ok(texto.includes("📅 Vencimento: não informado"), "C3: vencimento null vira '📅 Vencimento: não informado'");
+  ok(texto.includes("📅 Vencimento: 09/11/2026"), "C3: o outro acesso mostra o vencimento real");
+  ok(!/(undefined|null|NaN|Invalid Date)/.test(texto), "C3: sem undefined/null/Invalid Date no vencimento");
+}
+// C3 -- o vencimento acompanha o SEU bloco (nao e' trocado entre acessos)
+{
+  const texto = montarMensagemMultiplosAcessosRenovacao([
+    { nome: "Alpha", usuario: "a", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: "13/10/2026" },
+    { nome: "Beta", usuario: "b", servidorNome: "NewOne", planoNome: "Anual", valorFormatado: "300,00", vencimentoFormatado: "08/03/2027" },
+  ]);
+  const linhas = texto.split("\n");
+  const iAlpha = linhas.indexOf("*1. Alpha*");
+  const iBeta = linhas.indexOf("*2. Beta*");
+  ok(linhas.slice(iAlpha, iBeta).join("\n").includes("📅 Vencimento: 13/10/2026"), "C3: bloco Alpha carrega seu vencimento");
+  ok(!linhas.slice(iAlpha, iBeta).join("\n").includes("08/03/2027"), "C3: vencimento do bloco 2 NAO vaza para o bloco 1");
+  ok(linhas.slice(iBeta).join("\n").includes("📅 Vencimento: 08/03/2027"), "C3: bloco Beta carrega seu vencimento");
+}
 
 // C3 -- o valor de cada acesso acompanha o SEU bloco (nao e' trocado)
 {
   const texto = montarMensagemMultiplosAcessosRenovacao([
-    { nome: "Alpha", usuario: "a", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00" },
-    { nome: "Beta", usuario: "b", servidorNome: "NewOne", planoNome: "Anual", valorFormatado: "300,00" },
+    { nome: "Alpha", usuario: "a", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", vencimentoFormatado: "13/10/2026" },
+    { nome: "Beta", usuario: "b", servidorNome: "NewOne", planoNome: "Anual", valorFormatado: "300,00", vencimentoFormatado: "08/03/2027" },
   ]);
   const linhas = texto.split("\n");
   const iAlpha = linhas.indexOf("*1. Alpha*");
@@ -209,8 +242,8 @@ checarLista("C3(3 acessos)", [
 // C3 -- valor null -> "💰 Valor: não informado" (sem "R$", sem undefined/null)
 {
   const texto = montarMensagemMultiplosAcessosRenovacao([
-    { nome: "X", usuario: "não informado", servidorNome: "não informado", planoNome: "não informado", valorFormatado: null },
-    { nome: "Y", usuario: "9", servidorNome: "S", planoNome: "Mensal", valorFormatado: "50,00" },
+    { nome: "X", usuario: "não informado", servidorNome: "não informado", planoNome: "não informado", valorFormatado: null, vencimentoFormatado: null },
+    { nome: "Y", usuario: "9", servidorNome: "S", planoNome: "Mensal", valorFormatado: "50,00", vencimentoFormatado: "09/11/2026" },
   ]);
   ok(texto.includes("💰 Valor: não informado"), "C3: valor null vira '💰 Valor: não informado'");
   ok(!texto.includes("💰 Valor: R$ não informado"), "C3: sem 'R$' quando o valor e' desconhecido");
@@ -255,6 +288,21 @@ checarLista("C3(3 acessos)", [
   ok(texto.includes("💰 *Total: R$ 60,00*"), "Lote-confirm: total consolidado");
   ok(texto.includes("Toque em *ACEITO*"), "Lote-confirm: instrucao de ACEITO/CANCELAR");
   ok(!/promo|desconto/i.test(texto), "Lote-confirm: NUNCA cita 'promocao'/'desconto'");
+}
+
+// Etapa 1 -- confirmacao do lote com valores DIFERENTES por acesso:
+// cada linha mostra o valor real do SEU acesso; o total e' a soma.
+{
+  const texto = montarMensagemConfirmacaoLote({
+    itens: [
+      { nome: "Meu Uso Testes", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00" },
+      { nome: "Js Informática Rp", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "50,00" },
+    ],
+    totalFormatado: "85,00",
+  });
+  ok(texto.includes("💰 R$ 35,00") && texto.includes("💰 R$ 50,00"), "Lote-confirm(dif): cada acesso mostra o SEU valor real");
+  ok(texto.includes("💰 *Total: R$ 85,00*"), "Lote-confirm(dif): total = soma (35 + 50 = 85), nunca media/desconto");
+  ok(!/promo|desconto/i.test(texto), "Lote-confirm(dif): nunca cita promocao/desconto");
 }
 
 // =====================================================================

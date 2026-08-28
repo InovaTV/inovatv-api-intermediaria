@@ -1208,16 +1208,25 @@ Deno.serve(async (req: Request) => {
         renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
         // NAO cria lote, NAO chama resolverPrecoLote/criarRenovacaoLote.
       } else {
+        // Preco do lote = SOMA dos valores reais de cada acesso no
+        // Rocket (paraCentavos(s.cliente.valor), o mesmo `valor` que a
+        // lista mostrou ao cliente). Sem constante fixa, sem desconto,
+        // sem recalculo. resolverPrecoLote so' devolve null se algum
+        // acesso nao tiver valor real utilizavel.
         const preco = resolverPrecoLote(
           acessosLote.map((s, i) => ({
             tipo: tiposLote[i],
             servidorNome: s.cliente.servidorNome ?? null,
             planoNome: s.cliente.planoNome ?? null,
+            valorCentavos: paraCentavos(s.cliente.valor),
           })),
         );
-        if (!preco) {
-          // Nenhuma regra comercial cobre esse N -- nao oferece o lote,
-          // pede pra escolher 1. Nunca transfere so' por isso.
+        // Escopo atual do lote: exatamente 2 acessos (limite operacional,
+        // NAO regra de preco -- a soma acima ja generaliza pra N>2). Sem
+        // preco confiavel ou fora do escopo -> fallback de pedir 1.
+        if (!preco || acessosLote.length !== 2) {
+          // Nao oferece o lote agora, pede pra escolher 1. Nunca
+          // transfere so' por isso.
           const msgFallback =
             "No momento consigo renovar 2 acessos de uma vez. Me diga o número do acesso que você quer renovar primeiro.";
           const envioFb = await enviarMensagemWhatsApp(telefone, msgFallback);
@@ -1412,6 +1421,14 @@ Deno.serve(async (req: Request) => {
             "não informado",
           servidorNome: s.cliente.servidorNome ?? "não informado",
           planoNome: s.cliente.planoNome ?? "não informado",
+          // Vencimento do PROPRIO acesso, direto do /status, formatado
+          // DD/MM/AAAA (mesmo padrao ja usado na mensagem 2 -- fuso
+          // America/Sao_Paulo). null -> a mensagem usa "não informado".
+          vencimentoFormatado: s.cliente.vencimento
+            ? new Date(s.cliente.vencimento).toLocaleDateString("pt-BR", {
+                timeZone: "America/Sao_Paulo",
+              })
+            : null,
           // Valor do PROPRIO acesso, direto do /status (campo agora
           // exposto). formatarValorBRL e' so' formatacao de exibicao
           // (mesma de C2), nunca recalculo; sem consulta por candidato.

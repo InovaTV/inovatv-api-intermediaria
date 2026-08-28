@@ -218,11 +218,17 @@ async function testeA() {
   // normaliza "35.00"/"42,00" -> "35,00"/"42,00". Cada valor no SEU bloco.
   ok(texto.includes("💰 Valor: R$ 35,00"), "Teste A: valor do acesso BLAZE (35.00 -> R$ 35,00)");
   ok(texto.includes("💰 Valor: R$ 42,00"), "Teste A: valor do acesso NewOne (42,00 -> R$ 42,00)");
+  // Vencimento por acesso -- vem do `vencimento` do /status (fake),
+  // formatado DD/MM/AAAA (fuso America/Sao_Paulo). Cada um no SEU bloco.
+  ok(texto.includes("📅 Vencimento: 13/09/2026"), "Teste A: vencimento do acesso BLAZE (13/09/2026)");
+  ok(texto.includes("📅 Vencimento: 08/12/2026"), "Teste A: vencimento do acesso NewOne (08/12/2026)");
   {
     const bloco1 = texto.slice(texto.indexOf("BLAZE"), texto.indexOf("─────────────────"));
     const bloco2 = texto.slice(texto.indexOf("NewOne"));
     ok(bloco1.includes("💰 Valor: R$ 35,00") && !bloco1.includes("42,00"), "Teste A: bloco BLAZE tem R$ 35,00, nunca o valor do NewOne");
     ok(bloco2.includes("💰 Valor: R$ 42,00") && !bloco2.includes("35,00"), "Teste A: bloco NewOne tem R$ 42,00, nunca o valor do BLAZE");
+    ok(bloco1.includes("📅 Vencimento: 13/09/2026") && !bloco1.includes("08/12/2026"), "Teste A: bloco BLAZE tem seu vencimento, nunca o do NewOne");
+    ok(bloco2.includes("📅 Vencimento: 08/12/2026") && !bloco2.includes("13/09/2026"), "Teste A: bloco NewOne tem seu vencimento, nunca o do BLAZE");
   }
 
   // Separador so' entre os acessos, nunca depois do ultimo.
@@ -410,6 +416,7 @@ async function testeE() {
   ok(texto.includes("*1. Meu Uso Testes*") && texto.includes("BLAZE"), "Teste E: bloco 1 (BLAZE) presente");
   ok(texto.includes("*2. Js Informática Rp*") && texto.includes("NewOne"), "Teste E: bloco 2 (NewOne) presente");
   ok(texto.includes("💰 Valor: R$ 35,00") && texto.includes("💰 Valor: R$ 42,00"), "Teste E: valor de cada acesso presente (via /status, interceptor C3)");
+  ok(texto.includes("📅 Vencimento: 13/09/2026") && texto.includes("📅 Vencimento: 08/12/2026"), "Teste E: vencimento de cada acesso presente (via /status)");
   ok(texto.includes("─────────────────"), "Teste E: separador presente");
   ok(!texto.includes("Poderia me dizer qual deles"), "Teste E: a PROSA do Gemini NUNCA chega ao cliente");
 
@@ -493,10 +500,11 @@ async function testeH() {
 
 // ---------------------------------------------------------------------
 // Etapa 1 -- Teste I: cliente responde "0" a lista -> renovacao em LOTE.
-// Cria 1 lote com 2 filhos 'sigma', precifica pela regra interna
-// (R$ 30,00 cada / R$ 60,00 total), envia UMA confirmacao interativa
-// (ACEITO/CANCELAR) com o total -- sem transferencia, sem citar
-// "promocao"/"desconto".
+// Cria 1 lote com 2 filhos 'sigma'. O preco de cada acesso e' o VALOR
+// REAL dele no Rocket (fake /status: BLAZE 35,00 + NewOne 42,00) e o
+// total e' a SOMA (77,00) -- sem constante fixa, sem desconto. Envia
+// UMA confirmacao interativa (ACEITO/CANCELAR) com o total -- sem
+// transferencia, sem citar "promocao"/"desconto".
 // ---------------------------------------------------------------------
 async function testeI() {
   resetarTudo();
@@ -517,11 +525,16 @@ async function testeI() {
   const chamadas = chamadasCriarLote();
   ok(chamadas.length === 1, "Teste I: criarRenovacaoLote chamado exatamente uma vez");
   const c = chamadas[0] ?? {};
-  ok(c.valorTotalCentavos === 6000, "Teste I: total do lote = 6000 centavos (R$ 60,00)");
-  ok(c.regraAplicada === "lote_2_acessos_30", "Teste I: regra interna aplicada e' a de 2 acessos");
+  ok(c.valorTotalCentavos === 7700, "Teste I: total do lote = 7700 centavos (35,00 + 42,00 = R$ 77,00)");
+  ok(c.regraAplicada === "soma_valores_rocket", "Teste I: rotulo interno = soma dos valores reais (sem regra comercial)");
   ok(Array.isArray(c.filhos) && c.filhos.length === 2, "Teste I: lote nasce com 2 filhos");
   ok(c.filhos?.every((f) => f.tipo === "sigma"), "Teste I: filhos tipo 'sigma' (UniTV so' na Etapa 2)");
-  ok(c.filhos?.every((f) => f.valorEsperadoCentavos === 3000), "Teste I: cada filho custa 3000 centavos (R$ 30,00)");
+  {
+    const porPub = Object.fromEntries((c.filhos ?? []).map((f) => [f.publicId, f.valorEsperadoCentavos]));
+    ok(porPub[PUBLIC_ID_A] === 3500, "Teste I: filho BLAZE carrega o valor REAL dele (3500)");
+    ok(porPub[PUBLIC_ID_B] === 4200, "Teste I: filho NewOne carrega o valor REAL dele (4200)");
+    ok((c.filhos ?? []).reduce((s, f) => s + f.valorEsperadoCentavos, 0) === c.valorTotalCentavos, "Teste I: total = soma exata dos valores dos filhos");
+  }
   ok(
     c.filhos?.map((f) => f.publicId).sort().join(",") === [PUBLIC_ID_A, PUBLIC_ID_B].sort().join(","),
     "Teste I: filhos apontam para os public_id reais dos dois acessos",
@@ -533,8 +546,8 @@ async function testeI() {
   ok(texto.includes("📋 *Confira sua renovação*"), "Teste I: cabecalho da confirmacao de lote");
   ok(texto.includes("Você vai renovar 2 acessos"), "Teste I: quantidade de acessos no texto");
   ok(texto.includes("*1. Meu Uso Testes*") && texto.includes("*2. Js Informática Rp*"), "Teste I: os dois nomes, numerados e em negrito");
-  ok((texto.match(/💰 R\$ 30,00/g) ?? []).length === 2, "Teste I: valor final R$ 30,00 aparece uma vez por acesso");
-  ok(texto.includes("💰 *Total: R$ 60,00*"), "Teste I: total consolidado");
+  ok(texto.includes("💰 R$ 35,00") && texto.includes("💰 R$ 42,00"), "Teste I: cada acesso mostra o SEU valor real (35,00 e 42,00)");
+  ok(texto.includes("💰 *Total: R$ 77,00*"), "Teste I: total consolidado = soma real (77,00)");
   ok(!/promo|desconto/i.test(texto), "Teste I: NUNCA cita 'promocao'/'desconto' ao cliente");
 
   const botoes = interativas[0]?.botoes ?? [];
@@ -551,9 +564,11 @@ async function testeI() {
 }
 
 // ---------------------------------------------------------------------
-// Etapa 1 -- Teste J: "0" com 3 acessos -> nenhuma regra comercial
-// cobre N=3 (resolverPrecoLote retorna null) -> fallback pedindo pra
-// escolher 1, NUNCA transferencia, NUNCA criacao de lote.
+// Etapa 1 -- Teste J: "0" com 3 acessos -> fora do ESCOPO OPERACIONAL
+// atual do lote (exatamente 2 acessos). A precificacao ja generaliza
+// (soma dos valores reais), mas o Orquestrador so' oferece o lote pra
+// N===2 -> fallback pedindo pra escolher 1, NUNCA transferencia, NUNCA
+// criacao de lote. (limite operacional, nao regra de preco)
 // ---------------------------------------------------------------------
 async function testeJ() {
   resetarTudo();
@@ -580,7 +595,7 @@ async function testeJ() {
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
 
-  ok(chamadasCriarLote().length === 0, "Teste J: nenhum lote criado (N=3 sem regra comercial)");
+  ok(chamadasCriarLote().length === 0, "Teste J: nenhum lote criado (N=3 fora do escopo operacional de 2 acessos)");
   ok(acionamentosRegistrados().length === 0, "Teste J: nenhuma transferencia humana");
   const enviadas = getMensagensEnviadas();
   ok(enviadas.length === 1 && /renovar 2 acessos de uma vez/i.test(enviadas[0].texto), "Teste J: fallback pede pra escolher 1 (consigo renovar 2 de uma vez)");
@@ -989,7 +1004,8 @@ async function testeX() {
   ok(Array.isArray(c.filhos) && c.filhos.length === 2, "Teste X: 2 filhos");
   ok(c.filhos?.every((f) => f.tipo === "sigma"), "Teste X: tipo derivado do servidor = 'sigma' (nunca mais hardcode)");
   ok(c.filhos?.every((f) => f.publicId), "Teste X: filhos Sigma carregam publicId");
-  ok(c.valorTotalCentavos === 6000, "Teste X: total R$ 60,00");
+  ok(c.valorTotalCentavos === 7700, "Teste X: total = soma dos valores reais (35,00 + 42,00 = R$ 77,00)");
+  ok((c.filhos ?? []).reduce((s, f) => s + f.valorEsperadoCentavos, 0) === 7700, "Teste X: soma dos filhos bate com o total");
   ok(acionamentosRegistrados().length === 0, "Teste X: nenhuma transferencia");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste X: confirmacao interativa do lote enviada");
 }

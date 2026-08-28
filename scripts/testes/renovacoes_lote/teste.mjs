@@ -60,7 +60,7 @@ const TEL = "5517981625486";
     conversationId: CONV,
     telefone: TEL,
     valorTotalCentavos: 6000,
-    regraAplicada: "lote_2_acessos_30",
+    regraAplicada: "soma_valores_rocket",
     filhos,
   });
 
@@ -69,7 +69,7 @@ const TEL = "5517981625486";
   ok(capas.length === 1, "criar: exatamente 1 linha em renovacoes_lote");
   ok(capas[0].conversation_id === CONV && capas[0].telefone === TEL, "criar: capa carrega conversation_id/telefone");
   ok(capas[0].valor_total_centavos === 6000, "criar: total gravado");
-  ok(capas[0].regra_aplicada === "lote_2_acessos_30", "criar: rotulo interno da regra gravado");
+  ok(capas[0].regra_aplicada === "soma_valores_rocket", "criar: rotulo interno da regra gravado");
   ok(capas[0].estado === "aguardando_confirmacao", "criar: capa nasce aguardando_confirmacao");
   ok(typeof capas[0].token_hash === "string" && capas[0].token_hash.length === 64, "criar: token_hash e' SHA-256 hex (64)");
   ok(capas[0].token_hash !== tokenBruto, "criar: o hash NUNCA e' o token bruto");

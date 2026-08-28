@@ -147,6 +147,9 @@ export function montarMensagemMultiplosAcessosRenovacao(
     servidorNome: string;
     planoNome: string;
     valorFormatado: string | null;
+    // Vencimento ja formatado como DD/MM/AAAA pelo chamador (vem do
+    // `vencimento` do /status). null quando o /status nao devolveu.
+    vencimentoFormatado: string | null;
   }[],
 ): string {
   const blocos = acessos.map((acesso, indice) =>
@@ -155,6 +158,9 @@ export function montarMensagemMultiplosAcessosRenovacao(
       `Usuário: ${acesso.usuario}`,
       `Servidor: ${acesso.servidorNome}`,
       `Plano: ${acesso.planoNome}`,
+      acesso.vencimentoFormatado
+        ? `📅 Vencimento: ${acesso.vencimentoFormatado}`
+        : "📅 Vencimento: não informado",
       acesso.valorFormatado
         ? `💰 Valor: R$ ${acesso.valorFormatado}`
         : "💰 Valor: não informado",
