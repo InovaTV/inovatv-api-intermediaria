@@ -346,3 +346,17 @@ export const MENSAGEM_CANCELAMENTO_RENOVACAO =
 // uma segunda, so' lembra o cliente do que ja esta em andamento.
 export const MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO =
   "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure os botões que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
+
+// Etapa 1.5 (Lacuna A, 2026-08-28) -- tentativa de renovar um acesso
+// UniTV. A renovacao UniTV nao esta integrada ate a Etapa 2: o
+// Orquestrador NUNCA cria token/cobranca para UniTV -- envia esta
+// mensagem fixa e aciona atendimento humano. Sem cobranca, sem Sigma.
+export const MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA =
+  "A renovação de acessos UniTV ainda não está disponível por aqui. Já encaminhei seu atendimento para que um de nossos atendentes conclua essa renovação para você.";
+
+// Etapa 1.5 -- pedido de renovar TODOS ("0") quando pelo menos um dos
+// acessos e' UniTV. Como a UniTV nao esta integrada, o lote nao pode
+// ser criado com esse acesso -- nenhum lote e' gerado, nenhuma
+// cobranca. O cliente e' avisado e o atendimento e' encaminhado.
+export const MENSAGEM_RENOVACAO_LOTE_COM_UNITV =
+  "Um dos seus acessos é UniTV, e a renovação em lote com acesso UniTV ainda não está disponível por aqui. Já encaminhei seu atendimento para que um atendente cuide da sua renovação. Se preferir, você também pode renovar os acessos Sigma um a um pelo número de cada um na lista.";

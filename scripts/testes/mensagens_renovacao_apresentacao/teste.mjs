@@ -21,6 +21,8 @@ import {
   montarTextoConfirmacaoPagamentoRenovacao,
   montarMensagemConfirmacaoLote,
   montarMensagemResultadoLote,
+  MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+  MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
 } from "../../../supabase/functions/_shared/mensagens_fixas.ts";
 
 let falhas = 0;
@@ -276,6 +278,20 @@ checarLista("C3(3 acessos)", [
   ok(parcial.includes("Suas renovações foram registradas.") && !parcial.includes("com sucesso."), "Lote-result: sem 'com sucesso' se algum falhou");
   ok(parcial.includes("⚠️ Um atendente vai concluir esta renovação por aqui."), "Lote-result: acesso que falhou aponta atendente humano");
   ok(!parcial.includes("Novo vencimento:") || parcial.split("Novo vencimento:").length - 1 === 1, "Lote-result: acesso que falhou NAO mostra vencimento novo");
+}
+
+// =====================================================================
+// Etapa 1.5 (Lacuna A) -- mensagens fixas de roteamento UniTV
+// =====================================================================
+{
+  ok(/uni ?tv/i.test(MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA), "UniTV-msg: cita UniTV");
+  ok(/atendente/i.test(MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA), "UniTV-msg: encaminha para atendente");
+  ok(!/pix|pagamento|r\$|cobran/i.test(MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA), "UniTV-msg: NUNCA fala de pagamento/PIX/cobranca");
+
+  ok(/uni ?tv/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: cita UniTV");
+  ok(/atendente/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: encaminha para atendente");
+  ok(/sigma/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: sugere renovar os Sigma um a um");
+  ok(!/promo|desconto|r\$/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: sem promocao/desconto/valor");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

@@ -8,6 +8,11 @@ let registroCriado = {
   token_hash: "hash-teste-123",
 };
 
+let contadorCriarToken = 0;
+
+export function chamadasCriarToken() {
+  return contadorCriarToken;
+}
 export function configurarTokenExistente(token) {
   tokenExistenteConfigurado = token;
 }
@@ -16,6 +21,7 @@ export function configurarRegistroCriado(registro) {
 }
 export function resetarTokensRenovacao() {
   tokenExistenteConfigurado = null;
+  contadorCriarToken = 0;
   registroCriado = {
     id: "token-teste-1",
     cliente_nome: "Meu Uso Testes",
@@ -31,5 +37,6 @@ export async function buscarTokenAtivoPorPublicId() {
 }
 
 export async function criarTokenRenovacao() {
+  contadorCriarToken += 1;
   return { registro: registroCriado };
 }

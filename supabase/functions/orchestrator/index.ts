@@ -161,6 +161,8 @@ import {
   MENSAGEM_SESSAO_EXPIRADA,
   MENSAGEM_BUSCANDO_DADOS_RENOVACAO,
   MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
+  MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+  MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
   formatarValorBRL,
   paraCentavos,
   montarMensagemBotoesConfirmacaoRenovacao,
@@ -177,6 +179,11 @@ import { buscarTokenAtivoPorPublicId, criarTokenRenovacao } from "../_shared/tok
 // (executor stub, sem chamada real -- Etapa 2).
 import { resolverPrecoLote } from "../_shared/precos_renovacao.ts";
 import { criarRenovacaoLote, existeLoteAtivoParaPublicId } from "../_shared/renovacoes_lote.ts";
+// Etapa 1.5 (Lacuna A, 2026-08-28) -- roteamento por tipo de acesso.
+// UniTV nunca segue o fluxo Sigma (nao cria token tipo='sigma', nao
+// cobra). Ate a Etapa 2, acesso UniTV -> tratamento explicito
+// "UniTV ainda nao integrada" + transferencia humana, sem cobranca.
+import { classificarTipoAcesso } from "../_shared/tipo_acesso.ts";
 
 // Memoria de sessao (Camada 3, 2026-08-23 -- ver
 // docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
@@ -232,6 +239,35 @@ function resolverAcessoRenovacao(
   }
 
   return null;
+}
+
+// Etapa 1.5 (2026-08-28) -- ordem DETERMINISTICA dos acessos de um
+// cliente com multiplos acessos. A lista numerada
+// (montarMensagemMultiplosAcessosRenovacao, "*1. ...*") e a selecao
+// numerica ("1"/"2") sao computadas em REQUISICOES DIFERENTES (a lista
+// numa mensagem, a escolha na seguinte) -- cada uma refaz o /match, e
+// o Rocket nao garante por contrato devolver os clientes na mesma
+// ordem nas duas chamadas. Ordenando pelos MESMOS campos nas duas
+// pontas, a posicao N e' sempre o mesmo acesso enquanto o CONJUNTO de
+// acessos nao muda -- independente da ordem que o Rocket devolveu.
+// Chave estavel dentro de uma conversa: servidorNome -> nome do
+// cliente -> publicId. Usada na lista, na selecao numerica e no lote,
+// pra que as tres vejam exatamente a mesma ordem.
+function ordenarAcessosMultiplos(
+  statusResults: StatusResult[],
+): (StatusResult & { cliente: NonNullable<StatusResult["cliente"]> })[] {
+  return statusResults
+    .filter(
+      (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
+        s.outcome === "success" && !!s.cliente,
+    )
+    .sort((a, b) => {
+      const porServidor = (a.cliente.servidorNome ?? "").localeCompare(b.cliente.servidorNome ?? "");
+      if (porServidor !== 0) return porServidor;
+      const porNome = (a.cliente.nome ?? "").localeCompare(b.cliente.nome ?? "");
+      if (porNome !== 0) return porNome;
+      return (a.publicId ?? "").localeCompare(b.publicId ?? "");
+    });
 }
 
 // Memoria de sessao (2026-08-23): grava acesso_selecionado SO' quando
@@ -340,7 +376,15 @@ async function processarCobrancaRenovacao(
   // aqui dentro, para os 2 casos de falha que so' sao descobertos DEPOIS
   // de a mensagem 1 (fixa) ja ter sido enviada (por isso nao passam pelo
   // deveTransferir calculado antes, no corpo principal).
-  async function transferirPorFalha(motivo: string) {
+  // mensagemCliente (Etapa 1.5, 2026-08-28): por padrao a frase generica
+  // de transferencia. Casos com mensagem propria (ex.: acesso UniTV nao
+  // integrado) passam o texto especifico -- o resto do mecanismo
+  // (acionarTransferenciaHumana + persistencia + aviso ao Jose) e'
+  // identico.
+  async function transferirPorFalha(
+    motivo: string,
+    mensagemCliente: string = MENSAGEM_TRANSFERENCIA_CLIENTE,
+  ) {
     let transferenciaResultado: { acionada: boolean; motivo: string };
     try {
       const resultado = await acionarTransferenciaHumana(
@@ -360,14 +404,14 @@ async function processarCobrancaRenovacao(
     let envioResultado = { enviado: false };
     let avisoJoseResultado: { enviado: boolean } | undefined;
     if (transferenciaResultado.acionada) {
-      const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
+      const envio = await enviarMensagemWhatsApp(telefone, mensagemCliente);
       envioResultado = { enviado: envio.outcome === "success" };
       if (envioResultado.enviado) {
         // C5 (bloco de renovacao 2026-08-28): grava no historico do
         // Painel a frase fixa que o cliente efetivamente recebeu. A RPC
         // acionar_transferencia_humana ja gravou cliente + texto de
         // contexto; isto adiciona o que foi de fato enviado. Best-effort.
-        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch(() => {});
+        await inserirMensagem(conversa.conversation_id, "ia", mensagemCliente, null).catch(() => {});
       }
 
       const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
@@ -406,6 +450,21 @@ async function processarCobrancaRenovacao(
       // best-effort, mesma filosofia do aviso ao Jose (§16-A)
     }
     return { envioResultado: { enviado: false }, textoEnviado: null };
+  }
+
+  // 0-A) Roteamento por TIPO de acesso (Etapa 1.5, Lacuna A, 2026-08-28).
+  // Feito ANTES de qualquer coisa (guard de lote, consulta ao Rocket,
+  // criacao de token, "buscando dados..."). Se o acesso for UniTV, o
+  // fluxo Sigma nunca e' seguido: nao cria tokens_renovacao tipo='sigma',
+  // nao consulta valor, nao cria cobranca. Envia a mensagem fixa de
+  // "UniTV ainda nao integrada" e aciona atendimento humano (mesmo
+  // mecanismo generico -- transferirPorFalha, com texto proprio). A
+  // execucao real da UniTV e' Etapa 2.
+  if (classificarTipoAcesso(acessoResolvido.cliente?.servidorNome) === "unitv") {
+    return await transferirPorFalha(
+      "renovacao:unitv_nao_integrada",
+      MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+    );
   }
 
   // 0) Renovacao em lote (Etapa 1, 2026-08-29): se este acesso ja faz
@@ -975,10 +1034,10 @@ Deno.serve(async (req: Request) => {
     // escolhido entra no MESMO caminho individual de
     // propostaRenovacaoComAcesso (processarCobrancaRenovacao) -- sem
     // nenhuma logica de cobranca nova.
-    const acessosSucessoOrdenados = statusResults.filter(
-      (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
-        s.outcome === "success" && !!s.cliente,
-    );
+    // ordem DETERMINISTICA (ordenarAcessosMultiplos): "2" e' sempre a
+    // posicao 2 apresentada na lista, mesmo que o /match desta requisicao
+    // tenha devolvido os acessos em ordem diferente da anterior.
+    const acessosSucessoOrdenados = ordenarAcessosMultiplos(statusResults);
     const matchNumeroAcesso = conteudo.trim().match(/^\s*([1-9]\d*)\s*$/);
     const indiceAcessoSelecionado = matchNumeroAcesso ? Number(matchNumeroAcesso[1]) : null;
     const selecaoAcessoPorNumero: (StatusResult & {
@@ -1092,104 +1151,157 @@ Deno.serve(async (req: Request) => {
       // disponiveis nesta mesma requisicao (statusResults) -- nenhuma
       // nova consulta ao Rocket/match/status. Precificacao interna
       // (resolverPrecoLote) NUNCA vai ao cliente -- ele so' ve o valor
-      // final por acesso + total. Estrutura sigma|unitv desde ja': aqui
-      // todos os acessos existentes hoje sao sigma; o executor UniTV
-      // e' stub (Etapa 2), mas o lote ja nasce preparado pra tipo misto.
-      const acessosLote = statusResults.filter(
-        (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
-          s.outcome === "success" && !!s.cliente,
-      );
-      const preco = resolverPrecoLote(
-        acessosLote.map((s) => ({
-          tipo: "sigma" as const,
-          servidorNome: s.cliente.servidorNome ?? null,
-          planoNome: s.cliente.planoNome ?? null,
-        })),
-      );
-      if (!preco) {
-        // Nenhuma regra comercial cobre esse N -- nao oferece o lote,
-        // pede pra escolher 1. Nunca transfere so' por isso.
-        const msgFallback =
-          "No momento consigo renovar 2 acessos de uma vez. Me diga o número do acesso que você quer renovar primeiro.";
-        const envioFb = await enviarMensagemWhatsApp(telefone, msgFallback);
-        envioResultado = { enviado: envioFb.outcome === "success" };
-        if (envioResultado.enviado) {
-          try {
-            await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
-            await inserirMensagem(conversa.conversation_id, "ia", msgFallback, null);
-          } catch {
-            // best-effort
+      // final por acesso + total.
+      // Mesma ordem DETERMINISTICA da lista/selecao numerica
+      // (ordenarAcessosMultiplos) -- o lote ve exatamente os mesmos
+      // acessos, na mesma ordem, que o cliente viu numerados.
+      const acessosLote = ordenarAcessosMultiplos(statusResults);
+      // Etapa 1.5 (Lacuna A, 2026-08-28): classifica CADA acesso do lote
+      // pelo servidor -- nunca hardcoda 'sigma'. Enquanto a UniTV nao
+      // esta integrada (Etapa 2), um lote que inclua QUALQUER acesso
+      // UniTV nao pode ser criado (nao ha' preco BRL, nao ha' executor,
+      // e o CHECK do banco exige unitv_sn/unitv_id que so' a Etapa 2
+      // fornece). Nesse caso: nenhum lote, nenhuma cobranca -- mensagem
+      // fixa + atendimento humano. Os acessos Sigma continuam
+      // renovaveis um a um pelo numero.
+      const tiposLote = acessosLote.map((s) => classificarTipoAcesso(s.cliente.servidorNome));
+      const loteTemUnitv = tiposLote.includes("unitv");
+
+      if (loteTemUnitv) {
+        let acionada = false;
+        try {
+          const r = await acionarTransferenciaHumana(
+            conversa.conversation_id,
+            "renovacao:lote_com_unitv_nao_integrado",
+            conteudo,
+            "(cliente pediu renovar todos -- ha' acesso UniTV no lote)",
+          );
+          acionada = r.outcome === "acionada";
+        } catch {
+          // best-effort
+        }
+        transferenciaResultado = acionada
+          ? { acionada: true, motivo: "renovacao:lote_com_unitv_nao_integrado" }
+          : { acionada: false, motivo: "ja_transferida_ou_falha" };
+        if (acionada) {
+          const env = await enviarMensagemWhatsApp(telefone, MENSAGEM_RENOVACAO_LOTE_COM_UNITV);
+          envioResultado = { enviado: env.outcome === "success" };
+          if (env.outcome === "success") {
+            await inserirMensagem(
+              conversa.conversation_id,
+              "ia",
+              MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
+              null,
+            ).catch(() => {});
+          }
+          const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
+          if (numeroJose) {
+            const aviso = await enviarTemplateWhatsApp(
+              numeroJose,
+              NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+              IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+              ["renovacao:lote_com_unitv_nao_integrado"],
+            );
+            avisoJoseResultado = { enviado: aviso.outcome === "success" };
           }
         }
         renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+        // NAO cria lote, NAO chama resolverPrecoLote/criarRenovacaoLote.
       } else {
-        const filhos = acessosLote.map((s, i) => ({
-          tipo: "sigma" as const,
-          publicId: s.publicId,
-          unitvSn: null,
-          unitvId: null,
-          clienteNome: s.cliente.nome ?? "não informado",
-          servidorNome: s.cliente.servidorNome ?? "não informado",
-          planoNome: s.cliente.planoNome ?? "não informado",
-          valorEsperadoCentavos: preco.valorPorAcessoCentavos[i],
-          vencimentoAtual: s.cliente.vencimento ?? new Date().toISOString(),
-        }));
-        let loteCriado: Awaited<ReturnType<typeof criarRenovacaoLote>> | null = null;
-        try {
-          loteCriado = await criarRenovacaoLote({
-            conversationId: conversa.conversation_id,
-            telefone,
-            valorTotalCentavos: preco.totalCentavos,
-            regraAplicada: preco.regraAplicada,
-            filhos,
-          });
-        } catch (erro) {
-          console.log(
-            "[orchestrator] falha ao criar renovacoes_lote",
-            JSON.stringify({ erro: String(erro) }),
-          );
-          loteCriado = null;
-        }
-        if (!loteCriado) {
-          const msgErro =
-            "Tive um problema ao preparar a renovação dos dois acessos. Me diga o número do acesso que você quer renovar primeiro.";
-          const envioErr = await enviarMensagemWhatsApp(telefone, msgErro);
-          envioResultado = { enviado: envioErr.outcome === "success" };
+        const preco = resolverPrecoLote(
+          acessosLote.map((s, i) => ({
+            tipo: tiposLote[i],
+            servidorNome: s.cliente.servidorNome ?? null,
+            planoNome: s.cliente.planoNome ?? null,
+          })),
+        );
+        if (!preco) {
+          // Nenhuma regra comercial cobre esse N -- nao oferece o lote,
+          // pede pra escolher 1. Nunca transfere so' por isso.
+          const msgFallback =
+            "No momento consigo renovar 2 acessos de uma vez. Me diga o número do acesso que você quer renovar primeiro.";
+          const envioFb = await enviarMensagemWhatsApp(telefone, msgFallback);
+          envioResultado = { enviado: envioFb.outcome === "success" };
           if (envioResultado.enviado) {
             try {
               await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
-              await inserirMensagem(conversa.conversation_id, "ia", msgErro, null);
+              await inserirMensagem(conversa.conversation_id, "ia", msgFallback, null);
             } catch {
               // best-effort
             }
           }
           renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
         } else {
-          const textoConfirmLote = montarMensagemConfirmacaoLote({
-            itens: filhos.map((f, i) => ({
-              nome: f.clienteNome,
-              servidorNome: f.servidorNome,
-              planoNome: f.planoNome,
-              valorFormatado: formatarValorBRL(preco.valorPorAcessoCentavos[i] / 100) ?? "0,00",
-            })),
-            totalFormatado: formatarValorBRL(preco.totalCentavos / 100) ?? "0,00",
-          });
-          const envioConfirm = await enviarMensagemInterativaWhatsApp(telefone, textoConfirmLote, [
-            { id: `renovacao:aceitar:${loteCriado.lote.token_hash}`, titulo: "ACEITO" },
-            { id: `renovacao:cancelar:${loteCriado.lote.token_hash}`, titulo: "CANCELAR" },
-          ]);
-          envioResultado = { enviado: envioConfirm.outcome === "success" };
-          if (envioResultado.enviado) {
-            try {
-              await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
-              await inserirMensagem(conversa.conversation_id, "ia", textoConfirmLote, null);
-            } catch {
-              // best-effort
-            }
+          const filhos = acessosLote.map((s, i) => ({
+            // tipo derivado do servidor -- nao hardcoda 'sigma'. Neste
+            // ramo todos sao 'sigma' (loteTemUnitv ja barrou o resto).
+            tipo: tiposLote[i],
+            publicId: tiposLote[i] === "sigma" ? s.publicId : null,
+            unitvSn: null,
+            unitvId: null,
+            clienteNome: s.cliente.nome ?? "não informado",
+            servidorNome: s.cliente.servidorNome ?? "não informado",
+            planoNome: s.cliente.planoNome ?? "não informado",
+            valorEsperadoCentavos: preco.valorPorAcessoCentavos[i],
+            vencimentoAtual: s.cliente.vencimento ?? new Date().toISOString(),
+          }));
+          let loteCriado: Awaited<ReturnType<typeof criarRenovacaoLote>> | null = null;
+          try {
+            loteCriado = await criarRenovacaoLote({
+              conversationId: conversa.conversation_id,
+              telefone,
+              valorTotalCentavos: preco.totalCentavos,
+              regraAplicada: preco.regraAplicada,
+              filhos,
+            });
+          } catch (erro) {
+            console.log(
+              "[orchestrator] falha ao criar renovacoes_lote",
+              JSON.stringify({ erro: String(erro) }),
+            );
+            loteCriado = null;
           }
-          renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+          if (!loteCriado) {
+            const msgErro =
+              "Tive um problema ao preparar a renovação dos dois acessos. Me diga o número do acesso que você quer renovar primeiro.";
+            const envioErr = await enviarMensagemWhatsApp(telefone, msgErro);
+            envioResultado = { enviado: envioErr.outcome === "success" };
+            if (envioResultado.enviado) {
+              try {
+                await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+                await inserirMensagem(conversa.conversation_id, "ia", msgErro, null);
+              } catch {
+                // best-effort
+              }
+            }
+            renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+          } else {
+            const textoConfirmLote = montarMensagemConfirmacaoLote({
+              itens: filhos.map((f, i) => ({
+                nome: f.clienteNome,
+                servidorNome: f.servidorNome,
+                planoNome: f.planoNome,
+                valorFormatado: formatarValorBRL(preco.valorPorAcessoCentavos[i] / 100) ?? "0,00",
+              })),
+              totalFormatado: formatarValorBRL(preco.totalCentavos / 100) ?? "0,00",
+            });
+            const envioConfirm = await enviarMensagemInterativaWhatsApp(telefone, textoConfirmLote, [
+              { id: `renovacao:aceitar:${loteCriado.lote.token_hash}`, titulo: "ACEITO" },
+              { id: `renovacao:cancelar:${loteCriado.lote.token_hash}`, titulo: "CANCELAR" },
+            ]);
+            envioResultado = { enviado: envioConfirm.outcome === "success" };
+            if (envioResultado.enviado) {
+              try {
+                await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+                await inserirMensagem(conversa.conversation_id, "ia", textoConfirmLote, null);
+              } catch {
+                // best-effort
+              }
+            }
+            renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+          }
         }
-      }
+      } // fim do ramo "todos sigma" (else de loteTemUnitv)
     } else if (selecaoAcessoPorNumero) {
       // Selecao individual por numero -- o acesso escolhido entra no
       // MESMO caminho de propostaRenovacaoComAcesso (processarCobrancaRenovacao):
@@ -1287,11 +1399,12 @@ Deno.serve(async (req: Request) => {
       // resolverAcessoRenovacao/gravarAcessoSelecionadoSeCitado, sem
       // nenhuma mudanca nelas. Nunca texto gerado pelo Gemini aqui --
       // mesma disciplina das mensagens 2/3 (mensagens_fixas.ts).
-      const acessosParaSelecao = statusResults
-        .filter(
-          (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
-            s.outcome === "success" && !!s.cliente,
-        )
+      // Ordem DETERMINISTICA (ordenarAcessosMultiplos) -- a numeracao
+      // "*1. ...*", "*2. ...*" desta lista tem que casar exatamente com
+      // a posicao que a selecao numerica ("1"/"2") vai resolver na
+      // requisicao seguinte, mesmo que o /match devolva os acessos em
+      // outra ordem la'.
+      const acessosParaSelecao = ordenarAcessosMultiplos(statusResults)
         .map((s) => ({
           nome: s.cliente.nome ?? "não informado",
           usuario:

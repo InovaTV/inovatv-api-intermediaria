@@ -28,9 +28,11 @@ const {
   resetarWhatsapp,
   getMensagensEnviadas,
   getMensagensInterativasEnviadas,
+  getTemplatesEnviados,
 } = await import("./fake_whatsapp_client.mjs");
-const { resetarValorCliente } = await import("./fake_rocket_valor_cliente.mjs");
-const { resetarTokensRenovacao } = await import("./fake_tokens_renovacao.mjs");
+const { resetarValorCliente, chamadasConsultarValor } =
+  await import("./fake_rocket_valor_cliente.mjs");
+const { resetarTokensRenovacao, chamadasCriarToken } = await import("./fake_tokens_renovacao.mjs");
 const { resetarRenovacoesLote, chamadasCriarLote, definirLoteAtivoParaPublicId } =
   await import("./fake_renovacoes_lote.mjs");
 const { configurarTokenExistente } = await import("./fake_tokens_renovacao.mjs");
@@ -39,6 +41,9 @@ const TOKEN_INTERNO = "orchestrator-token-de-teste";
 process.env.ORCHESTRATOR_INTERNAL_TOKEN = TOKEN_INTERNO;
 process.env.SUPABASE_URL = "https://exemplo-teste.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-de-teste";
+// Etapa 1.5: com o numero do Jose configurado, o aviso por template
+// tambem e' exercitado nos testes de roteamento UniTV.
+process.env.WHATSAPP_JOSE_NUMERO = "5511777777777";
 
 let handler;
 globalThis.Deno = {
@@ -123,6 +128,50 @@ function configurarDoisAcessos() {
   });
 }
 
+// Etapa 1.5 (Lacuna A): acesso 1 = Sigma (BLAZE), acesso 2 = UniTV.
+function configurarSigmaMaisUnitv() {
+  configurarMatch({
+    outcome: "multiple_matches",
+    candidates: [
+      { publicId: PUBLIC_ID_A, nome: "Meu Uso Testes", usuario: "828667229" },
+      { publicId: PUBLIC_ID_B, nome: "José Antonio Dos Santos", usuario: "gcnv6v" },
+    ],
+  });
+  configurarStatus(PUBLIC_ID_A, {
+    outcome: "success",
+    linkState: "linked",
+    publicId: PUBLIC_ID_A,
+    syncedAt: new Date().toISOString(),
+    cliente: { nome: "Meu Uso Testes", vencimento: "2026-09-13T23:59:00-03:00", planoNome: "Mensal", servidorNome: "BLAZE", telas: 1, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_B, {
+    outcome: "success",
+    linkState: "linked",
+    publicId: PUBLIC_ID_B,
+    syncedAt: new Date().toISOString(),
+    cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+}
+
+// Etapa 1.5: os dois acessos UniTV.
+function configurarDoisUnitv() {
+  configurarMatch({
+    outcome: "multiple_matches",
+    candidates: [
+      { publicId: PUBLIC_ID_A, nome: "Karla Filha", usuario: "3tnjsc" },
+      { publicId: PUBLIC_ID_B, nome: "José Antonio Dos Santos", usuario: "gcnv6v" },
+    ],
+  });
+  configurarStatus(PUBLIC_ID_A, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_A, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Karla Filha", vencimento: "2026-09-21T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_B, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_B, syncedAt: new Date().toISOString(),
+    cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+}
+
 // ---------------------------------------------------------------------
 // Teste A -- multiplos acessos + nenhum identificado -> lista fixa,
 // nunca transferencia automatica
@@ -198,6 +247,21 @@ async function testeA() {
     mensagensLog.some((m) => m.origem === "cliente" && m.texto === "quero renovar meu plano"),
     "Teste A: mensagem do cliente tambem registrada no historico",
   );
+}
+
+// Mesmos dois acessos de configurarDoisAcessos, mas o /match devolve os
+// candidatos na ORDEM INVERTIDA (NewOne antes de BLAZE). Sem a ordenacao
+// deterministica, a posicao 1 da lista viraria NewOne e "2" resolveria
+// BLAZE -- exatamente o bug que ordenarAcessosMultiplos previne.
+function configurarDoisAcessosOrdemInvertida() {
+  configurarDoisAcessos();
+  configurarMatch({
+    outcome: "multiple_matches",
+    candidates: [
+      { publicId: PUBLIC_ID_B, nome: "Js Informática Rp", usuario: "2715749553" },
+      { publicId: PUBLIC_ID_A, nome: "Meu Uso Testes", usuario: "828667229" },
+    ],
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -757,6 +821,243 @@ async function testeR() {
   ok(acionamentosRegistrados().length === 0, "Teste R: nenhuma transferencia");
 }
 
+// =====================================================================
+// Etapa 1.5 (Lacuna A) -- roteamento por tipo de acesso (Sigma x UniTV)
+// =====================================================================
+const { MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA, MENSAGEM_RENOVACAO_LOTE_COM_UNITV } =
+  await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
+
+// Teste S: seleciona por NÚMERO um acesso UniTV -> NUNCA cria token
+// tipo='sigma', NUNCA consulta valor no Rocket, NUNCA gera confirmacao
+// interativa. Mensagem fixa "UniTV nao integrada" + transferencia
+// humana (motivo proprio) + aviso ao Jose.
+async function testeS() {
+  resetarTudo();
+  configurarSigmaMaisUnitv(); // 1=BLAZE sigma, 2=UNITV
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Teste S: HTTP 200");
+  ok(chamadasCriarToken() === 0, "Teste S: NENHUM token de renovacao criado para o acesso UniTV");
+  ok(chamadasConsultarValor() === 0, "Teste S: NENHUMA consulta de valor no Rocket (sem preparar cobranca)");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste S: NENHUMA confirmacao interativa (sem ACEITO/PIX)");
+  ok(chamadasCriarLote().length === 0, "Teste S: nao cria lote");
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("buscar os dados")),
+    "Teste S: nem a mensagem 'buscando dados' -- barra antes de tudo",
+  );
+  const acion = acionamentosRegistrados();
+  ok(
+    acion.length === 1 && acion[0].motivo === "renovacao:unitv_nao_integrada",
+    "Teste S: transferencia humana acionada com motivo 'renovacao:unitv_nao_integrada'",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
+    "Teste S: cliente recebe exatamente a mensagem fixa de UniTV nao integrada",
+  );
+  ok(
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:unitv_nao_integrada"),
+    "Teste S: aviso ao Jose (template) com o motivo UniTV",
+  );
+  // O diagnostico identifica corretamente que o acesso selecionado era UniTV
+  // (foi roteado para o tratamento UniTV, nao para cobranca).
+  ok(
+    body?.renovacao?.acessoResolvido?.servidorNome === "UNITV",
+    "Teste S: diagnostico -- o acesso selecionado era UniTV (roteado ao tratamento UniTV)",
+  );
+  // E a sessao NAO gravou acesso_selecionado (nao houve textoEnviado de cobranca).
+  ok(
+    !atualizacoesSessaoRegistradas().some((a) => a.dados?.acessoSelecionado),
+    "Teste S: sessao nao grava acesso_selecionado para um acesso UniTV",
+  );
+}
+
+// Teste T: no mesmo cliente Sigma+UniTV, selecionar o acesso SIGMA (1)
+// continua funcionando normalmente -- o irmao UniTV nao contamina.
+async function testeT() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
+  const body = await resp.json();
+
+  ok(acionamentosRegistrados().length === 0, "Teste T: acesso Sigma -> nenhuma transferencia");
+  ok(chamadasCriarToken() === 1, "Teste T: acesso Sigma -> token de renovacao criado normalmente");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste T: confirmacao interativa ACEITO/CANCELAR do acesso Sigma");
+  ok(body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A, "Teste T: acesso resolvido = o Sigma (posicao 1)");
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("UniTV")),
+    "Teste T: nada de mensagem sobre UniTV ao renovar o acesso Sigma",
+  );
+}
+
+// Teste U: "0" com Sigma + UniTV -> NENHUM lote criado, nenhuma
+// cobranca. Mensagem fixa "lote com UniTV" + transferencia.
+async function testeU() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  const body = await resp.json();
+
+  ok(chamadasCriarLote().length === 0, "Teste U: '0' com UniTV no lote -> NENHUM lote criado");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste U: nenhuma confirmacao interativa de lote");
+  ok(chamadasCriarToken() === 0, "Teste U: nenhum token individual criado");
+  ok(chamadasConsultarValor() === 0, "Teste U: nenhuma consulta de valor");
+  const acion = acionamentosRegistrados();
+  ok(
+    acion.length === 1 && acion[0].motivo === "renovacao:lote_com_unitv_nao_integrado",
+    "Teste U: transferencia com motivo 'renovacao:lote_com_unitv_nao_integrado'",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
+    "Teste U: cliente recebe a mensagem fixa de 'lote com UniTV'",
+  );
+  ok(
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:lote_com_unitv_nao_integrado"),
+    "Teste U: aviso ao Jose (template) com o motivo do lote+UniTV",
+  );
+  ok(!/promo|desconto/i.test(getMensagensEnviadas().map((m) => m.texto).join(" ")), "Teste U: nunca cita promocao/desconto");
+  ok(body?.renovacao?.acessoResolvido === null, "Teste U: diagnostico acessoResolvido=null");
+}
+
+// Teste V: "0" com DOIS acessos UniTV -> mesmo tratamento (nenhum lote).
+async function testeV() {
+  resetarTudo();
+  configurarDoisUnitv();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  await resp.json();
+
+  ok(chamadasCriarLote().length === 0, "Teste V: 2 UniTV + '0' -> nenhum lote");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste V: nenhuma confirmacao interativa");
+  ok(
+    acionamentosRegistrados().some((a) => a.motivo === "renovacao:lote_com_unitv_nao_integrado"),
+    "Teste V: transferencia por lote+UniTV",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
+    "Teste V: mensagem fixa de lote com UniTV",
+  );
+}
+
+// Teste W: seleção NUMÉRICA de um acesso quando ambos são UniTV.
+async function testeW() {
+  resetarTudo();
+  configurarDoisUnitv();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
+  await resp.json();
+
+  ok(chamadasCriarToken() === 0, "Teste W: 2 UniTV, seleciona 1 -> nenhum token tipo='sigma'");
+  ok(chamadasConsultarValor() === 0, "Teste W: nenhuma consulta de valor");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste W: nenhuma confirmacao interativa");
+  ok(
+    acionamentosRegistrados().some((a) => a.motivo === "renovacao:unitv_nao_integrada"),
+    "Teste W: transferencia com motivo UniTV nao integrada",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
+    "Teste W: mensagem fixa de UniTV nao integrada",
+  );
+}
+
+// Teste X (regressao): 2 acessos SIGMA + "0" -> o lote continua sendo
+// criado, agora com o tipo DERIVADO do servidor (nao mais hardcoded).
+async function testeX() {
+  resetarTudo();
+  configurarDoisAcessos(); // BLAZE + NewOne (ambos sigma)
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  await resp.json();
+
+  ok(chamadasCriarLote().length === 1, "Teste X: 2 Sigma + '0' -> lote criado (regressao)");
+  const c = chamadasCriarLote()[0] ?? {};
+  ok(Array.isArray(c.filhos) && c.filhos.length === 2, "Teste X: 2 filhos");
+  ok(c.filhos?.every((f) => f.tipo === "sigma"), "Teste X: tipo derivado do servidor = 'sigma' (nunca mais hardcode)");
+  ok(c.filhos?.every((f) => f.publicId), "Teste X: filhos Sigma carregam publicId");
+  ok(c.valorTotalCentavos === 6000, "Teste X: total R$ 60,00");
+  ok(acionamentosRegistrados().length === 0, "Teste X: nenhuma transferencia");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste X: confirmacao interativa do lote enviada");
+}
+
+// ---------------------------------------------------------------------
+// Etapa 1.5 -- Teste Y: ordem DETERMINISTICA da lista x selecao numerica.
+// A lista e' montada numa requisicao e o numero e' escolhido na
+// seguinte; cada uma refaz o /match e o Rocket NAO garante a mesma
+// ordem. ordenarAcessosMultiplos (servidorNome -> nome -> publicId)
+// garante que "1"/"2" sempre casam com a posicao apresentada.
+// ---------------------------------------------------------------------
+async function testeY() {
+  // Parte 1: a LISTA -- /match devolve NewOne antes de BLAZE, mas a
+  // lista tem que sair BLAZE (*1.*) antes de NewOne (*2.*).
+  resetarTudo();
+  configurarDoisAcessosOrdemInvertida();
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Vou te ajudar a renovar!" },
+  });
+  const respLista = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
+  await respLista.json();
+  const textoLista = (getMensagensEnviadas()[0] ?? {}).texto ?? "";
+  ok(
+    textoLista.indexOf("*1. Meu Uso Testes*") >= 0 &&
+      textoLista.indexOf("*1. Meu Uso Testes*") < textoLista.indexOf("*2. Js Informática Rp*"),
+    "Teste Y: lista sai BLAZE como *1.* e NewOne como *2.* mesmo com /match invertido",
+  );
+  ok(
+    textoLista.indexOf("BLAZE") < textoLista.indexOf("NewOne"),
+    "Teste Y: bloco BLAZE aparece antes do bloco NewOne (ordem deterministica)",
+  );
+
+  // Parte 2: a SELECAO -- nova requisicao, /match ainda invertido,
+  // cliente digita "2" -> tem que resolver NewOne (posicao 2 da lista),
+  // nunca BLAZE.
+  resetarTudo();
+  configurarDoisAcessosOrdemInvertida();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  const resp2 = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
+  const body2 = await resp2.json();
+  ok(
+    body2?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_B &&
+      body2?.renovacao?.acessoResolvido?.servidorNome === "NewOne",
+    "Teste Y: '2' resolve o acesso da POSICAO 2 da lista (NewOne), mesmo com /match invertido",
+  );
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste Y: confirmacao interativa enviada (caminho individual)");
+  ok(chamadasCriarLote().length === 0, "Teste Y: selecao individual -> nenhum lote");
+  ok(
+    atualizacoesSessaoRegistradas().some((a) => a.dados?.acessoSelecionado === PUBLIC_ID_B),
+    "Teste Y: acesso_selecionado gravado = posicao 2 (NewOne)",
+  );
+
+  // Parte 3: "1" -> BLAZE (posicao 1), simetria.
+  resetarTudo();
+  configurarDoisAcessosOrdemInvertida();
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  const resp1 = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
+  const body1 = await resp1.json();
+  ok(
+    body1?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A &&
+      body1?.renovacao?.acessoResolvido?.servidorNome === "BLAZE",
+    "Teste Y: '1' resolve o acesso da POSICAO 1 da lista (BLAZE), mesmo com /match invertido",
+  );
+}
+
 await testeA();
 await testeB();
 await testeC();
@@ -775,6 +1076,13 @@ await testeO();
 await testeP();
 await testeQ();
 await testeR();
+await testeS();
+await testeT();
+await testeU();
+await testeV();
+await testeW();
+await testeX();
+await testeY();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);
