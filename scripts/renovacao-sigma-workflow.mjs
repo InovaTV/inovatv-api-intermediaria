@@ -183,19 +183,26 @@ async function main() {
 
       await page.goto(paginaClienteUrl, { waitUntil: "load", timeout: 20000 });
 
-      // --- Resolve o idClienteInterno pelo DOM RENDERIZADO (o runtime
-      // Vue da pagina materializa a lista de clientes DEPOIS do load --
-      // o #btn_add_pagamento_{id} nao existe no HTML cru, so' aqui).
-      // Le todos os elementos [id^="btn_add_pagamento_"] e desambigua
-      // por nome+telefone, nunca por posicao/ordem, exatamente 1.
+      // --- Resolve o idClienteInterno pelo DOM RENDERIZADO. Na UI atual
+      // do Rocket (investigacao 2026-08-28) o antigo #btn_add_pagamento_{id}
+      // NAO existe mais -- o botao "Add Pagamento" e' um
+      //   button.btn-success[data-bs-target="#modal-add-pagamento"]
+      // que carrega o id do cliente no atributo `cliente_id` (mais
+      // `nome`/`telefone` do cliente). O botao "Editar"
+      // (data-bs-target="#modal-editar") tambem tem cliente_id+nome+
+      // telefone -- por isso o seletor e' escopado por
+      // data-bs-target="#modal-add-pagamento", nunca so' por [cliente_id].
+      // Desambigua por nome+telefone, nunca por posicao/ordem, exatamente 1.
+      const SELETOR_ADD_PAGAMENTO = '[data-bs-target="#modal-add-pagamento"][cliente_id]';
       await page
-        .waitForSelector('[id^="btn_add_pagamento_"]', { timeout: 15000 })
+        .waitForSelector(SELETOR_ADD_PAGAMENTO, { timeout: 15000 })
         .catch(() => {}); // sem nenhum elemento -> lista abaixo vira [] -> "nao encontrado"
-      const elementos = await page.$$eval('[id^="btn_add_pagamento_"]', (nodes) =>
-        nodes.map((n) => {
-          const m = /^btn_add_pagamento_(\d+)$/.exec(n.id);
-          return { id: m ? m[1] : "", nome: n.getAttribute("nome"), telefone: n.getAttribute("telefone") };
-        }),
+      const elementos = await page.$$eval(SELETOR_ADD_PAGAMENTO, (nodes) =>
+        nodes.map((n) => ({
+          id: n.getAttribute("cliente_id"),
+          nome: n.getAttribute("nome"),
+          telefone: n.getAttribute("telefone"),
+        })),
       );
       const { ids, totalBotoes, botoesComNomeAlvo } = resolverIdInternoDoDom(
         elementos,
@@ -234,11 +241,12 @@ async function main() {
       pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
       expiresAtAntes = ctxAntes.expiresAt ?? null;
 
-      // --- Clique real (Playwright), na MESMA pagina ja aberta. Cada
-      // botao carrega seu proprio cliente_id no id
-      // (#btn_add_pagamento_{id}) -- escopado pelo idClienteInterno
-      // resolvido acima, nunca ambiguo.
-      await page.locator(`#btn_add_pagamento_${idClienteInterno}`).click({ timeout: 10000 });
+      // --- Clique real (Playwright), no botao "Add Pagamento" da MESMA
+      // pagina ja aberta -- mesmo seletor de cima, escopado pelo
+      // cliente_id ja resolvido (nunca ambiguo). Abre #modal-add-pagamento.
+      await page
+        .locator(`[data-bs-target="#modal-add-pagamento"][cliente_id="${idClienteInterno}"]`)
+        .click({ timeout: 10000 });
       await page.waitForTimeout(1000);
 
       const renovarCheckbox = page.locator('input[name="renovar_painel"]');

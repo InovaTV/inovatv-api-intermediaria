@@ -1,17 +1,22 @@
 // Testes locais de scripts/renovacao-sigma-workflow.mjs (real, sem
-// alteracao) na arquitetura NOVA (2026-08-28):
-//   - o idClienteInterno e' resolvido pelo DOM RENDERIZADO do Playwright
-//     (page.goto -> $$eval -> resolverIdInternoDoDom), NUNCA de HTML cru;
+// alteracao) na arquitetura de 2026-08-28 + correcao do seletor:
+//   - o idClienteInterno e' resolvido pelo DOM RENDERIZADO do Playwright.
+//     Na UI atual do Rocket, a fonte e' o botao "Add Pagamento":
+//       button[data-bs-target="#modal-add-pagamento"] com atributo
+//       `cliente_id` (mais `nome`/`telefone`).
+//     O botao "Editar" (data-bs-target="#modal-editar") TAMBEM tem
+//     cliente_id+nome+telefone -- o seletor e' escopado por
+//     data-bs-target="#modal-add-pagamento", entao "Editar" nunca e'
+//     selecionado.
 //   - so' DEPOIS de resolver o id o workflow chama renovacao-sigma-contexto
 //     (Supabase) para pacoteAtual + expiresAt;
-//   - o clique real e a operacao no Sigma continuam 100% no Playwright;
+//   - o clique real acontece no MESMO seletor, escopado pelo cliente_id;
 //   - depois do clique, renovacao-sigma-contexto de novo (so' expiresAt);
 //   - o runner NUNCA faz fetch direto a app.rocketgestor.com.
 //
-// Roda main() de verdade, interceptando o fetch global e o pacote
-// "playwright" (fake configuravel). O modulo real
-// scripts/lib/resolver-id-interno-dom.mjs NAO e' fakeado -- a
-// desambiguacao nome+telefone e' exercitada de verdade.
+// O modulo real scripts/lib/resolver-id-interno-dom.mjs NAO e' fakeado
+// -- a desambiguacao nome+telefone e' exercitada de verdade. O fake do
+// Playwright e' seletor-ciente (ver fake_playwright.mjs).
 //
 // Como rodar: npx tsx scripts/testes/renovacao-sigma-workflow-leitura/teste.mjs
 
@@ -25,6 +30,7 @@ const PUBLIC_ID = "01a0271b-5a54-7d7e-8e4a-ef4c39730e0b";
 const CLIENTE_NOME = "Meu Uso Testes";
 const TELEFONE = "5517981625486";
 const ID_INTERNO = "1569178";
+const SEL_ADD = '[data-bs-target="#modal-add-pagamento"][cliente_id]';
 const CALLBACK_TOKEN = "callback-token-de-teste";
 const SUPABASE_URL = "https://exemplo-teste.supabase.co";
 
@@ -43,8 +49,7 @@ function ok(cond, msg) {
   }
 }
 
-// Sequencia monotonica compartilhada entre fetch mock e fake Playwright,
-// pra permitir assercoes de ORDEM.
+// Sequencia monotonica compartilhada entre fetch mock e fake Playwright.
 let seq = 0;
 const proximoSeq = () => ++seq;
 
@@ -107,25 +112,22 @@ function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout esperando reportarResultado")), ms));
 }
 
-async function rodarCenario(nome, { cliente, contexto, playwright } = {}) {
+async function rodarCenario(nome, { cliente, contexto, dom, opcoesSelect } = {}) {
   seq = 0;
   chamadasFetch = [];
   configCliente = cliente ?? { status: 200, body: { outcome: "unavailable" } };
   configContexto = contexto ?? { status: 200, body: { outcome: "unavailable" } };
-  configurarPlaywright({ proximoSeq, ...(playwright ?? {}) });
+  configurarPlaywright({ proximoSeq, dom: dom ?? [], opcoesSelect: opcoesSelect ?? [] });
   novaPromessaResultado();
 
   const urlModulo = new URL("../../renovacao-sigma-workflow.mjs", import.meta.url).href + `?cenario=${nome}`;
   await import(urlModulo);
 
   const resultado = await Promise.race([promessaResultado, timeout(3000)]);
-  // deixa o `finally` do Playwright (browser.close) e microtasks
-  // pendentes assentarem antes de fotografar os eventos
-  await new Promise((r) => setTimeout(r, 15));
+  await new Promise((r) => setTimeout(r, 15)); // deixa o finally (browser.close) assentar
   return { resultado, chamadas: [...chamadasFetch], eventos: [...eventosPlaywright()] };
 }
 
-// Invariantes checados em TODOS os cenarios
 function checarInvariantes(rotulo, chamadas) {
   const bateuNoRocketDireto = chamadas.some((c) => c.url.includes("app.rocketgestor.com") || c.url.includes("/gerenciador/"));
   ok(!bateuNoRocketDireto, `${rotulo}: runner NUNCA faz fetch direto a app.rocketgestor.com / /gerenciador/`);
@@ -133,7 +135,33 @@ function checarInvariantes(rotulo, chamadas) {
   ok(chamouCliente, `${rotulo}: leu vencimento via renovacao-sigma-cliente`);
 }
 
-const elemento = (id, nome, telefone) => ({ id, nome, telefone });
+// --- descritores de elemento da UI atual do Rocket ---
+const btnAddPag = (id, tel = "+55 17 98162-5486", nome = CLIENTE_NOME) => ({
+  tag: "button",
+  class: "btn btn-success flex-fill flex-sm-grow-0",
+  "data-bs-target": "#modal-add-pagamento",
+  "data-bs-toggle": "modal",
+  cliente_id: id,
+  nome,
+  telefone: tel,
+});
+const btnEditar = (id, tel = "+55 17 98162-5486", nome = CLIENTE_NOME) => ({
+  tag: "button",
+  class: "btn btn-warning flex-fill flex-sm-grow-0",
+  "data-bs-target": "#modal-editar",
+  "data-bs-toggle": "modal",
+  cliente_id: id,
+  nome,
+  telefone: tel,
+});
+const btnEnviarMsg = (id) => ({
+  tag: "button",
+  class: "btn btn-primary flex-fill flex-sm-grow-0",
+  "data-bs-target": "#modal_enviar_mensagem_clientes",
+  "data-bs-toggle": "modal",
+  cliente_id: id,
+  usuario: "828667229",
+});
 
 // =====================================================================
 // A: renovacao-sigma-cliente (antes) unavailable -> bail ANTES do Playwright
@@ -150,82 +178,95 @@ const elemento = (id, nome, telefone) => ({ id, nome, telefone });
 }
 
 // =====================================================================
-// B: DOM sem nenhum elemento btn_add_pagamento_ -> id_cliente interno nao encontrado
+// B: pagina sem "Add Pagamento" (so' "Editar" e "Enviar Mensagem", que
+//    tambem tem cliente_id) -> id_cliente interno nao encontrado.
+//    Prova: "Editar" tem cliente_id mas NAO e' selecionado.
 // =====================================================================
 {
-  const { resultado, chamadas, eventos } = await rodarCenario("B-zero-elementos", {
+  const { resultado, chamadas, eventos } = await rodarCenario("B-so-editar", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
-    playwright: { elementos: [] },
+    dom: [btnEditar(ID_INTERNO), btnEnviarMsg(ID_INTERNO)],
   });
-  ok(resultado.resultado === "resultado_ambiguo", "B: zero elementos -> resultado_ambiguo");
+  ok(resultado.resultado === "resultado_ambiguo", "B: sem 'Add Pagamento' -> resultado_ambiguo");
   ok(resultado.detalhe === "id_cliente interno nao encontrado", "B: detalhe = 'id_cliente interno nao encontrado'");
   checarInvariantes("B", chamadas);
-  ok(eventos.some((e) => e.tipo === "goto") && eventos.some((e) => e.tipo === "$$eval"), "B: o Playwright ABRIU a pagina e leu o DOM ($$eval)");
+  const evalEv = eventos.find((e) => e.tipo === "$$eval");
+  ok(evalEv && evalEv.sel === SEL_ADD, "B: $$eval usou o seletor '[data-bs-target=\"#modal-add-pagamento\"][cliente_id]'");
   ok(!chamadas.some((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto")), "B: contexto Sigma NAO e' consultado (bail antes)");
   ok(eventos.some((e) => e.tipo === "close"), "B: browser.close() rodou (finally)");
 }
 
 // =====================================================================
-// C: DOM com 2 elementos = mesmo nome+telefone, ids distintos -> ambiguo
+// B2: pagina com "Editar" (cliente_id=999) + "Add Pagamento"
+//     (cliente_id=1569178) -> seletor pega SO' o Add Pagamento -> resolve
+//     1569178 e segue ate o contexto. Prova que "Editar" e' ignorado
+//     mesmo tendo cliente_id+nome+telefone iguais.
 // =====================================================================
 {
-  const { resultado, chamadas } = await rodarCenario("C-dois-matches", {
+  const { resultado, chamadas } = await rodarCenario("B2-editar-mais-addpag", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
-    playwright: {
-      elementos: [
-        elemento("100", CLIENTE_NOME, TELEFONE),
-        elemento("200", CLIENTE_NOME, TELEFONE),
-        elemento("999", "Outro", "5511000000000"),
-      ],
-    },
+    contexto: { status: 200, body: { outcome: "pacote_vazio" } }, // so' pra parar limpo depois de resolver
+    dom: [btnEditar("999"), btnAddPag(ID_INTERNO), btnEnviarMsg(ID_INTERNO)],
   });
-  ok(resultado.resultado === "resultado_ambiguo", "C: 2 ids p/ mesmo nome+telefone -> resultado_ambiguo");
-  ok(resultado.detalhe === "id_cliente interno ambiguo", "C: detalhe = 'id_cliente interno ambiguo'");
+  ok(
+    resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "Sigma nao informou o pacote atual (package vazio)",
+    "B2: resolveu o id do 'Add Pagamento' e chamou o contexto (parou em pacote_vazio)",
+  );
+  const ctx = chamadas.find((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctx?.corpo?.idClienteInterno === ID_INTERNO, "B2: contexto chamado com o cliente_id do 'Add Pagamento' (1569178), NAO o 999 do 'Editar'");
+}
+
+// =====================================================================
+// C: dois botoes "Add Pagamento" com mesmo nome+telefone, ids distintos
+//    -> ambiguo
+// =====================================================================
+{
+  const { resultado, chamadas } = await rodarCenario("C-dois-addpag", {
+    cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
+    dom: [btnAddPag("100"), btnAddPag("200"), btnEnviarMsg("300")],
+  });
+  ok(resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "id_cliente interno ambiguo", "C: 2 'Add Pagamento' p/ mesmo nome+telefone -> ambiguo");
   checarInvariantes("C", chamadas);
   ok(!chamadas.some((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto")), "C: contexto Sigma NAO e' consultado");
 }
 
 // =====================================================================
-// C2: 1 elemento com nome certo mas telefone divergente -> nao encontrado
-//     (a desambiguacao por telefone e' exercitada de verdade)
+// C2: 1 "Add Pagamento" com nome certo mas telefone divergente -> nada
 // =====================================================================
 {
   const { resultado } = await rodarCenario("C2-telefone-diverge", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
-    playwright: { elementos: [elemento(ID_INTERNO, CLIENTE_NOME, "5511000009999")] },
+    dom: [btnAddPag(ID_INTERNO, "5511000009999")],
   });
   ok(resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "id_cliente interno nao encontrado", "C2: nome certo + telefone divergente -> nao encontrado");
 }
 
 // =====================================================================
-// C3: telefone com formatacao (o do DOM), mesmo numero -> resolve (1 match)
-//     -> segue e cai no contexto (sessao_expirada aqui, so' pra parar)
+// C3: telefone formatado no atributo -> normalizado casa -> resolve 1
 // =====================================================================
 {
   const { resultado, chamadas } = await rodarCenario("C3-telefone-formatado", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
     contexto: { status: 200, body: { outcome: "sessao_expirada", detalhe: "sessao invalida (login)" } },
-    playwright: { elementos: [elemento(ID_INTERNO, CLIENTE_NOME, "+55 (17) 98162-5486")] },
+    dom: [btnAddPag(ID_INTERNO, "+55 (17) 98162-5486")],
   });
-  ok(resultado.resultado === "sessao_expirada", "C3: telefone formatado no DOM casa (normalizado) -> resolveu 1, seguiu ate o contexto");
+  ok(resultado.resultado === "sessao_expirada", "C3: telefone formatado no atributo casa (normalizado) -> resolveu 1, seguiu ate o contexto");
   const ctx = chamadas.find((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
   ok(ctx?.corpo?.idClienteInterno === ID_INTERNO, "C3: contexto chamado com { idClienteInterno } (so' o id)");
-  ok(ctx?.corpo?.publicId === undefined && ctx?.corpo?.clienteNome === undefined, "C3: contexto NAO recebe mais publicId/clienteNome/telefone");
+  ok(ctx?.corpo?.publicId === undefined && ctx?.corpo?.clienteNome === undefined, "C3: contexto NAO recebe publicId/clienteNome/telefone");
 }
 
 // =====================================================================
-// D: 1 match -> contexto ANTES -> pacote_vazio
-//    + ASSERCAO DE ORDEM: goto/$$eval do Playwright ANTES do fetch ao contexto
+// D: 1 match -> contexto ANTES -> pacote_vazio + ASSERCAO DE ORDEM
 // =====================================================================
 {
   const { resultado, chamadas, eventos } = await rodarCenario("D-pacote-vazio", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
     contexto: { status: 200, body: { outcome: "pacote_vazio" } },
-    playwright: { elementos: [elemento(ID_INTERNO, CLIENTE_NOME, TELEFONE)] },
+    dom: [btnAddPag(ID_INTERNO)],
   });
   ok(resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "Sigma nao informou o pacote atual (package vazio)", "D: contexto pacote_vazio -> resultado_ambiguo");
   checarInvariantes("D", chamadas);
-
   const seqGoto = eventos.find((e) => e.tipo === "goto")?.seq;
   const seqEval = eventos.find((e) => e.tipo === "$$eval")?.seq;
   const seqCtx = chamadas.find((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"))?.seq;
@@ -240,75 +281,59 @@ const elemento = (id, nome, telefone) => ({ id, nome, telefone });
   const { resultado, chamadas } = await rodarCenario("F-contexto-unavailable", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
     contexto: { status: 200, body: { outcome: "unavailable", etapa: "sigma_info" } },
-    playwright: { elementos: [elemento(ID_INTERNO, CLIENTE_NOME, TELEFONE)] },
+    dom: [btnAddPag(ID_INTERNO)],
   });
   ok(resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "falha ao obter contexto Sigma (sigma_info)", "F: contexto unavailable -> resultado_ambiguo com a etapa");
   checarInvariantes("F", chamadas);
 }
 
 // =====================================================================
-// G: caminho feliz completo -> "sucesso"
+// G: caminho feliz completo -> veredito. Clique no botao "Add Pagamento".
 // =====================================================================
 {
-  const { resultado, chamadas, eventos } = await rodarCenario("G-sucesso", {
-    cliente: {
-      status: 200,
-      // 1a chamada (antes) e 2a chamada (depois) usam o MESMO fake, mas
-      // a comparacao rocketMudou compara com o expiresAt do contexto,
-      // e o vencimento aqui muda so' se configCliente mudar. Pra ter
-      // rocketMudou=true, o fake devolve sempre o mesmo vencimento
-      // "antes"; o teste forca a mudanca no expiresAt via contexto e no
-      // vencimento via... -> usamos dois estados sequenciais abaixo.
-      body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } },
-    },
+  const { resultado, chamadas, eventos } = await rodarCenario("G-veredito", {
+    cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
     contexto: {
       status: 200,
       body: { outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: "2026-09-13T20:59:59-03:00" },
     },
-    playwright: {
-      elementos: [elemento(ID_INTERNO, CLIENTE_NOME, TELEFONE)],
-      opcoesSelect: ["1 MES - X - 1 creditos - 1 tela(s)"],
-    },
+    dom: [btnEditar("999"), btnAddPag(ID_INTERNO)],
+    opcoesSelect: ["1 MES - X - 1 creditos - 1 tela(s)"],
   });
-  // Com cliente/contexto devolvendo SEMPRE os mesmos valores antes/depois,
-  // rocketMudou=false e sigmaMudou=false -> "falha" (nao "sucesso").
-  // Isso ja exercita o caminho feliz INTEIRO ate o veredito.
-  ok(resultado.resultado === "falha", "G: fluxo completo ate o veredito -- sem mudanca antes/depois -> 'falha' (esperado com o fake estatico)");
+  // valores identicos antes/depois -> rocketMudou/sigmaMudou false -> "falha" (exercita o caminho feliz INTEIRO)
+  ok(resultado.resultado === "falha", "G: fluxo completo ate o veredito -- sem mudanca antes/depois -> 'falha' (esperado com fake estatico)");
   ok(resultado.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique", "G: detalhe do veredito 'falha'");
   checarInvariantes("G", chamadas);
 
-  // O clique real e a operacao ficaram no Playwright:
-  ok(eventos.some((e) => e.tipo === "click" && e.sel === `#btn_add_pagamento_${ID_INTERNO}`), "G: clicou #btn_add_pagamento_{id} (Playwright)");
-  ok(eventos.some((e) => e.tipo === "check" && e.sel === 'input[name="renovar_painel"]'), "G: marcou renovar_painel (Playwright)");
-  ok(eventos.some((e) => e.tipo === "selectOption" && e.label === "1 MES - X - 1 creditos - 1 tela(s)"), "G: selecionou o pacote por prefixo (Playwright)");
-  ok(eventos.some((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento"), "G: clicou Salvar (Playwright)");
+  const selClique = `[data-bs-target="#modal-add-pagamento"][cliente_id="${ID_INTERNO}"]`;
+  ok(eventos.some((e) => e.tipo === "click" && e.sel === selClique), "G: clique no botao 'Add Pagamento' (seletor com data-bs-target=#modal-add-pagamento + cliente_id)");
+  ok(!eventos.some((e) => e.tipo === "click" && String(e.sel).includes("#modal-editar")), "G: NUNCA clica no alvo de 'Editar' (#modal-editar)");
+  ok(eventos.some((e) => e.tipo === "check" && e.sel === 'input[name="renovar_painel"]'), "G: marcou renovar_painel");
+  ok(eventos.some((e) => e.tipo === "selectOption" && e.label === "1 MES - X - 1 creditos - 1 tela(s)"), "G: selecionou o pacote por prefixo");
+  ok(eventos.some((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento"), "G: clicou Salvar (#btn_adicionar_pagamento)");
   ok(eventos.some((e) => e.tipo === "close"), "G: browser.close() rodou");
 
-  // contexto chamado 2x (antes e depois), sempre so' com { idClienteInterno }
   const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
   ok(ctxCalls.length === 2, "G: renovacao-sigma-contexto chamado 2x (antes e depois do clique)");
   ok(ctxCalls.every((c) => c.corpo?.idClienteInterno === ID_INTERNO && c.corpo?.publicId === undefined), "G: as 2 chamadas ao contexto sao { idClienteInterno } (sem publicId)");
-  // ordem: goto/$$eval < 1o contexto < clique Salvar < 2o contexto
   const seqEval = eventos.find((e) => e.tipo === "$$eval").seq;
   const seqSalvar = eventos.find((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento").seq;
-  ok(seqEval < ctxCalls[0].seq && ctxCalls[0].seq < seqSalvar && seqSalvar < ctxCalls[1].seq, "G: ordem correta -- DOM($$eval) -> contexto antes -> clique Salvar -> contexto depois");
+  ok(seqEval < ctxCalls[0].seq && ctxCalls[0].seq < seqSalvar && seqSalvar < ctxCalls[1].seq, "G: ordem -- $$eval -> contexto antes -> Salvar -> contexto depois");
 }
 
 // =====================================================================
 // G2: caminho feliz com MUDANCA real antes/depois -> "sucesso"
-//     (cliente e contexto devolvem valores diferentes na 2a chamada)
 // =====================================================================
 {
-  // configCliente/configContexto alternam por chamada
   let nCliente = 0;
   let nContexto = 0;
   const clienteSeq = [
-    { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } }, // antes
-    { outcome: "success", cliente: { vencimento: "2026-10-13T20:59:59-03:00" } }, // depois (mudou)
+    { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } },
+    { outcome: "success", cliente: { vencimento: "2026-10-13T20:59:59-03:00" } },
   ];
   const contextoSeq = [
-    { outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: "2026-09-13T20:59:59-03:00" }, // antes
-    { outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: "2026-10-13T20:59:59-03:00" }, // depois (mudou)
+    { outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: "2026-09-13T20:59:59-03:00" },
+    { outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: "2026-10-13T20:59:59-03:00" },
   ];
   const fetchOriginal = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
@@ -325,10 +350,8 @@ const elemento = (id, nome, telefone) => ({ id, nome, telefone });
   };
 
   const { resultado, chamadas } = await rodarCenario("G2-sucesso-real", {
-    playwright: {
-      elementos: [elemento(ID_INTERNO, CLIENTE_NOME, TELEFONE)],
-      opcoesSelect: ["1 MES - X - 1 creditos - 1 tela(s)"],
-    },
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: ["1 MES - X - 1 creditos - 1 tela(s)"],
   });
   globalThis.fetch = fetchOriginal;
 
