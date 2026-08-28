@@ -1,52 +1,40 @@
-# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-27, pós-deploy de preparação do commit `8d85f94`)
+# NEXT_SESSION.md — Checkpoint de continuidade (2026-08-27, pós-Ciclo 1 do teste ponta a ponta)
 
-> Substitui integralmente a versão anterior (mesma data, pré-deploy).
-> **Motivo da atualização:** o usuário autorizou explicitamente, nesta
-> mesma sessão, a preparação do ambiente para o item 3 (teste ponta a
-> ponta) — geração do secret que faltava e deploy das três functions
-> que ainda estavam atrasadas em relação ao commit `8d85f94`. Isso foi
-> executado e confirmado. **Nenhum teste real foi executado ainda** —
-> a preparação do ambiente é uma etapa própria, distinta da execução
-> do teste (que segue exigindo autorização explícita separada).
-> **Leia isto primeiro, antes de qualquer suposição ou nova
-> investigação.**
+> Substitui integralmente a versão anterior (mesma data, pós-deploy de
+> preparação, pré-execução). **Motivo da atualização:** o Ciclo 1 do
+> teste ponta a ponta (item 3) foi executado de verdade pelo WhatsApp
+> real — e encontrou um bug real de produção (violação de foreign key
+> em `_shared/renovacao_confirmacao.ts`), já corrigido, testado
+> (20/20, comprovado contra o código antigo via `git stash`) e
+> implantado (`renovacao-confirmar` v2, commit `cbd5937`). O caso do
+> Ciclo 1 foi encerrado deliberadamente sem recuperação manual
+> (decisão do usuário — `renovacao_falhou` é estado terminal). Um novo
+> achado de produto (comunicação silenciosa ao cliente em falha
+> automática) ficou registrado como pendência obrigatória. Ciclo 2
+> ainda não foi iniciado. **Leia isto primeiro, antes de qualquer
+> suposição ou nova investigação.**
 
-## 0. Deploy de preparação concluído (27/08/2026) — ambiente pronto, nenhum teste real executado ainda
+## 0. Estado consolidado (27/08/2026)
 
-- **Secret `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN` gerado e configurado**
-  (valor aleatório, `openssl rand -hex 32`, via `supabase secrets
-  set`) — confirmado presente em `supabase secrets list` (só o nome;
-  o valor nunca foi escrito em arquivo, log ou commit deste
-  repositório). Esse secret faltava por completo antes desta sessão —
-  sem ele, o clique em ACEITO/CANCELAR não chegaria a lugar nenhum
-  (o próprio `webhook/index.ts` detecta a ausência e aborta com log,
-  nunca falha de forma perigosa, mas também nunca funciona).
-- **`orchestrator`, `webhook` e `renovacao-confirmar` implantados**,
-  confirmado via `supabase functions list`:
-  - `orchestrator` — v46, `ACTIVE`, `updated_at` 27/08/2026 22:49:48 UTC.
-  - `webhook` — v13, `ACTIVE`, `updated_at` 27/08/2026 22:49:58 UTC.
-  - `renovacao-confirmar` — v1 (**primeiro deploy**), `ACTIVE`,
-    `updated_at` 27/08/2026 22:50:06 UTC.
-  - As demais functions do fluxo (`confirmacao-renovacao`,
-    `openpix-webhook`, `renovacao-sigma-resultado`,
-    `renovacao-sigma-watchdog`) não precisaram de redeploy — já
-    estavam no ar desde o Bloco 2 e não foram tocadas pelo commit
-    `8d85f94`.
-- **Isso foi autorizado explicitamente pelo usuário como preparação de
-  ambiente para o item 3 (teste ponta a ponta), não como abertura
-  geral de produção.** O número oficial (`17996242415`) nunca foi
-  migrado pra Cloud API e não recebe eventos deste Webhook — só o
-  número de teste (`17996286135`) é afetado por este deploy.
-- **Nenhum teste real foi executado ainda.** Nenhuma mensagem
-  enviada, nenhum clique simulado, nenhuma cobrança criada. A
-  execução do teste ponta a ponta (seção 3, item 3) continua exigindo
-  autorização explícita própria, separada desta preparação — mesma
-  regra de sempre (`inovatv_central/CLAUDE.md`, seção 0-B: envio real
-  de WhatsApp e alteração real de dados de produção sempre exigem
-  checkpoint próprio).
-- Pendências que ainda impedem considerar o item 3 concluído: item 2
-  (janela de 24h — decidido, não implementado) e o próprio roteiro de
-  teste do item 3, que ainda não começou a ser executado. Ver seção 3.
+- **Ambiente de preparação:** secret `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN`
+  gerado e configurado (`openssl rand -hex 32`, nunca escrito em
+  arquivo/log/commit); `orchestrator` v46, `webhook` v13 e
+  `renovacao-confirmar` implantados pela primeira vez em 27/08/2026
+  (~22:49-22:50 UTC). Afeta só o número de teste (`17996286135`) — o
+  número oficial (`17996242415`) nunca foi migrado pra Cloud API.
+- **Ciclo 1 do teste ponta a ponta: executado, encontrou um bug real,
+  encerrado.** Detalhe completo (sequência cronológica, causa raiz,
+  correção, testes, decisão de não recuperar) na seção 3, item 3.
+- **Fix implantado:** `renovacao-confirmar` **v2**, `updated_at`
+  27/08/2026 23:44:38 UTC — commit `cbd5937`. Nenhuma outra function
+  precisou de redeploy (não consomem o caminho corrigido).
+- **Pendência obrigatória nova, ainda não corrigida:** falha que
+  aciona transferência humana automática (ex.: o watchdog) não envia
+  nenhuma mensagem real ao cliente pelo WhatsApp — só registro
+  interno. Detalhe na seção 3.
+- **Ciclo 2 do teste ponta a ponta: planejado, execução ainda NÃO
+  iniciada.** Exige autorização explícita própria — nenhuma mensagem,
+  clique, cobrança ou pagamento deve acontecer sem ela.
 
 ## 1. Estado do git
 
@@ -204,55 +192,13 @@ Antes de cogitar qualquer deploy do commit `8d85f94`:
    técnico documentados; a implementação em si fica para quando for
    explicitamente autorizada, como etapa própria, com sua própria
    revisão.
-3. **Teste ponta a ponta real pelo WhatsApp — ambiente pronto
-   (27/08/2026), execução ainda NÃO iniciada.** Roteiro aprovado pelo
-   usuário, registrado aqui na íntegra pra não se perder entre
-   sessões/máquinas:
+3. **Teste ponta a ponta real pelo WhatsApp — Ciclo 1 executado e
+   ENCERRADO (27/08/2026), bug real de FK encontrado/corrigido/
+   implantado; Ciclo 2 planejado, ainda NÃO iniciado.**
 
-   **Fluxo principal (ACEITO):** cliente de teste inicia conversa real
-   pelo WhatsApp → IA identifica intenção de renovação → Orchestrator
-   apresenta os dados reais → cliente recebe a mensagem interativa
-   (botões ACEITO/CANCELAR) → cliente toca ACEITO → webhook real
-   recebe `interactive.button_reply` → webhook encaminha só o ID
-   válido pra `renovacao-confirmar` → confirmação aceita uma única vez
-   → cobrança criada no ambiente de teste apropriado (OpenPix Sandbox)
-   → pagamento realizado/simulado (mecanismo já validado, botão
-   "Simular Pagamento") → webhook de pagamento confirma a cobrança →
-   renovação real executada no Sigma via Rocket (GitHub Actions/
-   Playwright) → novo vencimento reconsultado e confirmado → mensagem
-   final chega ao cliente pelo WhatsApp.
-
-   **Testes negativos obrigatórios:**
-   - CANCELAR: cliente toca CANCELAR; nenhuma cobrança criada, nenhuma
-     renovação ocorre.
-   - Clique duplicado: repetir o clique/provocar concorrência; só uma
-     transição aceita.
-   - Telefone divergente: resposta cujo telefone não corresponde ao
-     token; nenhuma renovação ocorre.
-   - Token expirado: tentar aceitar após expiração; nenhuma cobrança/
-     renovação ocorre.
-   - Falha de renovação: condição de falha controlada no Rocket/Sigma;
-     confirmar transferência pra atendimento humano, sem o sistema
-     inventar sucesso.
-
-   **Critério de conclusão:** o teste principal precisa terminar com
-   WhatsApp real → ACEITO → cobrança → pagamento → webhook → renovação
-   real no Sigma → reconsulta confirmando novo vencimento → mensagem
-   final no WhatsApp — tudo com evidência real, sem intervenção manual
-   no meio do caminho feliz. CANCELAR e os cenários negativos também
-   precisam apresentar o comportamento esperado. **Harness local
-   passando não conta como conclusão deste item.**
-
-   **Preparação de ambiente já concluída (seção 0):** secret
-   `RENOVACAO_CONFIRMAR_INTERNAL_TOKEN` configurado; `orchestrator`,
-   `webhook`, `renovacao-confirmar` implantados.
-
-   **Cliente de teste — auditoria só-leitura concluída (27/08/2026),
-   nada modificado.** Consultado via `/match`/`/status` (endpoints já
-   implantados, chave anon pública, zero mutação):
-
-   Telefone de teste: `5517981625486`. `/match` retornou
-   `multiple_matches` — **dois acessos ativos no mesmo telefone**:
+   **Cliente de teste, telefone `5517981625486`** (auditoria só-leitura
+   via `/match`/`/status`, chave anon pública, zero mutação) — dois
+   acessos ativos no mesmo telefone:
 
    | Nome | Plano | Servidor | Valor | Vencimento | Telas | `publicId` |
    |---|---|---|---|---|---|---|
@@ -263,29 +209,127 @@ Antes de cogitar qualquer deploy do commit `8d85f94`:
    `publicId` hardcoded em `teste-patch-renovacao-newone/index.ts`
    (`019ff025-ae5a-7e96-a037-8cfec84178d1`, de uma sessão de teste de
    21/08) foi reconfirmado via `/status` como **obsoleto**
-   (`linkState: "unlinked"`, 404 no Rocket) — não existe mais. O
-   cadastro real atual de "Js Informática Rp / NewOne" tem um
-   `publicId` diferente (`01a026ef-...`, tabela acima). Qualquer
-   script/valor hardcoded de sessões antigas precisa ser reconfirmado
-   antes de usar, nunca reaproveitado por suposição.
+   (`linkState: "unlinked"`, 404 no Rocket). O cadastro real atual de
+   "Js Informática Rp / NewOne" usa `01a026ef-...` (tabela acima).
 
-   **Decisão do usuário (27/08/2026): o acesso escolhido para o fluxo
-   principal do teste ponta a ponta é o NewOne**
-   (`publicId 01a026ef-8bdd-7641-a4f2-2ae37b184ac0`, "Js Informática
-   Rp", Mensal, R$ 35,00, vencimento 08/03/2027). **O cenário de
-   múltiplos acessos permanece no roteiro — não deve ser contornado.**
-   Como o telefone tem 2 acessos ativos, a primeira mensagem do
-   cliente vai naturalmente cair nesse cenário (a IA lista os dois e
-   pergunta qual); o teste precisa passar por essa etapa de verdade
-   (identificar/escolher o NewOne) antes de chegar na proposta
-   ACEITO/CANCELAR — não pular direto pro acesso único assumindo que
-   já está resolvido.
+   **Acesso escolhido para o fluxo principal: NewOne**
+   (`publicId 01a026ef-8bdd-7641-a4f2-2ae37b184ac0`). O cenário de
+   múltiplos acessos permanece obrigatório no roteiro — nunca
+   contornado (o teste real precisa passar pela identificação/escolha
+   do NewOne antes do ACEITO/CANCELAR).
 
-   **Ainda pendente antes de iniciar a execução:** nada além da
-   autorização explícita para começar. Execução do teste em si (
-   qualquer mensagem, clique, cobrança ou pagamento reais) exige
-   autorização própria, separada desta preparação — **nada disso foi
-   iniciado ainda**.
+   ### Ciclo 1 (27/08/2026) — sequência cronológica real, com evidência
+
+   | Horário (UTC) | Evento |
+   |---|---|
+   | 23:09-23:10 | Mensagem ambígua → sessão de 1h resetada → 2ª tentativa aciona corretamente o cenário de múltiplos acessos |
+   | 23:10:50 | Cliente escolhe "2" (NewOne) → bloqueado por um token órfão de 24/08 (autorizado nesta sessão a expirar manualmente, ver histórico acima) |
+   | 23:18:53-23:18:55 | Novo token criado, mensagem interativa (botões) enviada com os dados reais do NewOne |
+   | 23:19:12 | Cliente toca **ACEITO** — webhook recebe `interactive.button_reply`, `renovacao-confirmar` reivindica atomicamente |
+   | 23:19:14 | `cobrancas_pix` criada (`e4f3860a-...`, `pendente`) |
+   | 23:19:15 | Cliente recebe a mensagem final com o Pix — **última mensagem que o cliente recebeu neste ciclo** |
+   | 23:22:56 | Pagamento simulado confirmado — `cobrancas_pix.status` → `pago` |
+   | — | **`tokens_renovacao.operacao_id` nunca foi vinculado** (bug de ordem/FK, ver causa raiz abaixo) — `openpix-webhook` não encontra o token, nenhum workflow disparado, nenhuma mensagem ao cliente |
+   | 23:35:01 | `renovacao-sigma-watchdog` (backstop de 15min) encontra o token preso, marca `renovacao_falhou`, abre transferência humana automática |
+
+   **Causa raiz comprovada:** em `_shared/renovacao_confirmacao.ts`, o
+   caminho ACEITO chamava `vincularOperacaoAoToken()` **antes** de
+   `criarCobrancaPixRegistro()`, violando sempre a foreign key
+   `tokens_renovacao.operacao_id → cobrancas_pix(operacao_id)`
+   (migration `20260824130000_tokens_renovacao.sql`). A falha era
+   engolida por um `.catch()` best-effort — o cliente recebia o Pix
+   normalmente, mas o pagamento nunca conseguia avançar sozinho.
+
+   **Corrigido, testado e implantado:**
+   - Commit `cbd5937` — reordena (`criarCobrancaPixRegistro` antes de
+     `vincularOperacaoAoToken`), torna a falha de vínculo **fatal**
+     (transferência humana + token marcado `renovacao_falhou`, nunca
+     mais envia a mensagem do Pix quando o vínculo falha), e faz
+     `vincularOperacaoAoToken` verificar que exatamente uma linha foi
+     afetada (nunca mais sucesso silencioso).
+   - Suíte nova `scripts/testes/vinculo_operacao_renovacao/` — roda os
+     arquivos reais de produção com um fake de Supabase que reproduz a
+     FK de verdade. **Comprovado empiricamente: 7/20 passando com o
+     código antigo (via `git stash` temporário) → 20/20 com a
+     correção.**
+   - **Implantado:** `renovacao-confirmar` **v2**, `updated_at`
+     27/08/2026 23:44:38 UTC (único ponto de consumo real da lógica
+     corrigida — `orchestrator`/`webhook`/demais functions não
+     precisaram de redeploy, não chamam o caminho alterado).
+
+   **Watchdog funcionou exatamente como projetado** — backstop de
+   15min encontrou a autorização órfã e a fechou (`renovacao_falhou`),
+   liberando o acesso pra nova solicitação. **Comportamento correto,
+   não uma falha.**
+
+   **Decisão do usuário (27/08/2026): o caso do Ciclo 1 (token
+   `6d35d628-...`, operação `e4f3860a-...`) é encerramento definitivo,
+   não recuperado manualmente.** `renovacao_falhou` é estado terminal
+   por desenho, sem transição de volta pra `autorizada`/
+   `renovacao_em_andamento` — reconstruir isso manualmente seria um
+   workaround fora da máquina de estados, descartado deliberadamente.
+   `cobrancas_pix e4f3860a-...` (`status: pago`) fica como resíduo
+   órfão de teste, inofensivo (índice único ali só cobre
+   `status='pendente'`) — não usar em tentativas futuras.
+
+   ### Achado de produto novo — pendência obrigatória, ainda NÃO corrigida
+
+   **Falha que aciona transferência humana automática (ex.: o
+   watchdog) não envia nenhuma mensagem real ao cliente pelo
+   WhatsApp** — só grava registros internos em `mensagens_conversa`
+   (`origem: sistema`/`ia` vazia), visíveis só no Painel de
+   Atendimento. Confirmado ao vivo no Ciclo 1: depois de *"vou te
+   avisar assim que confirmar"* (23:19:15), o cliente nunca mais
+   recebeu nada — nem sucesso, nem falha, nem aviso de transferência.
+   `acionarTransferenciaHumana` (a RPC em si) nunca envia mensagem;
+   isso é responsabilidade de cada chamador — o `Orchestrator` faz
+   isso no seu próprio helper (`transferirPorFalha`,
+   `MENSAGEM_TRANSFERENCIA_CLIENTE`), mas nem o
+   `renovacao-sigma-watchdog` nem o caminho de falha de vínculo em
+   `_shared/renovacao_confirmacao.ts` (commit `cbd5937`) replicam esse
+   envio. **Em produção, um erro interno nunca deveria resultar em
+   silêncio total pro cliente.** Registrado como pendência obrigatória
+   — correção com escopo próprio, ainda não autorizada, não
+   implementada.
+
+   ### Ciclo 2 — planejado, execução ainda NÃO iniciada
+
+   Mesmo roteiro do Ciclo 1 (mensagem real → identificação do NewOne →
+   proposta → ACEITO → cobrança → pagamento → webhook → renovação real
+   no Sigma → reconsulta do vencimento → confirmação ao cliente), com
+   um critério adicional aprovado pelo usuário:
+
+   **Antes mesmo de pagar, confirmar por leitura que
+   `tokens_renovacao.operacao_id` já bate exatamente com
+   `cobrancas_pix.operacao_id`** — não esperar o pagamento pra
+   descobrir que o vínculo falhou (foi exatamente esse atraso na
+   detecção que permitiu o Ciclo 1 chegar até o pagamento confirmado
+   antes do bug aparecer).
+
+   **Testes negativos obrigatórios** (nenhum executado ainda em nenhum
+   ciclo): CANCELAR, clique duplicado, telefone divergente, token
+   expirado, falha de renovação controlada no Rocket/Sigma.
+
+   **Critério de conclusão do item 3** (inalterado): WhatsApp real →
+   ACEITO → cobrança → pagamento → webhook → renovação real no Sigma →
+   reconsulta confirmando novo vencimento → mensagem final no
+   WhatsApp, com evidência real em cada etapa, sem intervenção manual
+   no meio do caminho feliz. **Harness local passando não conta como
+   conclusão deste item** — nem 20/20 do teste de regressão do commit
+   `cbd5937`, que prova a correção isoladamente, mas não substitui o
+   ciclo real de ponta a ponta.
+
+   **Status consolidado, nesta ordem:**
+   - ✅ Bug da FK corrigido
+   - ✅ Regressão coberta (20/20)
+   - ✅ Fix implantado (`renovacao-confirmar` v2)
+   - ✅ Watchdog funcionando como projetado
+   - ⚠️ Comunicação ao cliente em falha automática ainda precisa ser tratada (pendência obrigatória, acima)
+   - ⏳ Ciclo 2 do teste ponta a ponta ainda não iniciado
+
+   **Execução do Ciclo 2 exige autorização explícita própria** —
+   nenhuma mensagem, clique, cobrança ou pagamento deve acontecer sem
+   ela.
 
 ## 4. Mudança de provedor: PagBank → OpenPix/Woovi (Bloco 1) — histórico, sem mudança nesta sessão
 
@@ -404,22 +448,26 @@ continuar na versão do Bloco 1 (seção 0).
 2. Confirmar `git log --oneline -3` e `git status` antes de qualquer
    trabalho novo (regra permanente do projeto,
    `inovatv_central/CLAUDE.md`, seção 0).
-3. **Produção já reflete o commit `8d85f94`** (`orchestrator` v46,
-   `webhook` v13, `renovacao-confirmar` v1, deploy de 27/08/2026) —
+3. **Produção reflete o commit `cbd5937`** em `renovacao-confirmar`
+   (v2, `updated_at` 27/08/2026 23:44:38 UTC — inclui o fix da FK) —
    mas reconferir `supabase functions list` mesmo assim antes de
    qualquer teste real, caso a sessão que retomar não seja a mesma que
    fez este deploy.
 4. Status das pendências da seção 3: item 1 (fallback dos links
    antigos) **fechado**, com duas dívidas técnicas aceitas
    deliberadamente; item 2 (janela de 24h) **decidido, mas não
-   implementado** — a política está definida, o código ainda não a
-   segue (gap real documentado); item 3 (teste ponta a ponta real)
-   **ambiente pronto, execução ainda não iniciada** — roteiro completo
-   registrado na própria seção 3.
-5. **Próxima ação real, quando autorizada:** auditoria só-leitura do
-   cliente de teste no Rocket (telefone, plano, valor, vencimento),
-   e só depois, com autorização explícita separada, o início da
-   execução do roteiro de teste (seção 3, item 3). Nenhuma mensagem
-   real, clique ou cobrança deve acontecer sem essa autorização
-   específica — a aprovação do deploy de preparação **não** autoriza a
-   execução do teste em si.
+   implementado**; item 3 (teste ponta a ponta real) — **Ciclo 1
+   executado e encerrado** (bug de FK encontrado, corrigido, testado,
+   implantado; caso de teste não recuperado, decisão deliberada),
+   **pendência obrigatória nova** (comunicação silenciosa ao cliente
+   em falha automática, ainda não corrigida), **Ciclo 2 planejado,
+   execução ainda não iniciada** — tudo detalhado na própria seção 3.
+5. **Não repetir a investigação de causa raiz do bug de FK** (já
+   comprovada, corrigida, testada e implantada) nem a auditoria do
+   cliente de teste (seção 3) — partir direto pra decidir o próximo
+   passo real: (a) corrigir a pendência obrigatória de comunicação ao
+   cliente, ou (b) iniciar o Ciclo 2 do teste ponta a ponta (com o
+   critério adicional de confirmar o vínculo `operacao_id` antes do
+   pagamento). Nenhuma mensagem real, clique, cobrança ou pagamento
+   deve acontecer sem autorização explícita própria para essa
+   execução especificamente.
