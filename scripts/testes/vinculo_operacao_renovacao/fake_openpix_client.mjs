@@ -7,6 +7,7 @@ let comportamento = {
     outcome: "success",
     transactionId: "fake-tx-" + Math.random().toString(16).slice(2),
     qrCodeTexto: "00020101-fake-qr",
+    paymentLinkUrl: "https://openpix.com.br/pay/fake-link",
   }),
   consultar: () => ({ outcome: "success", status: "COMPLETED", amountCentavos: 3500 }),
 };
@@ -21,6 +22,7 @@ export function resetarConfiguracao() {
       outcome: "success",
       transactionId: "fake-tx-" + Math.random().toString(16).slice(2),
       qrCodeTexto: "00020101-fake-qr",
+      paymentLinkUrl: "https://openpix.com.br/pay/fake-link",
     }),
     consultar: () => ({ outcome: "success", status: "COMPLETED", amountCentavos: 3500 }),
   };

@@ -23,7 +23,11 @@ export interface TokenRenovacao {
   id: string;
   token_hash: string;
   conversation_id: string;
-  public_id: string;
+  // Renovacao em lote (2026-08-29): public_id passa a aceitar null so'
+  // para um futuro filho tipo='unitv' (identificado por unitv_sn/id).
+  // Todo token 'sigma' -- avulso ou filho de lote -- continua com
+  // public_id preenchido (garantido por CHECK no banco).
+  public_id: string | null;
   telefone: string;
   operacao_id: string | null;
   cliente_nome: string;
@@ -39,6 +43,11 @@ export interface TokenRenovacao {
   renovacao_concluida_em: string | null;
   vencimento_confirmado: string | null;
   motivo_falha: string | null;
+  // Renovacao em lote: grupo_id NULL = renovacao avulsa (fluxo de hoje).
+  grupo_id: string | null;
+  tipo: "sigma" | "unitv";
+  unitv_sn: string | null;
+  unitv_id: number | null;
 }
 
 const JANELA_EXPIRACAO_MS = 2 * 60 * 60 * 1000; // 2h, decisao aprovada
@@ -92,12 +101,21 @@ export async function criarTokenRenovacao(params: {
 // pelo indice unico parcial no banco) -- checagem do lado da
 // aplicacao, pra reaproveitar em vez de tentar criar outra e esbarrar
 // na constraint.
+//
+// Renovacao em lote (Etapa 1, 2026-08-29): filtra grupo_id IS NULL --
+// devolve SO' tokens de renovacao AVULSA. Um token que pertence a um
+// lote (grupo_id preenchido) pertence EXCLUSIVAMENTE ao fluxo de lote e
+// NUNCA e' reaproveitado/operado pelo fluxo individual. Quando existe
+// um lote ativo para o acesso, o proprio Orquestrador reconhece isso
+// antes (existeLoteAtivoParaPublicId, _shared/renovacoes_lote.ts) e
+// informa "ja ha uma renovacao em andamento", sem criar token novo.
 export async function buscarTokenAtivoPorPublicId(publicId: string): Promise<TokenRenovacao | null> {
   const client = getServiceClient();
   const { data, error } = await client
     .from("tokens_renovacao")
     .select("*")
     .eq("public_id", publicId)
+    .is("grupo_id", null)
     .in("estado", ["aguardando_confirmacao", "autorizada", "renovacao_em_andamento"])
     .order("criado_em", { ascending: false })
     .limit(1)
@@ -285,6 +303,12 @@ export async function buscarRenovacoesEmAndamentoAntigas(minutosLimite: number):
     .from("tokens_renovacao")
     .select("*")
     .eq("estado", "renovacao_em_andamento")
+    // Renovacao em lote (Etapa 1, 2026-08-29): filhos de lote sao
+    // tokens_renovacao com grupo_id preenchido -- eles tem seu proprio
+    // backstop (buscarLotesEmAndamentoAntigos + marcarEstadoFinalLote).
+    // Este scan cobre SO' renovacao avulsa (grupo_id IS NULL), pra nunca
+    // processar um filho de lote como se fosse um token individual.
+    .is("grupo_id", null)
     .lt("renovacao_iniciada_em", limite);
 
   if (error) throw error;
@@ -332,6 +356,11 @@ export async function buscarAutorizacoesOrfasAntigas(minutosLimite: number): Pro
     .select("*")
     .eq("estado", "autorizada")
     .is("operacao_id", null)
+    // Renovacao em lote (Etapa 1, 2026-08-29): NUNCA um filho de lote
+    // (grupo_id preenchido) -- o backstop de lote e'
+    // buscarLotesAutorizadosOrfaosAntigos + marcarLoteComoFalha. Aqui
+    // so' renovacao avulsa.
+    .is("grupo_id", null)
     .lt("decidido_em", limite);
 
   if (error) throw error;

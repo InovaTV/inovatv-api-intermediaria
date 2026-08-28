@@ -79,36 +79,44 @@ export const MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO =
 // so' e' confirmada depois que o provedor reconhecer o pagamento (duas
 // confirmacoes, nunca uma so).
 //
-// UX (bloco de renovacao 2026-08-28, inovatv_central/CLAUDE.md, C1):
-// UMA unica mensagem. O BR Code sai do meio do texto e vai pra dentro
-// de um bloco de codigo do WhatsApp (tres crases em linha propria antes
-// e depois) -- fica visualmente isolado e, nos clientes que suportam,
-// ganha o icone de copiar. `codigoPix` entra BYTE A BYTE, sem trim,
-// sem quebra, sem escape. Sem QR Code, sem segunda mensagem, sem
-// pagina externa.
+// UX de renovacao (2026-08-28, inovatv_central/CLAUDE.md) -- REVISADA
+// depois do teste real: o BR Code (mesmo isolado em bloco de codigo)
+// NAO e' a experiencia desejada. Agora a mensagem e' curta e leva o
+// LINK da pagina de pagamento hospedada pela Woovi (uma por cobranca,
+// `charge.paymentLinkUrl`, ja retornado pelo POST /charge). Nessa
+// pagina o cliente ve o valor, o recebedor, o QR e o botao "COPIAR
+// CODIGO QR CODE" -- copia e cola no app do banco.
+//   - NUNCA mais o BR Code no corpo da mensagem.
+//   - Sem QR Code dentro do WhatsApp.
+//   - Sem pagina propria da InovaTV (a pagina da Woovi ja foi aprovada
+//     como conceito, mesmo mostrando o recebedor "JS INFORMATICA RP" e
+//     a marca Woovi).
+// Nenhuma logica de cobranca/webhook/estado muda -- so' o conteudo da
+// mensagem e a origem do dado (paymentLinkUrl no lugar do brCode).
+// Formato final (2026-08-29) -- serve individual E lote: `linhaPacote`
+// e' a linha do 📦 ("Plano: Mensal" no individual, "2 acessos" no
+// lote). Link logo apos "🔗 PAGAR RENOVAÇÃO", antes do ✅. Sem BR Code,
+// sem instrucao de "copiar QR" (a propria pagina Woovi guia isso).
 export function montarMensagemPixRenovacao(
   valorFormatado: string,
-  codigoPix: string,
+  linhaPacote: string,
+  linkPagamento: string,
 ): string {
   return [
     "💳 *PAGAMENTO DA RENOVAÇÃO*",
     "",
-    `*Valor:* R$ ${valorFormatado}`,
+    `💰 Valor: R$ ${valorFormatado}`,
     "",
-    "📱 *Como pagar*",
-    "Abra o aplicativo do seu banco.",
-    "Escolha PIX.",
-    "Escolha PIX Copia e Cola.",
-    "Cole o código abaixo.",
+    `📦 ${linhaPacote}`,
     "",
-    "📋 *Código PIX*",
-    "```",
-    codigoPix,
-    "```",
+    "👇 Toque no link abaixo para realizar o pagamento.",
+    "",
+    "🔗 PAGAR RENOVAÇÃO",
+    linkPagamento,
     "",
     "✅ Não é necessário enviar o comprovante.",
     "",
-    "🔄 Após a confirmação, sua renovação será processada automaticamente.",
+    "🔄 Após a confirmação do pagamento, sua renovação será processada automaticamente.",
   ].join("\n");
 }
 
@@ -125,8 +133,21 @@ export function montarMensagemPixRenovacao(
 // "responder" continua em prosa livre, sem mudanca).
 const SEPARADOR_ACESSOS = "─────────────────";
 
+// `valorFormatado` (2026-08-28): valor de CADA acesso, ja formatado
+// pelo CHAMADOR com formatarValorBRL sobre StatusCliente.valor -- o
+// campo que o /status passou a expor (dado do cadastro, cru). `null`
+// quando o /status nao trouxe valor ou ele nao parseia -> "não
+// informado", mesmo fallback dos outros campos. Aqui e' so'
+// apresentacao: nenhum calculo, nenhuma consulta por candidato, o
+// Gemini nunca determina/infere o valor.
 export function montarMensagemMultiplosAcessosRenovacao(
-  acessos: { nome: string; usuario: string; servidorNome: string; planoNome: string }[],
+  acessos: {
+    nome: string;
+    usuario: string;
+    servidorNome: string;
+    planoNome: string;
+    valorFormatado: string | null;
+  }[],
 ): string {
   const blocos = acessos.map((acesso, indice) =>
     [
@@ -134,14 +155,94 @@ export function montarMensagemMultiplosAcessosRenovacao(
       `Usuário: ${acesso.usuario}`,
       `Servidor: ${acesso.servidorNome}`,
       `Plano: ${acesso.planoNome}`,
+      acesso.valorFormatado
+        ? `💰 Valor: R$ ${acesso.valorFormatado}`
+        : "💰 Valor: não informado",
     ].join("\n"),
   );
+  const n = acessos.length;
+  const rotuloTodos = n === 2 ? "os dois" : `todos os ${n}`;
   return [
+    "📋 *Seus acessos*",
+    "",
     blocos.join(`\n\n${SEPARADOR_ACESSOS}\n\n`),
     "",
     "Qual desses acessos você gostaria de renovar?",
+    "",
+    `Digite o número do acesso, ou *0* para renovar ${rotuloTodos}.`,
   ].join("\n");
 }
+
+// Renovacao em lote (Etapa 1, 2026-08-29) -- UX aprovada. Confirmacao
+// UNICA para N acessos. Valores por acesso e total vem de
+// _shared/precos_renovacao.ts (regra comercial INTERNA -- nunca citada
+// aqui: sem "promocao", sem "desconto"). Formato compacto: servidor +
+// plano numa linha, valor abaixo. Mesma estrutura pra Sigma+Sigma e
+// (futuro) Sigma+UniTV -- a linha nao distingue o tipo.
+export function montarMensagemConfirmacaoLote(dados: {
+  itens: { nome: string; servidorNome: string; planoNome: string; valorFormatado: string }[];
+  totalFormatado: string;
+}): string {
+  const blocos = dados.itens.map((item, indice) =>
+    [
+      `*${indice + 1}. ${item.nome}*`,
+      `🖥️ ${item.servidorNome} · 📦 ${item.planoNome}`,
+      `💰 R$ ${item.valorFormatado}`,
+    ].join("\n"),
+  );
+  return [
+    "📋 *Confira sua renovação*",
+    "",
+    `Você vai renovar ${dados.itens.length} acessos:`,
+    "",
+    blocos.join("\n\n"),
+    "",
+    `💰 *Total: R$ ${dados.totalFormatado}*`,
+    "",
+    "Toque em *ACEITO* para gerar o PIX, ou em *CANCELAR* para desistir.",
+  ].join("\n");
+}
+
+// Renovacao em lote -- resultado UNICO consolidado apos o pagamento.
+// Cada item apresenta o SEU resultado: renovado -> "📅 Novo
+// vencimento"; falha/indeterminado/unitv pendente -> "⚠️ Um atendente
+// vai concluir...". "com sucesso" so' quando TODOS renovaram. Mesma
+// mensagem pra Sigma+Sigma e (futuro) Sigma+UniTV. Fora da janela de
+// 24h o envio pode falhar (mensagem livre) -- fallback por template
+// aprovado e' tarefa separada (NOME_TEMPLATE_RENOVACAO_LOTE_RESULTADO).
+export function montarMensagemResultadoLote(
+  itens: { nome: string; servidorNome: string; sucesso: boolean; vencimentoFormatado: string | null }[],
+): string {
+  const todosOk = itens.every((i) => i.sucesso);
+  const blocos = itens.map((item, indice) =>
+    [
+      `*${indice + 1}. ${item.nome}*`,
+      `🖥️ ${item.servidorNome}`,
+      item.sucesso && item.vencimentoFormatado
+        ? `📅 Novo vencimento: ${item.vencimentoFormatado}`
+        : "⚠️ Um atendente vai concluir esta renovação por aqui.",
+    ].join("\n"),
+  );
+  return [
+    "✅ *Pagamento confirmado!*",
+    "",
+    todosOk
+      ? "Suas renovações foram registradas com sucesso."
+      : "Suas renovações foram registradas.",
+    "",
+    blocos.join("\n\n"),
+    "",
+    "Qualquer dúvida, estamos à disposição.",
+    "InovaTV — Sempre pensando em você! 📺",
+  ].join("\n");
+}
+
+// Template Meta para o resultado do lote FORA da janela de 24h --
+// ainda NAO submetido/aprovado (trilha paralela). Codigo so' referencia
+// o nome; enquanto nao existir, enviarTemplateWhatsApp retorna
+// "unavailable" como qualquer outra falha da Graph API.
+export const NOME_TEMPLATE_RENOVACAO_LOTE_RESULTADO = "renovacao_lote_resultado";
+export const IDIOMA_TEMPLATE_RENOVACAO_LOTE_RESULTADO = "pt_BR";
 
 // Bloco 2 (2026-08-24, inovatv_central/CLAUDE.md) -- ACEITO passa a
 // acontecer ANTES da cobranca existir (inversao de ordem aprovada

@@ -28,6 +28,11 @@ function normalizeCliente(cliente: Record<string, unknown>) {
     planoNome: plano?.nome ?? null,
     servidorNome: servidor?.nome ?? null,
     telas: cliente.telas ?? null,
+    // `valor` exposto (2026-08-28) so' pra apresentacao na lista de
+    // multiplos acessos da renovacao -- campo JA existente no cadastro
+    // do Rocket, repassado sem transformacao (mesmo estilo dos demais).
+    // Continua NUNCA repassando senha/device_key_or_OTP_code.
+    valor: cliente.valor ?? null,
   };
 }
 

@@ -28,15 +28,23 @@ import {
   marcarResultadoRenovacao,
   buscarTokenPorOperacaoId,
   type ResultadoRenovacaoSigma,
+  type EstadoTokenRenovacao,
 } from "../_shared/tokens_renovacao.ts";
+import {
+  buscarLotePorOperacaoId,
+  buscarFilhosDoLote,
+  marcarResultadoFilhoLote,
+  marcarEstadoFinalLote,
+} from "../_shared/renovacoes_lote.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
-import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarTemplateWhatsApp, enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
 import {
   NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
   IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
   montarTextoConfirmacaoPagamentoRenovacao,
+  montarMensagemResultadoLote,
 } from "../_shared/mensagens_fixas.ts";
 
 const RESULTADOS_VALIDOS: ResultadoRenovacaoSigma[] = [
@@ -45,6 +53,23 @@ const RESULTADOS_VALIDOS: ResultadoRenovacaoSigma[] = [
   "sessao_expirada",
   "resultado_ambiguo",
 ];
+
+// Renovacao em lote (Etapa 1, 2026-08-29): resultados possiveis de um
+// FILHO do lote. "unitv_pendente" e' o stub da Etapa 2 -- o workflow
+// nunca executa UniTV de verdade ainda, sempre reporta isso, e o filho
+// vira renovacao_indeterminada + transferencia humana.
+const RESULTADOS_FILHO_LOTE = ["sucesso", "falha", "sessao_expirada", "resultado_ambiguo", "unitv_pendente"] as const;
+type ResultadoFilhoLote = (typeof RESULTADOS_FILHO_LOTE)[number];
+
+interface ItemResultadoLote {
+  token_id?: string;
+  tipo?: string;
+  servidor_nome?: string;
+  cliente_nome?: string;
+  resultado?: string;
+  vencimentoConfirmado?: string;
+  detalhe?: string;
+}
 
 function formatarDataBr(iso: string): string {
   return new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
@@ -63,7 +88,9 @@ Deno.serve(async (req: Request) => {
 
   let body: {
     operacao_id?: string;
+    grupo_id?: string;
     resultado?: string;
+    resultados?: ItemResultadoLote[];
     vencimentoConfirmado?: string;
     detalhe?: string;
   };
@@ -71,6 +98,13 @@ Deno.serve(async (req: Request) => {
     body = await req.json();
   } catch {
     return errorResponse("Corpo da requisicao precisa ser JSON valido");
+  }
+
+  // Renovacao em lote (Etapa 1, 2026-08-29): callback com grupo_id +
+  // resultados[] -- um resultado por acesso do lote. Formato individual
+  // (operacao_id + resultado) segue byte a byte abaixo.
+  if (body.grupo_id) {
+    return await processarResultadoLote(body);
   }
 
   const { operacao_id: operacaoId, resultado, vencimentoConfirmado, detalhe } = body;
@@ -164,3 +198,128 @@ Deno.serve(async (req: Request) => {
 
   return jsonResponse({ outcome: `${resultado}_processado` });
 });
+
+// ---------------------------------------------------------------------
+// Renovacao em lote (Etapa 1, 2026-08-29). Um callback por LOTE, com um
+// resultado por acesso. Cada filho tem sua propria linha em
+// tokens_renovacao e seu proprio estado terminal; o lote deriva
+// concluida | parcial | falhou. Idempotencia: marcarResultadoFilhoLote
+// e marcarEstadoFinalLote so' agem sobre linhas ainda
+// 'renovacao_em_andamento' -- reenvio do callback vira no-op.
+// ---------------------------------------------------------------------
+function mapearEstadoFilho(resultado: ResultadoFilhoLote): EstadoTokenRenovacao {
+  if (resultado === "sucesso") return "renovacao_concluida";
+  if (resultado === "unitv_pendente") return "renovacao_indeterminada";
+  return "renovacao_falhou";
+}
+
+async function processarResultadoLote(body: {
+  operacao_id?: string;
+  grupo_id?: string;
+  resultados?: ItemResultadoLote[];
+}): Promise<Response> {
+  const operacaoId = body.operacao_id;
+  const grupoId = body.grupo_id;
+  const itens = body.resultados;
+  if (!operacaoId || !grupoId || !Array.isArray(itens) || itens.length === 0) {
+    return errorResponse("Campos obrigatorios (lote): operacao_id, grupo_id, resultados[]");
+  }
+  for (const it of itens) {
+    if (!it.token_id || !it.resultado || !RESULTADOS_FILHO_LOTE.includes(it.resultado as ResultadoFilhoLote)) {
+      return errorResponse(
+        `Cada item de resultados[] precisa de token_id e resultado (um de: ${RESULTADOS_FILHO_LOTE.join(", ")})`,
+      );
+    }
+  }
+
+  const lote = await buscarLotePorOperacaoId(operacaoId);
+  if (!lote) {
+    console.log("[renovacao-sigma-resultado] lote sem correspondencia", JSON.stringify({ operacaoId, grupoId }));
+    return jsonResponse({ outcome: "sem_lote_correspondente" });
+  }
+
+  const filhosAntes = await buscarFilhosDoLote(grupoId);
+  const porId = new Map(filhosAntes.map((f) => [f.id, f]));
+
+  let algumAtualizado = false;
+  for (const it of itens) {
+    const resultado = it.resultado as ResultadoFilhoLote;
+    const atualizado = await marcarResultadoFilhoLote(it.token_id!, mapearEstadoFilho(resultado), {
+      vencimentoConfirmado: it.vencimentoConfirmado ?? null,
+      motivo: resultado === "sucesso" ? null : (it.detalhe ?? `renovacao_lote:${resultado}`),
+    });
+    if (atualizado) algumAtualizado = true;
+  }
+
+  if (!algumAtualizado) {
+    console.log("[renovacao-sigma-resultado] callback de lote duplicado/fora de estado -- ignorado", JSON.stringify({ grupoId }));
+    return jsonResponse({ outcome: "ja_processado" });
+  }
+
+  const totalOk = itens.filter((it) => it.resultado === "sucesso").length;
+  const estadoFinal: "concluida" | "parcial" | "falhou" =
+    totalOk === itens.length ? "concluida" : totalOk === 0 ? "falhou" : "parcial";
+
+  const loteFinalizado = await marcarEstadoFinalLote(grupoId, estadoFinal);
+  if (!loteFinalizado) {
+    // Outra chamada (ou o watchdog) ja finalizou o lote -- nao reenvia
+    // mensagem nem transfere de novo.
+    return jsonResponse({ outcome: "ja_processado" });
+  }
+
+  // Log tecnico no historico do Painel.
+  const resumo = itens
+    .map((it, i) => `${i + 1}. ${it.servidor_nome ?? it.tipo ?? "acesso"}: ${it.resultado}${it.detalhe ? " -- " + it.detalhe : ""}`)
+    .join(" | ");
+  await inserirMensagem(lote.conversation_id, "sistema", `Resultado da renovação em lote (${estadoFinal}): ${resumo}`, null).catch(() => {});
+
+  // Mensagem consolidada ao cliente -- texto livre (o template
+  // renovacao_lote_resultado ainda nao foi submetido a Meta; fora da
+  // janela de 24h o envio falha e cai no gap ja conhecido, so' logado).
+  const textoCliente = montarMensagemResultadoLote(
+    itens.map((it) => {
+      const filho = it.token_id ? porId.get(it.token_id) : undefined;
+      return {
+        nome: it.cliente_nome ?? filho?.cliente_nome ?? "não informado",
+        servidorNome: it.servidor_nome ?? filho?.servidor_nome ?? "não informado",
+        sucesso: it.resultado === "sucesso",
+        vencimentoFormatado: it.vencimentoConfirmado ? formatarDataBr(it.vencimentoConfirmado) : null,
+      };
+    }),
+  );
+  const envio = await enviarMensagemWhatsApp(lote.telefone, textoCliente);
+  if (envio.outcome === "success") {
+    await inserirMensagem(lote.conversation_id, "ia", textoCliente, null).catch(() => {});
+  } else {
+    console.log(
+      "[renovacao-sigma-resultado] falha ao enviar resultado do lote ao cliente (possivel janela 24h) -- so' logado",
+      JSON.stringify({ grupoId, outcome: envio.outcome }),
+    );
+  }
+
+  // Qualquer acesso que nao concluiu -> transferencia humana no nivel
+  // da conversa (uma so', nao por acesso). unitv_pendente tem motivo
+  // proprio (Etapa 2 ainda nao integrada). avisarCliente: false -- a
+  // mensagem consolidada acima ja e' a UNICA mensagem ao cliente e ja
+  // diz "um atendente vai concluir esta renovacao"; nao repetir com a
+  // frase generica de transferencia. O estado + o aviso ao Jose
+  // continuam normais.
+  if (estadoFinal !== "concluida") {
+    const temUnitvPendente = itens.some((it) => it.resultado === "unitv_pendente");
+    const motivo = temUnitvPendente
+      ? "renovacao:unitv_pendente_integracao"
+      : `renovacao_lote:${estadoFinal}`;
+    let transferenciaAcionada = false;
+    try {
+      const t = await acionarTransferenciaHumana(lote.conversation_id, motivo, "(renovacao em lote pos-pagamento)", resumo);
+      transferenciaAcionada = t.outcome === "acionada";
+    } catch (erro) {
+      console.log("[renovacao-sigma-resultado] falha ao acionar transferencia (lote)", String(erro));
+    }
+    await notificarTransferenciaHumana(lote.telefone, motivo, transferenciaAcionada, lote.conversation_id, {
+      avisarCliente: false,
+    });
+  }
+
+  return jsonResponse({ outcome: `lote_${estadoFinal}` });
+}

@@ -4,8 +4,9 @@
 // mock (o arquivo nao usa Deno.env nem I/O nenhum).
 //
 // Cobre:
-//   C1 -> montarMensagemPixRenovacao       (PIX numa unica mensagem,
-//         BR Code em bloco de codigo, byte a byte)
+//   C1 -> montarMensagemPixRenovacao       (mensagem curta com o LINK
+//         da pagina de pagamento da Woovi -- NUNCA mais o BR Code no
+//         corpo, sem bloco de codigo, sem QR no WhatsApp)
 //   C2 -> montarMensagemBotoesConfirmacaoRenovacao (proposta, 6 campos)
 //   C3 (formato reaproveitado) -> montarMensagemMultiplosAcessosRenovacao
 //   C4 -> montarTextoConfirmacaoPagamentoRenovacao (molde do template,
@@ -18,6 +19,8 @@ import {
   montarMensagemPixRenovacao,
   montarMensagemMultiplosAcessosRenovacao,
   montarTextoConfirmacaoPagamentoRenovacao,
+  montarMensagemConfirmacaoLote,
+  montarMensagemResultadoLote,
 } from "../../../supabase/functions/_shared/mensagens_fixas.ts";
 
 let falhas = 0;
@@ -92,57 +95,52 @@ function ok(condicao, mensagem) {
 }
 
 // =====================================================================
-// C1 -- PIX numa unica mensagem, BR Code em bloco de codigo, byte a byte
+// C1 -- PIX curto com o LINK da pagina da Woovi. NUNCA mais o BR Code
+// no corpo, sem bloco de codigo, sem QR dentro do WhatsApp.
 // =====================================================================
-function checarPix(rotulo, valor, codigo) {
-  const texto = montarMensagemPixRenovacao(valor, codigo);
+// Layout final aprovado (2026-08-29). O 2o parametro e' a LINHA do 📦
+// ja montada pelo chamador ("Plano: Mensal" no individual, "2 acessos"
+// no lote) -- este teste passa a linha completa, como producao.
+function checarPix(rotulo, valor, linhaPacote, link) {
+  const texto = montarMensagemPixRenovacao(valor, linhaPacote, link);
   const linhas = texto.split("\n");
 
   ok(texto.includes("💳 *PAGAMENTO DA RENOVAÇÃO*"), `${rotulo}: titulo presente`);
-  ok(texto.includes(`*Valor:* R$ ${valor}`), `${rotulo}: valor no formato novo`);
-  ok(texto.includes("📱 *Como pagar*"), `${rotulo}: secao 'Como pagar' presente`);
+  ok(texto.includes(`💰 Valor: R$ ${valor}`), `${rotulo}: valor presente`);
+  ok(texto.includes(`📦 ${linhaPacote}`), `${rotulo}: linha do pacote presente (montada pelo chamador)`);
+  ok(texto.includes("👇 Toque no link abaixo para realizar o pagamento."), `${rotulo}: instrucao de pagamento`);
+  ok(texto.includes("🔗 PAGAR RENOVAÇÃO"), `${rotulo}: rotulo do link presente`);
   ok(
-    texto.includes("Abra o aplicativo do seu banco.") &&
-      texto.includes("Escolha PIX.") &&
-      texto.includes("Escolha PIX Copia e Cola.") &&
-      texto.includes("Cole o código abaixo."),
-    `${rotulo}: os 4 passos de pagamento presentes`,
+    texto.includes("Não é necessário enviar o comprovante") &&
+      texto.includes("sua renovação será processada automaticamente"),
+    `${rotulo}: dispensa comprovante + renovacao automatica`,
   );
-  ok(texto.includes("não é necessário enviar o comprovante".toLowerCase()) ||
-    texto.includes("Não é necessário enviar o comprovante"), `${rotulo}: dispensa comprovante`);
-  ok(texto.includes("processada automaticamente"), `${rotulo}: renovacao automatica apos confirmacao`);
 
-  // O codigo aparece EXATAMENTE UMA VEZ, byte a byte.
-  const ocorrencias = texto.split(codigo).length - 1;
-  ok(ocorrencias === 1, `${rotulo}: BR Code aparece exatamente 1 vez, sem alteracao`);
+  // O link aparece EXATAMENTE UMA VEZ, byte a byte, em sua propria
+  // linha, LOGO APOS "🔗 PAGAR RENOVAÇÃO" (nao mais a ultima linha do
+  // corpo -- o ✅/🔄 vem depois, layout final aprovado).
+  ok(texto.split(link).length - 1 === 1, `${rotulo}: link aparece exatamente 1 vez, sem alteracao`);
+  const iRotulo = linhas.indexOf("🔗 PAGAR RENOVAÇÃO");
+  ok(iRotulo !== -1 && linhas[iRotulo + 1] === link, `${rotulo}: link vem imediatamente apos o rotulo, em linha propria`);
+  ok(linhas.indexOf("✅ Não é necessário enviar o comprovante.") > iRotulo, `${rotulo}: dispensa de comprovante vem DEPOIS do link`);
 
-  // Disciplina de fence: a linha do codigo e' precedida e seguida por
-  // uma linha que e' SO' as tres crases.
-  const iCodigo = linhas.indexOf(codigo);
-  ok(iCodigo > 0, `${rotulo}: BR Code ocupa uma linha propria`);
-  ok(linhas[iCodigo - 1] === "```", `${rotulo}: linha anterior ao codigo e' a abertura do bloco`);
-  ok(linhas[iCodigo + 1] === "```", `${rotulo}: linha seguinte ao codigo e' o fechamento do bloco`);
-
-  ok(!texto.includes("…") && !texto.includes(codigo.slice(0, 20) + "..."), `${rotulo}: BR Code nao truncado`);
-  ok(texto.length < 4096, `${rotulo}: mensagem inteira cabe no limite de 4096 chars da Cloud API`);
+  // NUNCA BR Code / bloco de codigo / QR no corpo.
+  ok(!texto.includes("```"), `${rotulo}: sem bloco de codigo (tres crases)`);
+  ok(!/br\.gov\.bcb\.pix/i.test(texto), `${rotulo}: sem marcador de BR Code`);
+  ok(!texto.includes("00020101"), `${rotulo}: sem prefixo de payload EMV (BR Code)`);
+  ok(!/QR ?CODE/i.test(texto), `${rotulo}: "QR CODE" nunca aparece (sem QR dentro do WhatsApp)`);
+  ok(texto.length < 1024, `${rotulo}: mensagem curta (bem abaixo do limite)`);
 }
 
-checarPix(
-  "C1(real)",
-  "35,00",
-  "00020126580014BR.GOV.BCB.PIX0136a1b2c3d4-e5f6-7890-abcd-ef1234567890520400005303986540535.005802BR5913INOVATV LTDA6009SAO PAULO62070503***6304ABCD",
-);
-// BR Code longo (400 chars) -- garante que nao ha' logica de tamanho fixo/corte
-checarPix("C1(400 chars)", "10,00", "000201" + "A".repeat(394));
-// BR Code com caracteres tipo base64 (+ / =) -- nada de escape
-checarPix("C1(base64-like)", "10,00", "000201aB+cD/eF=gH+iJ/kL=mN0304ABCD");
+checarPix("C1(sandbox real)", "35,00", "Plano: Mensal", "https://woovi-sandbox.com/pay/2d0f2e06-e0b4-4ab7-90a0-7076e63f351b");
+checarPix("C1(outro plano)", "49,90", "Plano: Semestral", "https://woovi-sandbox.com/pay/abc123");
+checarPix("C1(lote)", "60,00", "2 acessos", "https://woovi-sandbox.com/pay/lote123");
 
-// C1 -- o BR Code nunca contem crases (senao quebraria o bloco). Defensivo.
+// C1 -- link com query string / caracteres especiais chega intacto
 {
-  const codigo = "00020101021226990304ABCD";
-  const texto = montarMensagemPixRenovacao("1,00", codigo);
-  ok(!codigo.includes("```"), "C1: BR Code de teste nao contem crases (pre-condicao)");
-  ok(texto.split("```").length - 1 === 2, "C1: exatamente 2 marcadores de bloco (abre + fecha)");
+  const link = "https://woovi-sandbox.com/pay/xyz?utm=wa&x=1";
+  const texto = montarMensagemPixRenovacao("10,00", "Plano: Mensal", link);
+  ok(texto.includes(link) && texto.split(link).length - 1 === 1, "C1: link com query string preservado byte a byte, 1x");
 }
 
 // =====================================================================
@@ -161,31 +159,61 @@ function checarLista(rotulo, acessos) {
     // Sem linha em branco entre o titulo numerado e "Usuário:".
     const iTitulo = linhas.indexOf(`*${i + 1}. ${a.nome}*`);
     ok(linhas[iTitulo + 1] === `Usuário: ${a.usuario}`, `${rotulo}: bloco ${i + 1} -- Usuario logo apos o titulo, sem linha vazia`);
+    // Valor -- ULTIMA linha do bloco, logo apos "Plano:", e' o valor
+    // DESTE acesso (nunca trocado com o de outro bloco).
+    const iPlano = linhas.indexOf(`Plano: ${a.planoNome}`, iTitulo);
+    const linhaValorEsperada = a.valorFormatado
+      ? `💰 Valor: R$ ${a.valorFormatado}`
+      : "💰 Valor: não informado";
+    ok(linhas[iPlano + 1] === linhaValorEsperada, `${rotulo}: bloco ${i + 1} -- "${linhaValorEsperada}" logo apos o Plano`);
   });
 
   const sepCount = texto.split(SEP).length - 1;
   ok(sepCount === acessos.length - 1, `${rotulo}: separador entre blocos, nunca apos o ultimo (${sepCount})`);
-  ok(texto.trim().endsWith("Qual desses acessos você gostaria de renovar?"), `${rotulo}: termina com a pergunta de escolha`);
+  ok(texto.includes("📋 *Seus acessos*"), `${rotulo}: cabecalho da lista`);
+  ok(texto.includes("Qual desses acessos você gostaria de renovar?"), `${rotulo}: pergunta de escolha presente`);
+  // Etapa 1: a ultima linha e' a instrucao de entrada (numero OU *0*
+  // para o lote). "os dois" quando N=2, "todos os N" caso contrario.
+  const rotuloTodos = acessos.length === 2 ? "os dois" : `todos os ${acessos.length}`;
+  ok(
+    texto.trim().endsWith(`Digite o número do acesso, ou *0* para renovar ${rotuloTodos}.`),
+    `${rotulo}: termina com a instrucao de entrada (numero do acesso ou 0 = lote)`,
+  );
 }
 checarLista("C3(2 acessos)", [
-  { nome: "Meu Uso Testes", usuario: "828667229", servidorNome: "BLAZE", planoNome: "Mensal" },
-  { nome: "Js Informática Rp", usuario: "112233", servidorNome: "NewOne", planoNome: "Mensal" },
+  { nome: "Meu Uso Testes", usuario: "828667229", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00" },
+  { nome: "Js Informática Rp", usuario: "112233", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "42,00" },
 ]);
 checarLista("C3(3 acessos)", [
-  { nome: "A", usuario: "1", servidorNome: "S1", planoNome: "Mensal" },
-  { nome: "B", usuario: "2", servidorNome: "S2", planoNome: "Anual" },
-  { nome: "C", usuario: "3", servidorNome: "S3", planoNome: "Semestral" },
+  { nome: "A", usuario: "1", servidorNome: "S1", planoNome: "Mensal", valorFormatado: "19,90" },
+  { nome: "B", usuario: "2", servidorNome: "S2", planoNome: "Anual", valorFormatado: "199,00" },
+  { nome: "C", usuario: "3", servidorNome: "S3", planoNome: "Semestral", valorFormatado: "99,90" },
 ]);
-// Campo ausente -> "não informado", nunca undefined/null
+
+// C3 -- o valor de cada acesso acompanha o SEU bloco (nao e' trocado)
 {
   const texto = montarMensagemMultiplosAcessosRenovacao([
-    { nome: "X", usuario: "não informado", servidorNome: "não informado", planoNome: "não informado" },
-    { nome: "Y", usuario: "9", servidorNome: "S", planoNome: "Mensal" },
+    { nome: "Alpha", usuario: "a", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00" },
+    { nome: "Beta", usuario: "b", servidorNome: "NewOne", planoNome: "Anual", valorFormatado: "300,00" },
   ]);
-  ok(
-    texto.includes("Usuário: não informado") && !/(undefined|null|\[object)/.test(texto),
-    "C3: campo ausente vira 'não informado', nunca undefined/null",
-  );
+  const linhas = texto.split("\n");
+  const iAlpha = linhas.indexOf("*1. Alpha*");
+  const iBeta = linhas.indexOf("*2. Beta*");
+  ok(linhas.slice(iAlpha, iBeta).join("\n").includes("💰 Valor: R$ 35,00"), "C3: bloco Alpha carrega R$ 35,00");
+  ok(linhas.slice(iAlpha, iBeta).join("\n").includes("BLAZE") && !linhas.slice(iAlpha, iBeta).join("\n").includes("300,00"), "C3: valor do bloco 2 NAO vaza para o bloco 1");
+  ok(linhas.slice(iBeta).join("\n").includes("💰 Valor: R$ 300,00"), "C3: bloco Beta carrega R$ 300,00");
+}
+
+// C3 -- valor null -> "💰 Valor: não informado" (sem "R$", sem undefined/null)
+{
+  const texto = montarMensagemMultiplosAcessosRenovacao([
+    { nome: "X", usuario: "não informado", servidorNome: "não informado", planoNome: "não informado", valorFormatado: null },
+    { nome: "Y", usuario: "9", servidorNome: "S", planoNome: "Mensal", valorFormatado: "50,00" },
+  ]);
+  ok(texto.includes("💰 Valor: não informado"), "C3: valor null vira '💰 Valor: não informado'");
+  ok(!texto.includes("💰 Valor: R$ não informado"), "C3: sem 'R$' quando o valor e' desconhecido");
+  ok(texto.includes("💰 Valor: R$ 50,00"), "C3: o outro acesso ainda mostra o valor certo");
+  ok(!/(undefined|null|\[object)/.test(texto), "C3: nunca undefined/null no texto");
 }
 
 // =====================================================================
@@ -204,6 +232,50 @@ checarLista("C3(3 acessos)", [
   ok(texto.includes("🖥️ Servidor:BLAZE"), "C4: espelha 'Servidor:' sem espaco");
   ok(texto.includes("📅 Novo vencimento:14/10/2026"), "C4: vencimento formatado no lugar certo");
   ok(texto.includes("InovaTV — Sempre pensando em você! 📺"), "C4: assinatura final presente");
+}
+
+// =====================================================================
+// Etapa 1 -- montarMensagemConfirmacaoLote (confirmacao UNICA do lote)
+// =====================================================================
+{
+  const texto = montarMensagemConfirmacaoLote({
+    itens: [
+      { nome: "Meu Uso Testes", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "30,00" },
+      { nome: "Js Informática Rp", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "30,00" },
+    ],
+    totalFormatado: "60,00",
+  });
+  ok(texto.includes("📋 *Confira sua renovação*"), "Lote-confirm: cabecalho");
+  ok(texto.includes("Você vai renovar 2 acessos:"), "Lote-confirm: quantidade");
+  ok(texto.includes("*1. Meu Uso Testes*") && texto.includes("*2. Js Informática Rp*"), "Lote-confirm: nomes numerados em negrito");
+  ok(texto.includes("🖥️ BLAZE · 📦 Mensal"), "Lote-confirm: servidor + plano na mesma linha");
+  ok((texto.match(/💰 R\$ 30,00/g) ?? []).length === 2, "Lote-confirm: valor final por acesso, 1x cada");
+  ok(texto.includes("💰 *Total: R$ 60,00*"), "Lote-confirm: total consolidado");
+  ok(texto.includes("Toque em *ACEITO*"), "Lote-confirm: instrucao de ACEITO/CANCELAR");
+  ok(!/promo|desconto/i.test(texto), "Lote-confirm: NUNCA cita 'promocao'/'desconto'");
+}
+
+// =====================================================================
+// Etapa 1 -- montarMensagemResultadoLote (resultado consolidado, sem
+// nome no cabecalho; "com sucesso" so' quando TODOS renovaram)
+// =====================================================================
+{
+  const todosOk = montarMensagemResultadoLote([
+    { nome: "Meu Uso Testes", servidorNome: "BLAZE", sucesso: true, vencimentoFormatado: "14/10/2026" },
+    { nome: "Js Informática Rp", servidorNome: "NewOne", sucesso: true, vencimentoFormatado: "08/12/2026" },
+  ]);
+  ok(todosOk.startsWith("✅ *Pagamento confirmado!*"), "Lote-result: titulo");
+  ok(todosOk.includes("Suas renovações foram registradas com sucesso."), "Lote-result: 'com sucesso' quando todos ok");
+  ok(!/Olá|Ol[aá],/.test(todosOk.split("\n")[2] ?? ""), "Lote-result: sem nome no cabecalho (evita assumir mesmo cadastro)");
+  ok(todosOk.includes("📅 Novo vencimento: 14/10/2026") && todosOk.includes("📅 Novo vencimento: 08/12/2026"), "Lote-result: vencimento por acesso");
+
+  const parcial = montarMensagemResultadoLote([
+    { nome: "A", servidorNome: "BLAZE", sucesso: true, vencimentoFormatado: "14/10/2026" },
+    { nome: "B", servidorNome: "NewOne", sucesso: false, vencimentoFormatado: null },
+  ]);
+  ok(parcial.includes("Suas renovações foram registradas.") && !parcial.includes("com sucesso."), "Lote-result: sem 'com sucesso' se algum falhou");
+  ok(parcial.includes("⚠️ Um atendente vai concluir esta renovação por aqui."), "Lote-result: acesso que falhou aponta atendente humano");
+  ok(!parcial.includes("Novo vencimento:") || parcial.split("Novo vencimento:").length - 1 === 1, "Lote-result: acesso que falhou NAO mostra vencimento novo");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

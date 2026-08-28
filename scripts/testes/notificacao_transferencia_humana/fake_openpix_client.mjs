@@ -7,6 +7,7 @@ let comportamentoCriar = () => ({
   outcome: "success",
   transactionId: "fake-tx-" + Math.random().toString(16).slice(2),
   qrCodeTexto: "00020101-fake-qr",
+  paymentLinkUrl: "https://openpix.com.br/pay/fake-link",
 });
 
 export function configurarCriar(fn) {
@@ -19,6 +20,7 @@ export function resetar() {
     outcome: "success",
     transactionId: "fake-tx-" + Math.random().toString(16).slice(2),
     qrCodeTexto: "00020101-fake-qr",
+    paymentLinkUrl: "https://openpix.com.br/pay/fake-link",
   });
 }
 

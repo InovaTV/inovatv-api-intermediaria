@@ -38,26 +38,39 @@ import {
 // mensagem mas ela nunca aparece na conversa do Painel. Best-effort,
 // nunca desfaz nem bloqueia o aviso. Chamadores sem conversationId
 // mantem o comportamento antigo, sem persistir.
+//
+// opcoes.avisarCliente (Etapa 1, 2026-08-29): default true -- todos os
+// chamadores existentes seguem byte a byte. Quando false, a
+// transferencia interna (estado + aviso ao Jose) acontece normalmente,
+// mas a frase MENSAGEM_TRANSFERENCIA_CLIENTE NAO e' enviada nem
+// gravada -- usado pelo resultado consolidado do lote, onde a unica
+// mensagem ao cliente e' a consolidada (montarMensagemResultadoLote),
+// que ja informa "um atendente vai concluir".
 export async function notificarTransferenciaHumana(
   telefone: string,
   motivo: string,
   acionadaAgora: boolean,
   conversationId?: string,
+  opcoes?: { avisarCliente?: boolean },
 ): Promise<{ clienteAvisado: boolean; joseAvisado: boolean }> {
   if (!acionadaAgora) return { clienteAvisado: false, joseAvisado: false };
 
-  let clienteAvisado = false;
-  try {
-    const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
-    clienteAvisado = envio.outcome === "success";
-  } catch (erro) {
-    console.log("[notificacao_transferencia] falha ao avisar cliente", JSON.stringify({ motivo, erro: String(erro) }));
-  }
+  const avisarCliente = opcoes?.avisarCliente ?? true;
 
-  if (clienteAvisado && conversationId) {
-    await inserirMensagem(conversationId, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch((erro) => {
-      console.log("[notificacao_transferencia] falha ao gravar frase fixa no historico", JSON.stringify({ motivo, erro: String(erro) }));
-    });
+  let clienteAvisado = false;
+  if (avisarCliente) {
+    try {
+      const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_TRANSFERENCIA_CLIENTE);
+      clienteAvisado = envio.outcome === "success";
+    } catch (erro) {
+      console.log("[notificacao_transferencia] falha ao avisar cliente", JSON.stringify({ motivo, erro: String(erro) }));
+    }
+
+    if (clienteAvisado && conversationId) {
+      await inserirMensagem(conversationId, "ia", MENSAGEM_TRANSFERENCIA_CLIENTE, null).catch((erro) => {
+        console.log("[notificacao_transferencia] falha ao gravar frase fixa no historico", JSON.stringify({ motivo, erro: String(erro) }));
+      });
+    }
   }
 
   let joseAvisado = false;

@@ -31,6 +31,10 @@ export interface StatusCliente {
   planoNome: string | null;
   servidorNome: string | null;
   telas: number | null;
+  // Cru do Rocket (texto, ex.: "35.00" / "35,00" / "35"). Exposto so'
+  // pra apresentacao na lista de multiplos acessos da renovacao --
+  // formatado com formatarValorBRL na hora de exibir, nunca recalculado.
+  valor: string | null;
 }
 
 export interface StatusResult {

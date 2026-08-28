@@ -18,6 +18,11 @@ function novoEstado() {
     tokens_renovacao: new Map(),
     cobrancas_pix: new Map(),
     conversas_rpc: new Map(), // conversation_id -> "normal" | "aguardando_humano"
+    // Renovacao em lote (Etapa 1, 2026-08-29): confirmarRenovacao
+    // consulta renovacoes_lote antes do caminho individual. Fica vazia
+    // aqui (todos os casos deste suite sao renovacao avulsa) ->
+    // buscarLotePorTokenHash retorna null, fluxo individual inalterado.
+    renovacoes_lote: new Map(),
   };
 }
 
@@ -40,9 +45,14 @@ export function lerTabela(nome) {
   return [...estadoAtual[nome].values()];
 }
 
+function chavePara(tabela, linha) {
+  if (tabela === "cobrancas_pix") return linha.operacao_id;
+  if (tabela === "renovacoes_lote") return linha.grupo_id;
+  return linha.id;
+}
+
 export function inserirDireto(tabela, linha) {
-  const chave = tabela === "cobrancas_pix" ? linha.operacao_id : linha.id;
-  estadoAtual[tabela].set(chave, { ...linha });
+  estadoAtual[tabela].set(chavePara(tabela, linha), { ...linha });
 }
 
 export function estadoConversaRpc(conversationId) {
@@ -65,7 +75,9 @@ class QueryBuilder {
     return this;
   }
   is(coluna, valor) {
-    this.filtros.push({ tipo: "eq", coluna, valor });
+    // .is(col, null) reproduz "IS NULL" -- casa tanto null quanto
+    // ausencia da coluna (ex.: renovacao avulsa sem grupo_id).
+    this.filtros.push({ tipo: "is", coluna, valor });
     return this;
   }
   in(coluna, valores) {
@@ -99,8 +111,9 @@ class QueryBuilder {
     return [...estadoAtual[this.tabela].values()].filter((linha) =>
       this.filtros.every((f) => {
         if (f.tipo === "eq") return linha[f.coluna] === f.valor;
+        if (f.tipo === "is") return f.valor === null ? linha[f.coluna] == null : linha[f.coluna] === f.valor;
         if (f.tipo === "in") return f.valores.includes(linha[f.coluna]);
-        if (f.tipo === "lt") return linha[f.coluna] < f.valor;
+        if (f.tipo === "lt") return linha[f.coluna] != null && linha[f.coluna] < f.valor;
         return true;
       }),
     );
@@ -128,7 +141,7 @@ class QueryBuilder {
       if (this._violaFkTokensRenovacao(linha)) {
         return { data: null, error: { message: "violates foreign key constraint", code: "23503" } };
       }
-      const chave = this.tabela === "cobrancas_pix" ? linha.operacao_id : linha.id;
+      const chave = chavePara(this.tabela, linha);
       estadoAtual[this.tabela].set(chave, linha);
       return { data: [linha], error: null };
     }
@@ -141,7 +154,7 @@ class QueryBuilder {
       const atualizadas = [];
       for (const linhaAtual of alvos) {
         const nova = { ...linhaAtual, ...this.operacao.payload };
-        const chave = this.tabela === "cobrancas_pix" ? nova.operacao_id : nova.id;
+        const chave = chavePara(this.tabela, nova);
         estadoAtual[this.tabela].set(chave, nova);
         atualizadas.push(nova);
       }
@@ -195,6 +208,27 @@ export function getServiceClient() {
           data: { conversation_id: conversationId, estado: "aguardando_humano" },
           error: null,
         };
+      }
+      if (nome === "marcar_lote_como_falha") {
+        // Reproduz a RPC real (migration 20260829120000): lote +
+        // filhos 'autorizada'|'renovacao_em_andamento' -> falhou /
+        // renovacao_falhou, numa transacao. CAS: 2a chamada nao acha
+        // nada -> retorna null.
+        const grupoId = params.p_grupo_id;
+        const motivo = params.p_motivo;
+        const lote = estadoAtual.renovacoes_lote.get(grupoId);
+        if (!lote || !["autorizada", "renovacao_em_andamento"].includes(lote.estado)) {
+          return { data: null, error: null };
+        }
+        lote.estado = "falhou";
+        estadoAtual.renovacoes_lote.set(grupoId, lote);
+        for (const filho of estadoAtual.tokens_renovacao.values()) {
+          if (filho.grupo_id === grupoId && ["autorizada", "renovacao_em_andamento"].includes(filho.estado)) {
+            filho.estado = "renovacao_falhou";
+            filho.motivo_falha = motivo;
+          }
+        }
+        return { data: lote, error: null };
       }
       return { data: null, error: { message: `RPC desconhecida no fake: ${nome}` } };
     },

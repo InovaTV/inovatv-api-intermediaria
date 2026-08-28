@@ -78,6 +78,12 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   chamadasFetch.push({ url: urlStr, method: opts.method ?? "GET", headers, corpo, seq: proximoSeq() });
 
+  // Renovacao em lote (Etapa 1): o workflow consulta renovacoes_lote
+  // pelo operacao_id antes do caminho individual. Nestes cenarios nao
+  // ha' lote -> [] -> segue individual, byte a byte como antes.
+  if (urlStr.includes("/rest/v1/renovacoes_lote")) {
+    return new Response(JSON.stringify([]), { status: 200 });
+  }
   if (urlStr.includes("/rest/v1/tokens_renovacao")) {
     return new Response(
       JSON.stringify([{ id: "tok-1", public_id: PUBLIC_ID, cliente_nome: CLIENTE_NOME, telefone: TELEFONE }]),

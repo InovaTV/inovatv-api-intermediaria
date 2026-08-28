@@ -214,7 +214,13 @@ Deno.serve(async (req: Request) => {
     }
 
     const valorFormatado = formatarValorBRL(autorizado.valor_esperado_centavos / 100) ?? "0,00";
-    const textoPix = montarMensagemPixRenovacao(valorFormatado, criarResultado.qrCodeTexto);
+    // UX de renovacao (2026-08-28): mesma correcao ja aplicada em
+    // _shared/renovacao_confirmacao.ts -- a mensagem do Pix leva o LINK
+    // da pagina Woovi (criarResultado.paymentLinkUrl), nunca mais o BR
+    // Code. Este e' o caminho LEGADO por link (Orquestrador nao gera
+    // mais URL nova, mas links ja emitidos ainda caem aqui) -- precisa
+    // ficar consistente com a assinatura nova de montarMensagemPixRenovacao.
+    const textoPix = montarMensagemPixRenovacao(valorFormatado, `Plano: ${autorizado.plano_nome}`, criarResultado.paymentLinkUrl);
     const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
     if (envioPix.outcome === "success") {
       try {

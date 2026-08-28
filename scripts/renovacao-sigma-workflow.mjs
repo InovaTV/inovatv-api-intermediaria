@@ -18,6 +18,13 @@
 // Nenhum retry automatico -- uma unica tentativa, sempre reporta um
 // resultado final (sucesso/falha/sessao_expirada/resultado_ambiguo)
 // de volta pro callback, mesmo em caso de excecao inesperada.
+//
+// Renovacao em lote (Etapa 1, 2026-08-29): se o OPERACAO_ID
+// corresponder a um renovacoes_lote (e nao a um tokens_renovacao
+// avulso), o script processa os N acessos filhos em sequencia, cada um
+// com o MESMO mecanismo Sigma de sempre (renovarUmAcessoSigma), e
+// reporta um unico callback com resultados[]. Filhos tipo 'unitv'
+// nao executam nada ainda -- reportam 'unitv_pendente' (stub Etapa 2).
 
 import { chromium } from "playwright";
 
@@ -57,6 +64,21 @@ async function reportarResultado(resultado, extra = {}) {
   }
 }
 
+// Renovacao em lote -- callback com resultados[] (um por acesso).
+async function reportarResultadoLote(grupoId, resultados) {
+  const corpo = { operacao_id: OPERACAO_ID, grupo_id: grupoId, resultados };
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-resultado`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
+      body: JSON.stringify(corpo),
+    });
+    console.log(`[renovacao-sigma-workflow] callback de lote enviado -- HTTP ${resp.status}`);
+  } catch (e) {
+    console.error("[renovacao-sigma-workflow] FALHA AO REPORTAR RESULTADO DO LOTE", e.message ?? e);
+  }
+}
+
 async function lerTokenRenovacao(operacaoId) {
   const resp = await fetch(
     `${SUPABASE_URL}/rest/v1/tokens_renovacao?operacao_id=eq.${operacaoId}&select=*`,
@@ -64,6 +86,26 @@ async function lerTokenRenovacao(operacaoId) {
   );
   const linhas = await resp.json();
   return Array.isArray(linhas) ? linhas[0] ?? null : null;
+}
+
+// Renovacao em lote: a "capa" (renovacoes_lote) e' quem carrega o
+// operacao_id -- os filhos (tokens_renovacao) so' tem grupo_id.
+async function lerLotePorOperacaoId(operacaoId) {
+  const resp = await fetch(
+    `${SUPABASE_URL}/rest/v1/renovacoes_lote?operacao_id=eq.${operacaoId}&select=*`,
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+  );
+  const linhas = await resp.json();
+  return Array.isArray(linhas) ? linhas[0] ?? null : null;
+}
+
+async function lerFilhosDoLote(grupoId) {
+  const resp = await fetch(
+    `${SUPABASE_URL}/rest/v1/tokens_renovacao?grupo_id=eq.${grupoId}&select=*&order=criado_em.asc`,
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+  );
+  const linhas = await resp.json();
+  return Array.isArray(linhas) ? linhas : [];
 }
 
 async function lerSessaoRocket() {
@@ -131,32 +173,15 @@ async function lerContextoSigma(idClienteInterno) {
   }
 }
 
-async function main() {
-  requireEnv();
-
-  const token = await lerTokenRenovacao(OPERACAO_ID);
-  if (!token) {
-    await reportarResultado("resultado_ambiguo", { detalhe: "tokens_renovacao nao encontrado pra este operacao_id" });
-    return;
-  }
-
-  const { sessionid, csrftoken } = await lerSessaoRocket();
-  if (!sessionid || !csrftoken) {
-    await reportarResultado("sessao_expirada", { detalhe: "sessao do Vault ausente" });
-    return;
-  }
-
-  // A checagem de validade da sessao acontece dentro de
-  // renovacao-sigma-contexto (abaixo) -- ela roda no Supabase, onde o
-  // GET /gerenciador/ nao e' bloqueado pela borda. Aqui so' garantimos
-  // que a sessao existe no Vault (necessaria pros cookies do
-  // Playwright).
-  const publicId = token.public_id;
-
+// Renova UM acesso Sigma. Extraido do antigo corpo de main() sem
+// nenhuma mudanca de sequencia -- so' deixou de chamar reportarResultado
+// diretamente: agora RETORNA { resultado, vencimentoConfirmado?, detalhe? }
+// pro chamador (main individual OU processarLote) decidir como reportar.
+// Recebe a sessao ja lida (uma vez por job, nao por acesso).
+async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNome, telefone }) {
   const { ok: okAntes, cliente: clienteAntes } = await lerClienteRocket(publicId);
   if (!okAntes || !clienteAntes) {
-    await reportarResultado("resultado_ambiguo", { detalhe: "falha ao ler cliente no Rocket antes da tentativa" });
-    return;
+    return { resultado: "resultado_ambiguo", detalhe: "falha ao ler cliente no Rocket antes da tentativa" };
   }
   const vencimentoAntes = clienteAntes.vencimento;
 
@@ -206,18 +231,18 @@ async function main() {
       );
       const { ids, totalBotoes, botoesComNomeAlvo } = resolverIdInternoDoDom(
         elementos,
-        token.cliente_nome,
-        token.telefone,
+        clienteNome,
+        telefone,
       );
       if (ids.length !== 1) {
         console.log(
           `[renovacao-sigma-workflow] id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
           JSON.stringify({ totalBotoes, botoesComNomeAlvo, candidatos: ids.length }),
         );
-        await reportarResultado("resultado_ambiguo", {
+        return {
+          resultado: "resultado_ambiguo",
           detalhe: `id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
-        });
-        return;
+        };
       }
       idClienteInterno = ids[0];
 
@@ -225,18 +250,16 @@ async function main() {
       // (Supabase), agora com o id ja resolvido pelo DOM.
       const ctxAntes = await lerContextoSigma(idClienteInterno);
       if (ctxAntes.outcome === "sessao_expirada") {
-        await reportarResultado("sessao_expirada", { detalhe: ctxAntes.detalhe ?? "sessao invalida" });
-        return;
+        return { resultado: "sessao_expirada", detalhe: ctxAntes.detalhe ?? "sessao invalida" };
       }
       if (ctxAntes.outcome === "pacote_vazio") {
-        await reportarResultado("resultado_ambiguo", { detalhe: "Sigma nao informou o pacote atual (package vazio)" });
-        return;
+        return { resultado: "resultado_ambiguo", detalhe: "Sigma nao informou o pacote atual (package vazio)" };
       }
       if (ctxAntes.outcome !== "success" || !ctxAntes.pacoteAtual) {
-        await reportarResultado("resultado_ambiguo", {
+        return {
+          resultado: "resultado_ambiguo",
           detalhe: `falha ao obter contexto Sigma (${ctxAntes.etapa ?? ctxAntes.outcome})`,
-        });
-        return;
+        };
       }
       pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
       expiresAtAntes = ctxAntes.expiresAt ?? null;
@@ -288,8 +311,7 @@ async function main() {
     }
 
     if (!clicouSalvar) {
-      await reportarResultado("resultado_ambiguo", { detalhe: "nao foi possivel completar o clique em Salvar" });
-      return;
+      return { resultado: "resultado_ambiguo", detalhe: "nao foi possivel completar o clique em Salvar" };
     }
 
     // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
@@ -300,8 +322,7 @@ async function main() {
     const ctxDepois = await lerContextoSigma(idClienteInterno);
 
     if (!okDepois || !clienteDepois || ctxDepois.outcome !== "success" || !ctxDepois.expiresAt) {
-      await reportarResultado("resultado_ambiguo", { detalhe: "falha ao reconsultar Rocket/Sigma apos o clique" });
-      return;
+      return { resultado: "resultado_ambiguo", detalhe: "falha ao reconsultar Rocket/Sigma apos o clique" };
     }
 
     const vencimentoDepois = clienteDepois.vencimento;
@@ -311,26 +332,125 @@ async function main() {
     const sigmaMudou = expiresAtDepois !== expiresAtAntes;
 
     if (rocketMudou && sigmaMudou) {
-      await reportarResultado("sucesso", { vencimentoConfirmado: vencimentoDepois });
-      return;
+      return { resultado: "sucesso", vencimentoConfirmado: vencimentoDepois };
     }
 
     if (!rocketMudou && !sigmaMudou) {
-      await reportarResultado("falha", { detalhe: "vencimento nao mudou em nenhum dos dois sistemas apos o clique" });
-      return;
+      return { resultado: "falha", detalhe: "vencimento nao mudou em nenhum dos dois sistemas apos o clique" };
     }
 
     // Um mudou, o outro nao -- divergencia real entre os dois sistemas,
     // nunca decide sozinho, sempre ambiguo.
-    await reportarResultado("resultado_ambiguo", {
+    return {
+      resultado: "resultado_ambiguo",
       detalhe: `divergencia entre sistemas: rocketMudou=${rocketMudou}, sigmaMudou=${sigmaMudou}`,
-    });
+    };
   } catch (erro) {
     // Qualquer excecao nao prevista (elemento nao encontrado, timeout
     // do Playwright, etc.) -- NUNCA falha/sucesso por suposicao.
     console.error("[renovacao-sigma-workflow] excecao nao prevista", erro);
-    await reportarResultado("resultado_ambiguo", { detalhe: `excecao: ${erro.message ?? String(erro)}` });
+    return { resultado: "resultado_ambiguo", detalhe: `excecao: ${erro.message ?? String(erro)}` };
   }
+}
+
+// Renovacao em lote (Etapa 1): processa os N filhos em sequencia e
+// reporta um unico callback com resultados[]. Filhos 'unitv' nao
+// executam nada ainda (stub Etapa 2).
+async function processarLote(lote, sessionid, csrftoken) {
+  const filhos = await lerFilhosDoLote(lote.grupo_id);
+  if (filhos.length === 0) {
+    await reportarResultadoLote(lote.grupo_id, []);
+    return;
+  }
+
+  const resultados = [];
+  for (const filho of filhos) {
+    if (filho.tipo === "unitv") {
+      console.log("[renovacao-sigma-workflow] filho UniTV -- execucao pendente (Etapa 2), reportando unitv_pendente");
+      resultados.push({
+        token_id: filho.id,
+        tipo: "unitv",
+        servidor_nome: filho.servidor_nome,
+        cliente_nome: filho.cliente_nome,
+        resultado: "unitv_pendente",
+        detalhe: "integracao UniTV ainda nao implementada (Etapa 2)",
+      });
+      continue;
+    }
+
+    const r = await renovarUmAcessoSigma({
+      sessionid,
+      csrftoken,
+      publicId: filho.public_id,
+      clienteNome: filho.cliente_nome,
+      telefone: filho.telefone,
+    });
+    resultados.push({
+      token_id: filho.id,
+      tipo: "sigma",
+      servidor_nome: filho.servidor_nome,
+      cliente_nome: filho.cliente_nome,
+      resultado: r.resultado,
+      vencimentoConfirmado: r.vencimentoConfirmado,
+      detalhe: r.detalhe,
+    });
+  }
+
+  await reportarResultadoLote(lote.grupo_id, resultados);
+}
+
+async function main() {
+  requireEnv();
+
+  const { sessionid, csrftoken } = await lerSessaoRocket();
+  if (!sessionid || !csrftoken) {
+    // Sem sessao: um unico modo de falha, vale pros dois fluxos.
+    const lote = await lerLotePorOperacaoId(OPERACAO_ID);
+    if (lote) {
+      const filhos = await lerFilhosDoLote(lote.grupo_id);
+      await reportarResultadoLote(
+        lote.grupo_id,
+        filhos.map((f) => ({
+          token_id: f.id,
+          tipo: f.tipo,
+          servidor_nome: f.servidor_nome,
+          cliente_nome: f.cliente_nome,
+          resultado: "sessao_expirada",
+          detalhe: "sessao do Vault ausente",
+        })),
+      );
+      return;
+    }
+    await reportarResultado("sessao_expirada", { detalhe: "sessao do Vault ausente" });
+    return;
+  }
+
+  // Renovacao em lote (Etapa 1): a "capa" e' quem carrega o operacao_id.
+  const lote = await lerLotePorOperacaoId(OPERACAO_ID);
+  if (lote) {
+    await processarLote(lote, sessionid, csrftoken);
+    return;
+  }
+
+  // --- Fluxo individual (byte a byte o de antes, so' com a sequencia
+  // Sigma extraida pra renovarUmAcessoSigma).
+  const token = await lerTokenRenovacao(OPERACAO_ID);
+  if (!token) {
+    await reportarResultado("resultado_ambiguo", { detalhe: "tokens_renovacao nao encontrado pra este operacao_id" });
+    return;
+  }
+
+  const r = await renovarUmAcessoSigma({
+    sessionid,
+    csrftoken,
+    publicId: token.public_id,
+    clienteNome: token.cliente_nome,
+    telefone: token.telefone,
+  });
+  const extra = {};
+  if (r.vencimentoConfirmado) extra.vencimentoConfirmado = r.vencimentoConfirmado;
+  if (r.detalhe) extra.detalhe = r.detalhe;
+  await reportarResultado(r.resultado, extra);
 }
 
 main().catch(async (erro) => {

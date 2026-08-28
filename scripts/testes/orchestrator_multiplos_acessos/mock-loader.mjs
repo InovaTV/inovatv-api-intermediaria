@@ -16,6 +16,10 @@ const MAPA = {
   "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
   "_shared/rocket_valor_cliente.ts": "fake_rocket_valor_cliente.mjs",
   "_shared/tokens_renovacao.ts": "fake_tokens_renovacao.mjs",
+  // Etapa 1 (renovacao em lote): renovacoes_lote.ts toca banco
+  // (supabase_client). precos_renovacao.ts NAO e' fakeado -- e' funcao
+  // pura, sem deps, e a regra comercial real e' o que a suite prova.
+  "_shared/renovacoes_lote.ts": "fake_renovacoes_lote.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {

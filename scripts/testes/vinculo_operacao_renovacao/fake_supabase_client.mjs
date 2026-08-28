@@ -9,6 +9,12 @@ function novoEstado() {
   return {
     tokens_renovacao: new Map(), // chave: id
     cobrancas_pix: new Map(), // chave: operacao_id
+    // Renovacao em lote (Etapa 1, 2026-08-29): confirmarRenovacao agora
+    // consulta renovacoes_lote antes do caminho individual. Neste teste
+    // a tabela fica sempre vazia (todos os casos sao renovacao avulsa)
+    // -- buscarLotePorTokenHash retorna null e o fluxo individual segue
+    // exatamente como antes.
+    renovacoes_lote: new Map(), // chave: grupo_id
   };
 }
 

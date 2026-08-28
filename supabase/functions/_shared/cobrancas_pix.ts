@@ -13,7 +13,11 @@ export type StatusCobrancaPix = "pendente" | "pago" | "valor_divergente" | "expi
 export interface CobrancaPix {
   operacao_id: string;
   conversation_id: string;
-  public_id: string;
+  // Renovacao em lote (2026-08-29): public_id NULL = cobranca de um
+  // lote (identificada por grupo_id). Cobranca avulsa continua com
+  // public_id preenchido.
+  public_id: string | null;
+  grupo_id: string | null;
   servidor_nome: string | null;
   plano_nome: string | null;
   valor_esperado_centavos: number;
@@ -60,7 +64,8 @@ export async function buscarCobrancaPorOperacaoId(
 export async function criarCobrancaPixRegistro(params: {
   operacaoId: string;
   conversationId: string;
-  publicId: string;
+  publicId: string | null;
+  grupoId?: string | null;
   servidorNome: string | null;
   planoNome: string | null;
   valorEsperadoCentavos: number;
@@ -74,6 +79,7 @@ export async function criarCobrancaPixRegistro(params: {
       operacao_id: params.operacaoId,
       conversation_id: params.conversationId,
       public_id: params.publicId,
+      grupo_id: params.grupoId ?? null,
       servidor_nome: params.servidorNome,
       plano_nome: params.planoNome,
       valor_esperado_centavos: params.valorEsperadoCentavos,

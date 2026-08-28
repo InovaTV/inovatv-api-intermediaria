@@ -37,7 +37,12 @@ function authHeader(): Record<string, string> | null {
 export interface CobrancaOpenPixCriada {
   outcome: "success";
   transactionId: string;
-  qrCodeTexto: string; // brCode -- "copia e cola"
+  qrCodeTexto: string; // brCode -- "copia e cola" (guardado em cobrancas_pix; NAO vai mais ao WhatsApp)
+  // paymentLinkUrl: pagina de pagamento hospedada pela Woovi, uma por
+  // cobranca (UX de renovacao 2026-08-28). A resposta do POST /charge
+  // ja traz este campo -- antes era descartado. E' o que o cliente
+  // recebe no WhatsApp agora, no lugar do BR Code no corpo da mensagem.
+  paymentLinkUrl: string;
 }
 
 export type CriarCobrancaResultado = CobrancaOpenPixCriada | { outcome: "unavailable" };
@@ -74,16 +79,25 @@ export async function criarCobrancaOpenPix(
 
     const transactionId = data?.charge?.transactionID;
     const qrCodeTexto = data?.charge?.brCode ?? data?.brCode;
+    const paymentLinkUrl = data?.charge?.paymentLinkUrl ?? data?.paymentLinkUrl;
 
-    if (typeof transactionId !== "string" || typeof qrCodeTexto !== "string") {
+    if (
+      typeof transactionId !== "string" ||
+      typeof qrCodeTexto !== "string" ||
+      typeof paymentLinkUrl !== "string"
+    ) {
       console.log(
-        "[openpix_client] resposta sem transactionID/brCode",
-        JSON.stringify({ body: data }),
+        "[openpix_client] resposta sem transactionID/brCode/paymentLinkUrl",
+        JSON.stringify({
+          temTransactionId: typeof transactionId === "string",
+          temBrCode: typeof qrCodeTexto === "string",
+          temPaymentLinkUrl: typeof paymentLinkUrl === "string",
+        }),
       );
       return { outcome: "unavailable" };
     }
 
-    return { outcome: "success", transactionId, qrCodeTexto };
+    return { outcome: "success", transactionId, qrCodeTexto, paymentLinkUrl };
   } catch (erro) {
     console.log("[openpix_client] excecao ao criar cobranca", String(erro));
     return { outcome: "unavailable" };

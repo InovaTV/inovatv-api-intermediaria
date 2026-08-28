@@ -165,11 +165,18 @@ import {
   paraCentavos,
   montarMensagemBotoesConfirmacaoRenovacao,
   montarMensagemMultiplosAcessosRenovacao,
+  montarMensagemConfirmacaoLote,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
 import { consultarClienteCompletoRocket } from "../_shared/rocket_valor_cliente.ts";
 import { buscarTokenAtivoPorPublicId, criarTokenRenovacao } from "../_shared/tokens_renovacao.ts";
+// Renovacao em lote (Etapa 1, 2026-08-29) -- entrada "0" na lista de
+// multiplos acessos = renovar todos de uma vez. Precificacao e
+// criacao do lote sao deterministicas; UniTV entra como tipo desde ja
+// (executor stub, sem chamada real -- Etapa 2).
+import { resolverPrecoLote } from "../_shared/precos_renovacao.ts";
+import { criarRenovacaoLote, existeLoteAtivoParaPublicId } from "../_shared/renovacoes_lote.ts";
 
 // Memoria de sessao (Camada 3, 2026-08-23 -- ver
 // docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
@@ -270,6 +277,16 @@ async function gravarAcessoSelecionadoSeCitado(
 // preservado) -- so' influencia o que o Gemini VE no proximo turno,
 // via [CONTEXTO DA CONVERSA] (montarContextoConversa).
 const REGEX_INTENCAO_RENOVACAO = /\brenova(r|ç[aã]o|cao|ndo|d[ao])\b/i;
+
+// Renovacao em lote (Etapa 1, 2026-08-29) -- resposta do cliente a
+// lista de multiplos acessos pedindo pra renovar TODOS de uma vez.
+// "0" e' a entrada canonica (a propria mensagem da lista instrui
+// "digite ... ou *0* para renovar os dois"); as variacoes por extenso
+// cobrem o cliente que responde em palavras. Deliberadamente NAO
+// captura intencao vaga ("renova tudo ai") sem ser resposta direta a
+// lista -- so' dispara quando ja ha' 2+ acessos E intencao de renovar
+// registrada (mesma guarda de interceptarListaMultiplosAcessos).
+const REGEX_SELECAO_LOTE = /^\s*0\s*$|\b(os dois|as duas|ambos|ambas|todos(?: os \d+)?|todas(?: as \d+)?)\b/i;
 
 async function gravarIntencaoRenovacaoSeDemonstrada(
   conversationId: string,
@@ -389,6 +406,40 @@ async function processarCobrancaRenovacao(
       // best-effort, mesma filosofia do aviso ao Jose (§16-A)
     }
     return { envioResultado: { enviado: false }, textoEnviado: null };
+  }
+
+  // 0) Renovacao em lote (Etapa 1, 2026-08-29): se este acesso ja faz
+  // parte de um LOTE ativo, ele pertence EXCLUSIVAMENTE ao fluxo de
+  // lote -- o fluxo individual nunca cria token novo nem opera sobre um
+  // token de lote (grupo_id != null). Apenas informa "ja ha' uma
+  // renovacao em andamento" e para -- mesmo texto/comportamento de
+  // quando ja existe um token individual ativo (passo 1 abaixo). Feito
+  // ANTES de qualquer consulta ao Rocket / criacao de token.
+  let temLoteAtivo = false;
+  try {
+    temLoteAtivo = await existeLoteAtivoParaPublicId(publicId);
+  } catch {
+    // best-effort: se a checagem falhar, segue o fluxo normal -- o
+    // indice unico parcial do banco ainda barra um token duplicado.
+  }
+  if (temLoteAtivo) {
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+    } catch {
+      // best-effort
+    }
+    const envio = await enviarMensagemWhatsApp(telefone, MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO);
+    if (envio.outcome === "success") {
+      try {
+        await inserirMensagem(conversa.conversation_id, "ia", MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO, null);
+      } catch {
+        // best-effort
+      }
+    }
+    return {
+      envioResultado: { enviado: envio.outcome === "success" },
+      textoEnviado: envio.outcome === "success" ? MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO : null,
+    };
   }
 
   // 1) Solicitacao ATIVA ja existe pra este acesso? (nunca duplica --
@@ -895,6 +946,53 @@ Deno.serve(async (req: Request) => {
       clienteDemonstrouIntencaoRenovar &&
       resolverAcessoRenovacao(conteudo, statusResults, acessoSelecionadoServidor) === null;
 
+    // Renovacao em lote (Etapa 1, 2026-08-29) -- cliente respondeu "0"
+    // (ou "os dois"/"ambos"/...) a lista de multiplos acessos. Guarda
+    // igual a do interceptor C3: 2+ acessos reais + intencao de renovar
+    // ja demonstrada (palavra na mensagem atual OU intencao_atual na
+    // sessao, gravada quando a lista foi enviada). NAO depende do tipo
+    // que o Gemini classificou -- e' uma selecao deterministica do
+    // cliente, tem precedencia sobre "responder"/"transferir". A
+    // precificacao real (resolverPrecoLote) decide se o lote e'
+    // oferecido pra esse N; se nao houver regra, cai no fallback de
+    // pedir 1 acesso.
+    const selecaoLoteMultiplosAcessos =
+      haMultiplosAcessos &&
+      clienteDemonstrouIntencaoRenovar &&
+      REGEX_SELECAO_LOTE.test(conteudo.trim());
+
+    // Renovacao em lote (Etapa 1, 2026-08-29) -- selecao INDIVIDUAL por
+    // numero. A lista fixa (montarMensagemMultiplosAcessosRenovacao) e'
+    // numerada ("*1. Nome*", "*2. Nome*", ...) e instrui "Digite o
+    // numero do acesso". Aqui interpretamos essa resposta: um numero
+    // isolado (mesmo formato ancorado de "0") entre 1 e N seleciona o
+    // acesso naquela posicao da lista -- a MESMA ordem de statusResults
+    // usada pra montar a lista. Nome de servidor continua funcionando
+    // como antes (resolverAcessoRenovacao); isto so' ADICIONA a via
+    // numerica. Mesma guarda das outras selecoes deterministicas (2+
+    // acessos + intencao de renovar ja demonstrada). Numero fora de
+    // 1..N -> null (nao e' selecao; segue o fluxo normal). O acesso
+    // escolhido entra no MESMO caminho individual de
+    // propostaRenovacaoComAcesso (processarCobrancaRenovacao) -- sem
+    // nenhuma logica de cobranca nova.
+    const acessosSucessoOrdenados = statusResults.filter(
+      (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
+        s.outcome === "success" && !!s.cliente,
+    );
+    const matchNumeroAcesso = conteudo.trim().match(/^\s*([1-9]\d*)\s*$/);
+    const indiceAcessoSelecionado = matchNumeroAcesso ? Number(matchNumeroAcesso[1]) : null;
+    const selecaoAcessoPorNumero: (StatusResult & {
+      cliente: NonNullable<StatusResult["cliente"]>;
+    }) | null =
+      haMultiplosAcessos &&
+      clienteDemonstrouIntencaoRenovar &&
+      !selecaoLoteMultiplosAcessos &&
+      indiceAcessoSelecionado !== null &&
+      indiceAcessoSelecionado >= 1 &&
+      indiceAcessoSelecionado <= acessosSucessoOrdenados.length
+        ? acessosSucessoOrdenados[indiceAcessoSelecionado - 1]
+        : null;
+
     // Etapa 6, terceira fatia: reprovado (exceto acessoNaoDeterminado,
     // tratado a parte acima), Gemini decidiu transferir -- marca
     // aguardando_humano de verdade e registra as duas mensagens
@@ -906,7 +1004,19 @@ Deno.serve(async (req: Request) => {
     const deveTransferir =
       (!validacao.aprovado && !acessoNaoDeterminado) || geminiData.tipo === "transferir";
 
-    if (deveTransferir) {
+    if (selecaoLoteMultiplosAcessos) {
+      // Renovacao em lote (Etapa 1): selecao deterministica do cliente
+      // ("0"/"os dois"). Nada e' pre-gravado aqui -- o texto final (fixo)
+      // so' existe depois de montado no bloco de envio abaixo, que grava
+      // cliente+ia so' apos confirmar o envio, mesmo padrao dos demais
+      // branches de renovacao.
+    } else if (selecaoAcessoPorNumero) {
+      // Selecao individual por numero -- mesmo tratamento de
+      // propostaRenovacaoComAcesso: a mensagem do cliente NAO e'
+      // pre-gravada aqui porque processarCobrancaRenovacao (bloco de
+      // envio) pode terminar chamando acionarTransferenciaHumana, que
+      // ja grava cliente+ia+sistema sozinha.
+    } else if (deveTransferir) {
       // acessoNaoDeterminado ja' excluido de deveTransferir acima --
       // validacao.motivo aqui nunca e' "renovacao:acesso_nao_determinado".
       const motivoTransferencia = !validacao.aprovado
@@ -976,7 +1086,143 @@ Deno.serve(async (req: Request) => {
     // e a RPC acionou AGORA (nunca em "ja_transferida"/erro, decisao
     // confirmada 2026-08-16) -> mensagem fixa, nunca o texto do
     // Gemini sobre a transferencia.
-    if (validacao.aprovado && geminiData.tipo === "responder" && !interceptarListaMultiplosAcessos) {
+    if (selecaoLoteMultiplosAcessos) {
+      // Renovacao em lote (Etapa 1, 2026-08-29). Cliente escolheu
+      // renovar TODOS os acessos ("0"/"os dois"). Dados 100% ja
+      // disponiveis nesta mesma requisicao (statusResults) -- nenhuma
+      // nova consulta ao Rocket/match/status. Precificacao interna
+      // (resolverPrecoLote) NUNCA vai ao cliente -- ele so' ve o valor
+      // final por acesso + total. Estrutura sigma|unitv desde ja': aqui
+      // todos os acessos existentes hoje sao sigma; o executor UniTV
+      // e' stub (Etapa 2), mas o lote ja nasce preparado pra tipo misto.
+      const acessosLote = statusResults.filter(
+        (s): s is StatusResult & { cliente: NonNullable<StatusResult["cliente"]> } =>
+          s.outcome === "success" && !!s.cliente,
+      );
+      const preco = resolverPrecoLote(
+        acessosLote.map((s) => ({
+          tipo: "sigma" as const,
+          servidorNome: s.cliente.servidorNome ?? null,
+          planoNome: s.cliente.planoNome ?? null,
+        })),
+      );
+      if (!preco) {
+        // Nenhuma regra comercial cobre esse N -- nao oferece o lote,
+        // pede pra escolher 1. Nunca transfere so' por isso.
+        const msgFallback =
+          "No momento consigo renovar 2 acessos de uma vez. Me diga o número do acesso que você quer renovar primeiro.";
+        const envioFb = await enviarMensagemWhatsApp(telefone, msgFallback);
+        envioResultado = { enviado: envioFb.outcome === "success" };
+        if (envioResultado.enviado) {
+          try {
+            await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+            await inserirMensagem(conversa.conversation_id, "ia", msgFallback, null);
+          } catch {
+            // best-effort
+          }
+        }
+        renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+      } else {
+        const filhos = acessosLote.map((s, i) => ({
+          tipo: "sigma" as const,
+          publicId: s.publicId,
+          unitvSn: null,
+          unitvId: null,
+          clienteNome: s.cliente.nome ?? "não informado",
+          servidorNome: s.cliente.servidorNome ?? "não informado",
+          planoNome: s.cliente.planoNome ?? "não informado",
+          valorEsperadoCentavos: preco.valorPorAcessoCentavos[i],
+          vencimentoAtual: s.cliente.vencimento ?? new Date().toISOString(),
+        }));
+        let loteCriado: Awaited<ReturnType<typeof criarRenovacaoLote>> | null = null;
+        try {
+          loteCriado = await criarRenovacaoLote({
+            conversationId: conversa.conversation_id,
+            telefone,
+            valorTotalCentavos: preco.totalCentavos,
+            regraAplicada: preco.regraAplicada,
+            filhos,
+          });
+        } catch (erro) {
+          console.log(
+            "[orchestrator] falha ao criar renovacoes_lote",
+            JSON.stringify({ erro: String(erro) }),
+          );
+          loteCriado = null;
+        }
+        if (!loteCriado) {
+          const msgErro =
+            "Tive um problema ao preparar a renovação dos dois acessos. Me diga o número do acesso que você quer renovar primeiro.";
+          const envioErr = await enviarMensagemWhatsApp(telefone, msgErro);
+          envioResultado = { enviado: envioErr.outcome === "success" };
+          if (envioResultado.enviado) {
+            try {
+              await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+              await inserirMensagem(conversa.conversation_id, "ia", msgErro, null);
+            } catch {
+              // best-effort
+            }
+          }
+          renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+        } else {
+          const textoConfirmLote = montarMensagemConfirmacaoLote({
+            itens: filhos.map((f, i) => ({
+              nome: f.clienteNome,
+              servidorNome: f.servidorNome,
+              planoNome: f.planoNome,
+              valorFormatado: formatarValorBRL(preco.valorPorAcessoCentavos[i] / 100) ?? "0,00",
+            })),
+            totalFormatado: formatarValorBRL(preco.totalCentavos / 100) ?? "0,00",
+          });
+          const envioConfirm = await enviarMensagemInterativaWhatsApp(telefone, textoConfirmLote, [
+            { id: `renovacao:aceitar:${loteCriado.lote.token_hash}`, titulo: "ACEITO" },
+            { id: `renovacao:cancelar:${loteCriado.lote.token_hash}`, titulo: "CANCELAR" },
+          ]);
+          envioResultado = { enviado: envioConfirm.outcome === "success" };
+          if (envioResultado.enviado) {
+            try {
+              await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+              await inserirMensagem(conversa.conversation_id, "ia", textoConfirmLote, null);
+            } catch {
+              // best-effort
+            }
+          }
+          renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
+        }
+      }
+    } else if (selecaoAcessoPorNumero) {
+      // Selecao individual por numero -- o acesso escolhido entra no
+      // MESMO caminho de propostaRenovacaoComAcesso (processarCobrancaRenovacao):
+      // nenhuma logica de cobranca/persistencia/mensagem nova, so' um
+      // ponto de entrada a mais (numero em vez de nome de servidor).
+      const usuarioResolvido =
+        matchResult.candidates.find((c) => c.publicId === selecaoAcessoPorNumero.publicId)
+          ?.usuario ?? null;
+      const resultado = await processarCobrancaRenovacao(
+        conversa,
+        telefone,
+        conteudo,
+        geminiData.texto,
+        selecaoAcessoPorNumero,
+        usuarioResolvido,
+      );
+      envioResultado = resultado.envioResultado;
+      if (resultado.transferenciaResultado) transferenciaResultado = resultado.transferenciaResultado;
+      if (resultado.avisoJoseResultado) avisoJoseResultado = resultado.avisoJoseResultado;
+      if (resultado.textoEnviado) {
+        await atualizarSessao(conversa.conversation_id, {
+          acessoSelecionado: selecaoAcessoPorNumero.publicId,
+        }).catch(() => {});
+      }
+      renovacaoDiagnostico = {
+        tipo: "propor_renovacao",
+        acessoResolvido: {
+          publicId: selecaoAcessoPorNumero.publicId,
+          planoNome: selecaoAcessoPorNumero.cliente?.planoNome ?? null,
+          servidorNome: selecaoAcessoPorNumero.cliente?.servidorNome ?? null,
+        },
+      };
+    } else if (validacao.aprovado && geminiData.tipo === "responder" && !interceptarListaMultiplosAcessos) {
       const conversaAtual = await buscarOuCriarConversa(telefone);
       if (conversaAtual.estado === "aguardando_humano") {
         envioResultado = { enviado: false };
@@ -1053,6 +1299,10 @@ Deno.serve(async (req: Request) => {
             "não informado",
           servidorNome: s.cliente.servidorNome ?? "não informado",
           planoNome: s.cliente.planoNome ?? "não informado",
+          // Valor do PROPRIO acesso, direto do /status (campo agora
+          // exposto). formatarValorBRL e' so' formatacao de exibicao
+          // (mesma de C2), nunca recalculo; sem consulta por candidato.
+          valorFormatado: formatarValorBRL(s.cliente.valor),
         }));
       const textoMultiplosAcessos = montarMensagemMultiplosAcessosRenovacao(acessosParaSelecao);
       const envioLista = await enviarMensagemWhatsApp(telefone, textoMultiplosAcessos);
@@ -1064,18 +1314,21 @@ Deno.serve(async (req: Request) => {
         } catch {
           // best-effort, mesma filosofia do resto do arquivo
         }
-        if (interceptarListaMultiplosAcessos) {
-          // C3: o Gemini classificou como "responder", entao nenhum
-          // outro ponto registra a intencao de renovar na sessao --
-          // fazemos aqui, como o caminho propor_renovacao ja faz via
-          // gravarIntencaoRenovacaoSeDemonstrada. So' escreve se a
-          // palavra estiver na mensagem atual; best-effort.
-          await gravarIntencaoRenovacaoSeDemonstrada(
-            conversa.conversation_id,
-            conteudo,
-            statusResults,
-          );
-        }
+        // Renovacao em lote (Etapa 1, 2026-08-29): a lista de multiplos
+        // acessos agora instrui explicitamente "digite ... ou *0* para
+        // renovar os dois". Pra que essa proxima mensagem "0" seja
+        // reconhecida como selecao de lote (selecaoLoteMultiplosAcessos,
+        // que exige clienteDemonstrouIntencaoRenovar), a intencao de
+        // renovar precisa estar gravada na sessao SEMPRE que a lista foi
+        // enviada -- nao so' quando a palavra "renovar" apareceu nesta
+        // mensagem. Escrita direta (nao via
+        // gravarIntencaoRenovacaoSeDemonstrada, que exige a palavra no
+        // texto atual). Best-effort. Cobre tambem o caso C3
+        // (interceptarListaMultiplosAcessos), que antes so' gravava
+        // quando a palavra estava na mensagem atual.
+        await atualizarSessao(conversa.conversation_id, { intencaoAtual: "renovacao" }).catch(
+          () => {},
+        );
       }
       renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
     } else if (propostaRenovacaoComAcesso) {

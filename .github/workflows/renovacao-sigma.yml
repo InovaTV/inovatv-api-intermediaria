@@ -30,7 +30,11 @@ concurrency:
 jobs:
   renovar:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Renovacao em lote (Etapa 1, 2026-08-29): um job pode processar N
+    # acessos em sequencia (cada um com seu proprio Playwright), entao a
+    # janela sobe de 5 para 10 minutos. O watchdog (renovacao-sigma-
+    # watchdog, 15min) continua sendo a rede final acima disso.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4

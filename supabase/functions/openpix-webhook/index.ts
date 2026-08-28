@@ -59,6 +59,7 @@ import {
   marcarCobrancaComoDivergente,
 } from "../_shared/cobrancas_pix.ts";
 import { reivindicarInicioRenovacao } from "../_shared/tokens_renovacao.ts";
+import { reivindicarInicioRenovacaoLote } from "../_shared/renovacoes_lote.ts";
 import { dispararWorkflowRenovacaoSigma } from "../_shared/github_actions_dispatch.ts";
 
 interface OpenPixWebhookPayload {
@@ -107,7 +108,16 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
       // So' dispara se marcarCobrancaComoPaga afetou uma linha DE
       // VERDADE (nunca em reenvio de webhook ja processado). Async,
       // fora do ciclo de resposta -- ver Deno.serve abaixo.
-      EdgeRuntime.waitUntil(iniciarRenovacaoSigma(correlationId));
+      // Renovacao em lote (Etapa 1, 2026-08-29): registro.grupo_id
+      // preenchido = cobranca de um lote -- reivindica o inicio pela
+      // RPC de lote (lote + todos os filhos autorizada ->
+      // renovacao_em_andamento numa transacao). O workflow disparado e'
+      // o MESMO (renovacao-sigma.yml, input {operacao_id}); e' o
+      // scripts/renovacao-sigma-workflow.mjs que, ao ler o token,
+      // detecta grupo_id e processa os N filhos.
+      EdgeRuntime.waitUntil(
+        iniciarRenovacaoSigma(correlationId, registroPago.grupo_id ?? null),
+      );
     }
   } else {
     console.log(
@@ -132,13 +142,18 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
 // (renovacao-sigma-watchdog, janela de 15min) existe pra pegar,
 // marcando resultado_ambiguo + transferencia humana. Nao precisa de
 // tratamento especial aqui alem do log.
-async function iniciarRenovacaoSigma(operacaoId: string): Promise<void> {
+async function iniciarRenovacaoSigma(
+  operacaoId: string,
+  grupoId: string | null,
+): Promise<void> {
   try {
-    const reivindicado = await reivindicarInicioRenovacao(operacaoId);
+    const reivindicado = grupoId
+      ? await reivindicarInicioRenovacaoLote(operacaoId)
+      : await reivindicarInicioRenovacao(operacaoId);
     if (!reivindicado) {
       console.log(
-        "[openpix-webhook] token nao estava 'autorizada' no momento do disparo -- nao disparado",
-        JSON.stringify({ operacaoId }),
+        "[openpix-webhook] token/lote nao estava 'autorizada' no momento do disparo -- nao disparado",
+        JSON.stringify({ operacaoId, lote: !!grupoId }),
       );
       return;
     }
