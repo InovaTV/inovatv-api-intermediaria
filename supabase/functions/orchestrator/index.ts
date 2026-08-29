@@ -1245,7 +1245,13 @@ Deno.serve(async (req: Request) => {
             // tipo derivado do servidor -- nao hardcoda 'sigma'. Neste
             // ramo todos sao 'sigma' (loteTemUnitv ja barrou o resto).
             tipo: tiposLote[i],
-            publicId: tiposLote[i] === "sigma" ? s.publicId : null,
+            // public_id mantido tambem para filho UniTV (id do cliente
+            // no Rocket -- necessario pro sync de vencimento e pro
+            // indice "1 ativa por acesso"). No-op hoje: o guard
+            // loteTemUnitv ainda impede lote com UniTV. A resolucao de
+            // unitv_sn/unitv_id por filho + a remocao do guard entram
+            // no Bloco 4 (junto da fiacao do executor).
+            publicId: s.publicId,
             unitvSn: null,
             unitvId: null,
             clienteNome: s.cliente.nome ?? "não informado",
@@ -1467,10 +1473,11 @@ Deno.serve(async (req: Request) => {
       // (nunca vinculada a uma cobranca real). Toda a logica de
       // cobranca/persistencia/mensagens fica em processarCobrancaRenovacao
       // (module-level, acima) -- aqui so' encaminha e usa o resultado.
-      // usuario real do acesso resolvido -- ja disponivel em
+      // usuario real do acesso resolvido -- resolvido a partir de
       // matchResult.candidates (chamarMatch, mesma requisicao, sem
-      // segunda consulta): /status nao devolve usuario (allowlist
-      // propria, nunca expandida so' pra isso), mas /match sim.
+      // segunda consulta). Desde o Bloco 2 o /status tambem devolve
+      // `usuario`; a resolucao aqui continua usando /match como fonte
+      // (inalterado).
       const usuarioResolvido =
         matchResult.candidates.find((c) => c.publicId === acessoResolvidoRenovacao?.publicId)
           ?.usuario ?? null;

@@ -62,6 +62,11 @@ export async function hashToken(tokenBruto: string): Promise<string> {
 
 export async function criarTokenRenovacao(params: {
   conversationId: string;
+  // Sempre preenchido -- Sigma E UniTV (id do cliente no Rocket; um
+  // acesso UniTV que chega ao fluxo tambem e' um cliente Rocket). Para
+  // UniTV, `public_id` e' necessario adiante pro sync do vencimento
+  // (renovacao-rocket-vencimento) e mantem o token coberto pelo indice
+  // "1 solicitacao ativa por acesso".
   publicId: string;
   telefone: string;
   clienteNome: string;
@@ -69,7 +74,24 @@ export async function criarTokenRenovacao(params: {
   planoNome: string;
   valorEsperadoCentavos: number;
   vencimentoAtual: string;
+  // Renovacao UniTV (Etapa 2, Bloco 3). Default 'sigma' -- toda chamada
+  // Sigma existente continua identica (nem passa estes campos). Para
+  // 'unitv', unitvSn (== usuario do cadastro Rocket) e unitvId (id
+  // numerico da conta no painel de revenda, ja resolvido pelo
+  // Orquestrador via renovacao-unitv-conta ANTES de chamar isto) sao
+  // OBRIGATORIOS -- o CHECK tokens_renovacao_alvo_por_tipo do banco
+  // exige os dois nao-nulos para tipo='unitv'.
+  tipo?: "sigma" | "unitv";
+  unitvSn?: string | null;
+  unitvId?: number | null;
 }): Promise<{ tokenBruto: string; registro: TokenRenovacao }> {
+  const tipo = params.tipo ?? "sigma";
+  if (tipo === "unitv" && (!params.unitvSn || params.unitvId == null)) {
+    throw new Error(
+      "criarTokenRenovacao: tipo='unitv' exige unitvSn e unitvId (resolvidos antes) -- CHECK tokens_renovacao_alvo_por_tipo",
+    );
+  }
+
   const tokenBruto = crypto.randomUUID();
   const tokenHash = await hashToken(tokenBruto);
   const expiraEm = new Date(Date.now() + JANELA_EXPIRACAO_MS).toISOString();
@@ -89,6 +111,9 @@ export async function criarTokenRenovacao(params: {
       vencimento_atual: params.vencimentoAtual,
       expira_em: expiraEm,
       estado: "aguardando_confirmacao",
+      tipo,
+      unitv_sn: tipo === "unitv" ? params.unitvSn : null,
+      unitv_id: tipo === "unitv" ? params.unitvId : null,
     })
     .select("*")
     .single();
