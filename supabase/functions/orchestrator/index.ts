@@ -1205,7 +1205,14 @@ Deno.serve(async (req: Request) => {
       if (loteTemUnitv) {
         for (let i = 0; i < acessosLote.length; i++) {
           if (tiposLote[i] !== "unitv") continue;
-          const sn = acessosLote[i].cliente.usuario;
+          // Mesmo fallback do 0-A individual: `usuario` vem do /status,
+          // mas o /status de producao pode nao carrega-lo ainda -- entao
+          // cai para o candidato do /match (mesma requisicao, sem
+          // consulta nova). Sem isto, o lote falha 'unitv_sem_usuario'
+          // mesmo com o /match trazendo o usuario que a lista ja exibiu.
+          const sn =
+            acessosLote[i].cliente.usuario ??
+            matchResult.candidates.find((c) => c.publicId === acessosLote[i].publicId)?.usuario;
           if (!sn) {
             falhaResolucaoUnitv = "unitv_sem_usuario";
             break;

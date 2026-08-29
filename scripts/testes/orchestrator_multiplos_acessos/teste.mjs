@@ -1082,6 +1082,40 @@ async function testeV2() {
   );
 }
 
+// Teste V3 (REGRESSAO -- falha real 2026-08-29): o /status de producao
+// pode NAO carregar `usuario` ainda (versao pre-Bloco-2). O lote 2xUniTV
+// tem que resolver mesmo assim, caindo para o candidato do /match --
+// exatamente como o 0-A individual ja faz. Sem o fallback, o lote
+// falhava 'unitv_sem_usuario' antes de chamar o resolvedor.
+async function testeV3() {
+  resetarTudo();
+  configurarDoisUnitv(); // /match candidates COM usuario (3tnjsc / gcnv6v)
+  // Reconfigura o /status dos dois SEM `usuario` (simula producao pre-Bloco-2).
+  configurarStatus(PUBLIC_ID_A, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_A, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Karla Filha", vencimento: "2026-09-21T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_B, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_B, syncedAt: new Date().toISOString(),
+    cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  await resp.json();
+
+  ok(
+    snsResolverContaUnitv().includes("gcnv6v") && snsResolverContaUnitv().includes("3tnjsc"),
+    "Teste V3: /status sem usuario -> os dois sn vem do /match e chegam ao resolvedor",
+  );
+  ok(chamadasCriarLote().length === 1, "Teste V3: lote 2xUniTV criado normalmente (fallback /match)");
+  const c = chamadasCriarLote()[0] ?? {};
+  ok(c.filhos.length === 2 && c.filhos.every((f) => f.tipo === "unitv" && f.unitvSn && f.unitvId), "Teste V3: 2 filhos UniTV com unitv_sn/unitv_id");
+  ok(acionamentosRegistrados().length === 0, "Teste V3: NENHUMA transferencia (nao caiu em 'unitv_sem_usuario')");
+  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Teste V3: mensagem fixa de lote+UniTV NUNCA aparece");
+}
+
 // Teste W: 2 UniTV, seleciona 1 por NUMERO, resolve OK -> token
 // tipo='unitv' + confirmacao interativa (mesmo caminho do individual).
 // Ordem deterministica (servidorNome -> nome -> publicId): ambos UNITV,
@@ -1221,6 +1255,7 @@ await testeU();
 await testeU2();
 await testeV();
 await testeV2();
+await testeV3();
 await testeW();
 await testeX();
 await testeY();
