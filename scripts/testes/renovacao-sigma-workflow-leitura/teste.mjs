@@ -117,6 +117,9 @@ globalThis.fetch = async (url, opts = {}) => {
 function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout esperando reportarResultado")), ms));
 }
+// Iteracao 1 (2026-08-29): a Camada B pode re-clicar ate 3x com backoff
+// real [1000, 2000]ms -- um cenario que esgota as tentativas leva ~3s.
+const TIMEOUT_CENARIO_MS = 20000;
 
 async function rodarCenario(nome, { cliente, contexto, dom, opcoesSelect } = {}) {
   seq = 0;
@@ -129,7 +132,7 @@ async function rodarCenario(nome, { cliente, contexto, dom, opcoesSelect } = {})
   const urlModulo = new URL("../../renovacao-sigma-workflow.mjs", import.meta.url).href + `?cenario=${nome}`;
   await import(urlModulo);
 
-  const resultado = await Promise.race([promessaResultado, timeout(3000)]);
+  const resultado = await Promise.race([promessaResultado, timeout(TIMEOUT_CENARIO_MS)]);
   await new Promise((r) => setTimeout(r, 15)); // deixa o finally (browser.close) assentar
   return { resultado, chamadas: [...chamadasFetch], eventos: [...eventosPlaywright()] };
 }
@@ -281,20 +284,34 @@ const btnEnviarMsg = (id) => ({
 }
 
 // =====================================================================
-// F: 1 match -> contexto ANTES -> unavailable (etapa sigma_info)
+// F: 1 match -> contexto ANTES -> unavailable (a Camada A ja re-tentou
+//    dentro da EF). O workflow -> resultado_ambiguo + sigmaIndisponivel,
+//    NUNCA "falha", e NEM CHEGA a clicar. (spec Iteracao 1, testes 11/13)
 // =====================================================================
 {
-  const { resultado, chamadas } = await rodarCenario("F-contexto-unavailable", {
+  const { resultado, chamadas, eventos } = await rodarCenario("F-contexto-unavailable", {
     cliente: { status: 200, body: { outcome: "success", cliente: { vencimento: "2026-09-13T20:59:59-03:00" } } },
-    contexto: { status: 200, body: { outcome: "unavailable", etapa: "sigma_info" } },
+    contexto: { status: 200, body: { outcome: "unavailable", etapa: "sigma_info_auth", tentativas: 4 } },
     dom: [btnAddPag(ID_INTERNO)],
   });
-  ok(resultado.resultado === "resultado_ambiguo" && resultado.detalhe === "falha ao obter contexto Sigma (sigma_info)", "F: contexto unavailable -> resultado_ambiguo com a etapa");
+  ok(resultado.resultado === "resultado_ambiguo", "F: ctxAntes unavailable -> resultado_ambiguo (nunca 'falha')");
+  ok(resultado.sigmaIndisponivel === true, "F: ctxAntes unavailable -> carrega sigmaIndisponivel:true");
+  ok(
+    typeof resultado.detalhe === "string" &&
+      resultado.detalhe.includes("painel Sigma indisponivel (auth) na leitura de contexto") &&
+      resultado.detalhe.includes("sigma_info_auth") &&
+      resultado.detalhe.includes("4 tentativas"),
+    "F: detalhe cita 'painel Sigma indisponivel (auth)', a etapa e as 4 tentativas da Camada A",
+  );
+  ok(!eventos.some((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento"), "F: NUNCA clica Salvar quando o contexto antes ja veio unavailable");
   checarInvariantes("F", chamadas);
 }
 
 // =====================================================================
-// G: caminho feliz completo -> veredito. Clique no botao "Add Pagamento".
+// G (revisao de seguranca): fake ESTATICO (nada muda) + ctxDepois=success.
+//    O POST /pagamento/add/ roda 1x SO'; 1 reconsulta + 1 reconsulta
+//    EXTRA (sem novo clique) e, continuando sem mudanca -> "falha".
+//    PROVA CENTRAL: #btn_adicionar_pagamento clicado EXATAMENTE 1x.
 // =====================================================================
 {
   const { resultado, chamadas, eventos } = await rodarCenario("G-veredito", {
@@ -306,25 +323,30 @@ const btnEnviarMsg = (id) => ({
     dom: [btnEditar("999"), btnAddPag(ID_INTERNO)],
     opcoesSelect: ["1 MES - X - 1 creditos - 1 tela(s)"],
   });
-  // valores identicos antes/depois -> rocketMudou/sigmaMudou false -> "falha" (exercita o caminho feliz INTEIRO)
-  ok(resultado.resultado === "falha", "G: fluxo completo ate o veredito -- sem mudanca antes/depois -> 'falha' (esperado com fake estatico)");
-  ok(resultado.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique", "G: detalhe do veredito 'falha'");
+  ok(resultado.resultado === "falha", "G: sem mudanca (com reconsulta extra) + painel autenticado -> 'falha'");
+  ok(
+    resultado.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique (com reconsulta extra)",
+    "G: detalhe cita 'apos o clique (com reconsulta extra)' -- nunca fala em multiplas tentativas de clique",
+  );
+  ok(resultado.sigmaIndisponivel === undefined, "G: 'falha' NAO carrega sigmaIndisponivel (painel respondeu autenticado)");
   checarInvariantes("G", chamadas);
 
-  const selClique = `[data-bs-target="#modal-add-pagamento"][cliente_id="${ID_INTERNO}"]`;
-  ok(eventos.some((e) => e.tipo === "click" && e.sel === selClique), "G: clique no botao 'Add Pagamento' (seletor com data-bs-target=#modal-add-pagamento + cliente_id)");
+  const salvarClicks = eventos.filter((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento");
+  ok(salvarClicks.length === 1, "G: POST /pagamento/add/ (#btn_adicionar_pagamento) executado EXATAMENTE 1x -- NUNCA repetido");
   ok(!eventos.some((e) => e.tipo === "click" && String(e.sel).includes("#modal-editar")), "G: NUNCA clica no alvo de 'Editar' (#modal-editar)");
   ok(eventos.some((e) => e.tipo === "check" && e.sel === 'input[name="renovar_painel"]'), "G: marcou renovar_painel");
   ok(eventos.some((e) => e.tipo === "selectOption" && e.label === "1 MES - X - 1 creditos - 1 tela(s)"), "G: selecionou o pacote por prefixo");
-  ok(eventos.some((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento"), "G: clicou Salvar (#btn_adicionar_pagamento)");
+  ok(eventos.some((e) => e.tipo === "waitForLoadState"), "G: espera ORIENTADA AO RESULTADO (waitForLoadState) apos o clique -- nao mais wait cego");
+  ok(eventos.filter((e) => e.tipo === "goto").length === 1, "G: page.goto 1x so' (carga inicial) -- nao renavega, nao ha' re-tentativa de clique");
   ok(eventos.some((e) => e.tipo === "close"), "G: browser.close() rodou");
 
   const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
-  ok(ctxCalls.length === 2, "G: renovacao-sigma-contexto chamado 2x (antes e depois do clique)");
-  ok(ctxCalls.every((c) => c.corpo?.idClienteInterno === ID_INTERNO && c.corpo?.publicId === undefined), "G: as 2 chamadas ao contexto sao { idClienteInterno } (sem publicId)");
+  ok(ctxCalls.length === 3, "G: contexto chamado 3x (antes + reconsulta + reconsulta EXTRA)");
+  ok(ctxCalls.every((c) => c.corpo?.idClienteInterno === ID_INTERNO && c.corpo?.publicId === undefined), "G: todas as chamadas ao contexto sao { idClienteInterno } (sem publicId)");
+  const clienteCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-cliente"));
+  ok(clienteCalls.length === 3, "G: renovacao-sigma-cliente chamado 3x (antes + reconsulta + reconsulta EXTRA)");
   const seqEval = eventos.find((e) => e.tipo === "$$eval").seq;
-  const seqSalvar = eventos.find((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento").seq;
-  ok(seqEval < ctxCalls[0].seq && ctxCalls[0].seq < seqSalvar && seqSalvar < ctxCalls[1].seq, "G: ordem -- $$eval -> contexto antes -> Salvar -> contexto depois");
+  ok(seqEval < ctxCalls[0].seq && ctxCalls[0].seq < salvarClicks[0].seq && salvarClicks[0].seq < ctxCalls[1].seq, "G: ordem -- $$eval -> contexto antes -> Salvar (1x) -> reconsulta");
 }
 
 // =====================================================================
@@ -364,6 +386,172 @@ const btnEnviarMsg = (id) => ({
   ok(resultado.resultado === "sucesso", "G2: vencimento E expiresAt mudaram antes/depois -> 'sucesso'");
   ok(resultado.vencimentoConfirmado === "2026-10-13T20:59:59-03:00", "G2: vencimentoConfirmado = vencimento 'depois'");
   checarInvariantes("G2", chamadas);
+}
+
+// =====================================================================
+// ITERACAO 1 (2026-08-29) -- Camada B (retry do CLIQUE de renovacao).
+// Numeracao = spec da Iteracao 1 (11..15). F (acima) cobre "ctxAntes
+// unavailable -> resultado_ambiguo + sigmaIndisponivel, sem clicar";
+// G (acima) cobre "sem mudanca apos 3 tentativas -> falha".
+// =====================================================================
+
+// Roda um cenario com SEQUENCIAS de resposta para renovacao-sigma-cliente
+// e renovacao-sigma-contexto (o ultimo item repete). Conta os cliques em
+// #btn_adicionar_pagamento e as chamadas ao contexto.
+async function rodarCenarioSeq(nome, { clienteSeq, contextoSeq, dom, opcoesSelect }) {
+  let nCli = 0;
+  let nCtx = 0;
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.endsWith("/functions/v1/renovacao-sigma-cliente")) {
+      chamadasFetch.push({ url: u, method: "POST", headers: opts.headers ?? {}, corpo: JSON.parse(opts.body ?? "{}"), seq: proximoSeq() });
+      return new Response(JSON.stringify(clienteSeq[Math.min(nCli++, clienteSeq.length - 1)]), { status: 200 });
+    }
+    if (u.endsWith("/functions/v1/renovacao-sigma-contexto")) {
+      chamadasFetch.push({ url: u, method: "POST", headers: opts.headers ?? {}, corpo: JSON.parse(opts.body ?? "{}"), seq: proximoSeq() });
+      return new Response(JSON.stringify(contextoSeq[Math.min(nCtx++, contextoSeq.length - 1)]), { status: 200 });
+    }
+    return fetchOriginal(url, opts);
+  };
+  try {
+    return await rodarCenario(nome, { dom, opcoesSelect });
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+}
+
+const CTX_OK = (exp) => ({ outcome: "success", sessaoValida: true, pacoteAtual: "1 MES - X", expiresAt: exp });
+const CLI_OK = (venc) => ({ outcome: "success", cliente: { vencimento: venc } });
+const V_A = "2026-09-13T20:59:59-03:00";
+const V_B = "2026-10-13T20:59:59-03:00";
+const OPC = ["1 MES - X - 1 creditos - 1 tela(s)"];
+
+// helper: quantas vezes o POST /pagamento/add/ (clique em
+// #btn_adicionar_pagamento) foi disparado nesse cenario.
+const cliquesSalvar = (eventos) => eventos.filter((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento").length;
+
+// spec 11: ctxAntes success (a Camada A ja re-tentou dentro da EF) e a
+//          renovacao aplica -> sucesso. 1 clique. (o "unavailable x2
+//          depois success" e' exercitado em rocket-sigma-contexto spec6.)
+{
+  const { resultado, chamadas, eventos } = await rodarCenarioSeq("11-ctxAntes-ok-aplica", {
+    clienteSeq: [CLI_OK(V_A), CLI_OK(V_B)],
+    contextoSeq: [CTX_OK(V_A), CTX_OK(V_B)],
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "sucesso" && resultado.vencimentoConfirmado === V_B, "spec11: ctxAntes success + renovacao aplica -> sucesso");
+  ok(cliquesSalvar(eventos) === 1, "spec11: POST /pagamento/add/ EXATAMENTE 1x");
+  const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctxCalls.length === 2, "spec11: contexto chamado 2x (antes + 1 reconsulta)");
+}
+
+// spec 12 (revisao de seguranca): 1a reconsulta pos-clique nao mudou nada
+//          (ctxDepois=success). NAO re-clica -- faz UMA reconsulta EXTRA
+//          (so' leitura). A reconsulta extra ja ve a mudanca -> sucesso.
+//          POST continua 1x.
+{
+  const { resultado, chamadas, eventos } = await rodarCenarioSeq("12-reconsulta-extra-ve-mudanca", {
+    clienteSeq: [CLI_OK(V_A), CLI_OK(V_A), CLI_OK(V_B)], // antes, 1a reconsulta (=), reconsulta EXTRA (mudou)
+    contextoSeq: [CTX_OK(V_A), CTX_OK(V_A), CTX_OK(V_B)],
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "sucesso" && resultado.vencimentoConfirmado === V_B, "spec12: 1a reconsulta '=', reconsulta EXTRA ve a mudanca -> sucesso");
+  ok(cliquesSalvar(eventos) === 1, "spec12: POST /pagamento/add/ EXATAMENTE 1x -- reconsulta extra NUNCA re-clica");
+  ok(eventos.filter((e) => e.tipo === "goto").length === 1, "spec12: page.goto 1x (nao renavega pra re-clicar)");
+  const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctxCalls.length === 3, "spec12: contexto 3x (antes + reconsulta + reconsulta EXTRA)");
+  const cliCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-cliente"));
+  ok(cliCalls.length === 3, "spec12: renovacao-sigma-cliente 3x (antes + reconsulta + reconsulta EXTRA)");
+  ok(resultado.sigmaIndisponivel === undefined, "spec12: sucesso NAO carrega sigmaIndisponivel");
+}
+
+// spec 12b: 1a reconsulta '=' + reconsulta EXTRA tambem '=' (painel
+//           autenticado) -> "falha". POST continua 1x.
+{
+  const { resultado, chamadas, eventos } = await rodarCenarioSeq("12b-reconsulta-extra-nada-mudou", {
+    clienteSeq: [CLI_OK(V_A)], // repete (nada muda em nenhuma reconsulta)
+    contextoSeq: [CTX_OK(V_A)],
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "falha", "spec12b: reconsulta + reconsulta EXTRA sem mudanca -> 'falha'");
+  ok(resultado.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique (com reconsulta extra)", "spec12b: detalhe cita a reconsulta extra");
+  ok(cliquesSalvar(eventos) === 1, "spec12b: POST /pagamento/add/ EXATAMENTE 1x mesmo esgotando as leituras");
+  const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctxCalls.length === 3, "spec12b: contexto 3x (antes + reconsulta + reconsulta EXTRA)");
+}
+
+// spec 13: reconsulta pos-clique -> ctxDepois=unavailable (Camada A ja
+//          se esgotou nessa leitura) -> resultado_ambiguo +
+//          sigmaIndisponivel, NUNCA "falha", NUNCA re-clica, e sem
+//          reconsulta extra (nao e' o caso "nada mudou").
+{
+  const { resultado, eventos } = await rodarCenarioSeq("13-ctxDepois-unavailable", {
+    clienteSeq: [CLI_OK(V_A), CLI_OK(V_A)],
+    contextoSeq: [CTX_OK(V_A), { outcome: "unavailable", etapa: "sigma_info_auth", tentativas: 4 }],
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "spec13: ctxDepois unavailable -> resultado_ambiguo (nunca 'falha')");
+  ok(resultado.sigmaIndisponivel === true, "spec13: ctxDepois unavailable -> sigmaIndisponivel:true");
+  ok(String(resultado.detalhe).includes("reconsulta pos-clique"), "spec13: detalhe cita a reconsulta pos-clique");
+  ok(cliquesSalvar(eventos) === 1, "spec13: POST /pagamento/add/ EXATAMENTE 1x -- nunca re-clica sob duvida");
+}
+
+// spec 14: rocketMudou XOR sigmaMudou -> divergencia -> resultado_ambiguo,
+//          sem reconsulta extra, sem re-clique.
+{
+  const { resultado, chamadas, eventos } = await rodarCenarioSeq("14-divergencia", {
+    clienteSeq: [CLI_OK(V_A), CLI_OK(V_B)], // rocket MUDOU
+    contextoSeq: [CTX_OK(V_A), CTX_OK(V_A)], // sigma NAO mudou
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "spec14: XOR (rocket mudou, sigma nao) -> resultado_ambiguo");
+  ok(resultado.detalhe === "divergencia entre sistemas: rocketMudou=true, sigmaMudou=false", "spec14: detalhe da divergencia inalterado");
+  ok(resultado.sigmaIndisponivel === undefined, "spec14: divergencia NAO e' sigmaIndisponivel");
+  ok(cliquesSalvar(eventos) === 1, "spec14: POST /pagamento/add/ EXATAMENTE 1x");
+  const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctxCalls.length === 2, "spec14: contexto 2x (XOR decide na 1a reconsulta, sem reconsulta extra)");
+}
+
+// spec 15: caminho feliz na 1a reconsulta -> sucesso, ZERO extra,
+//          nenhuma chamada a mais que antes da Iteracao 1 (contexto 2x,
+//          clique 1x).
+{
+  const { resultado, chamadas, eventos } = await rodarCenarioSeq("15-feliz-1a", {
+    clienteSeq: [CLI_OK(V_A), CLI_OK(V_B)],
+    contextoSeq: [CTX_OK(V_A), CTX_OK(V_B)],
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect: OPC,
+  });
+  ok(resultado.resultado === "sucesso", "spec15: caminho feliz -> sucesso na 1a reconsulta");
+  ok(cliquesSalvar(eventos) === 1, "spec15: exatamente 1 clique Salvar (zero extra)");
+  const ctxCalls = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto"));
+  ok(ctxCalls.length === 2, "spec15: contexto 2x, exatamente como antes da Iteracao 1");
+  ok(eventos.some((e) => e.tipo === "waitForLoadState"), "spec15: espera orientada ao resultado (waitForLoadState) apos o clique");
+  ok(!chamadas.some((c) => String(c.url).includes("app.rocketgestor.com")), "spec15: runner nunca fala direto com o Rocket");
+}
+
+// spec 16 (prova explicita, todos os desfechos): o POST /pagamento/add/
+// ocorre NO MAXIMO 1x, em QUALQUER cenario pos-clique.
+{
+  const cenarios = [
+    ["sucesso-1a", [CLI_OK(V_A), CLI_OK(V_B)], [CTX_OK(V_A), CTX_OK(V_B)]],
+    ["sucesso-extra", [CLI_OK(V_A), CLI_OK(V_A), CLI_OK(V_B)], [CTX_OK(V_A), CTX_OK(V_A), CTX_OK(V_B)]],
+    ["falha", [CLI_OK(V_A)], [CTX_OK(V_A)]],
+    ["divergencia", [CLI_OK(V_A), CLI_OK(V_B)], [CTX_OK(V_A), CTX_OK(V_A)]],
+    ["ctxDepois-unavailable", [CLI_OK(V_A), CLI_OK(V_A)], [CTX_OK(V_A), { outcome: "unavailable", etapa: "sigma_info_auth", tentativas: 4 }]],
+    ["reconsulta-cliente-falha", [CLI_OK(V_A), { outcome: "unavailable" }], [CTX_OK(V_A), CTX_OK(V_A)]],
+  ];
+  for (const [nome, clienteSeq, contextoSeq] of cenarios) {
+    const { eventos } = await rodarCenarioSeq(`16-1clique-${nome}`, { clienteSeq, contextoSeq, dom: [btnAddPag(ID_INTERNO)], opcoesSelect: OPC });
+    ok(cliquesSalvar(eventos) === 1, `spec16: '${nome}' -> POST /pagamento/add/ executado EXATAMENTE 1x`);
+    ok(eventos.filter((e) => e.tipo === "goto").length === 1, `spec16: '${nome}' -> page.goto 1x (nunca renavega pra re-clicar)`);
+  }
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

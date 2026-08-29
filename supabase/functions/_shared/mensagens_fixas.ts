@@ -407,6 +407,16 @@ export const MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE =
 export const MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO =
   "Não consegui identificar seu acesso UniTV com segurança para renovar em lote. Já encaminhei seu atendimento para que um atendente conclua. Se preferir, você também pode renovar os acessos Sigma um a um pelo número de cada um na lista.";
 
+// Iteracao 1 (2026-08-29) -- instabilidade transitoria de autenticacao
+// do painel Sigma (Rocket -> painel do servidor), depois de esgotadas
+// as N tentativas da Camada A. Mesmo PADRAO da mensagem de
+// instabilidade da UniTV acima, mas NEUTRA (nao nomeia UniTV nem Sigma)
+// -- serve pra qualquer acesso. NUNCA diz que a renovacao "nao
+// existe"/"nao esta disponivel": e' transitorio, o cliente pode pedir
+// de novo. As mensagens UniTV acima ficam INTOCADAS.
+export const MENSAGEM_RENOVACAO_INSTABILIDADE =
+  "Tive uma instabilidade temporária pra preparar a renovação do seu acesso agora. Já encaminhei para um de nossos atendentes concluir — se preferir, é só me pedir de novo daqui a alguns minutos.";
+
 // `falha` = valor bruto de `resolucao.outcome` (individual) OU de
 // `falhaResolucaoUnitv` (lote). "indisponivel" em qualquer forma
 // ("indisponivel", "unitv_conta_indisponivel") -> instabilidade

@@ -30,9 +30,46 @@
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { getServiceClient } from "../_shared/supabase_client.ts";
 import { verificarSessaoRocket } from "../_shared/rocket_session_check.ts";
-import { lerSigmaInfo, montarCookieHeader } from "../_shared/rocket_sigma_contexto.ts";
+import { lerSigmaInfo, montarCookieHeader, type SigmaInfoResultado } from "../_shared/rocket_sigma_contexto.ts";
 
 const ID_INTERNO_PATTERN = /^\d+$/;
+
+// Camada A (Iteracao 1, 2026-08-29) -- retry curto e limitado da leitura
+// do contexto Sigma, SO' para `unavailable` (que agora inclui o
+// `Unauthenticated` reclassificado -- ver _shared/rocket_sigma_contexto.ts).
+// `success` / `pacote_vazio` sao terminais e nunca re-tentam.
+//
+// backoffMs[i] = espera ANTES da tentativa i (i=0 sem espera). jitter =
+// +-20%. Exposto como objeto mutavel so' pra os testes acelerarem o
+// backoff (nunca alterado em producao).
+export const SIGMA_CTX_RETRY = {
+  tentativas: 4,
+  backoffMs: [0, 400, 900, 1600] as number[],
+  jitter: 0.2,
+};
+
+function esperaComJitter(ms: number, jitter: number): number {
+  if (ms <= 0) return 0;
+  const fator = 1 + (Math.random() * 2 - 1) * jitter; // +-jitter
+  return Math.max(0, Math.round(ms * fator));
+}
+
+async function lerSigmaInfoComRetry(
+  cookieHeader: string,
+  idClienteInterno: string,
+): Promise<{ resultado: SigmaInfoResultado; tentativas: number }> {
+  const { tentativas, backoffMs, jitter } = SIGMA_CTX_RETRY;
+  let ultimo: SigmaInfoResultado = { outcome: "unavailable", motivo: "excecao" };
+  for (let i = 0; i < tentativas; i++) {
+    const base = backoffMs[i] ?? backoffMs[backoffMs.length - 1] ?? 0;
+    const espera = esperaComJitter(base, jitter);
+    if (espera > 0) await new Promise((r) => setTimeout(r, espera));
+    ultimo = await lerSigmaInfo(cookieHeader, idClienteInterno);
+    // Retry SOMENTE em unavailable.
+    if (ultimo.outcome !== "unavailable") return { resultado: ultimo, tentativas: i + 1 };
+  }
+  return { resultado: ultimo, tentativas };
+}
 
 Deno.serve(async (req: Request) => {
   const tokenInterno = Deno.env.get("RENOVACAO_SIGMA_CALLBACK_TOKEN");
@@ -84,18 +121,23 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const sigma = await lerSigmaInfo(cookieHeader, idClienteInterno);
+    const { resultado: sigma, tentativas } = await lerSigmaInfoComRetry(cookieHeader, idClienteInterno);
     if (sigma.outcome === "unavailable") {
-      return jsonResponse({ outcome: "unavailable", etapa: "sigma_info" });
+      // `sigma_info_auth` = rejeicao de autenticacao do painel (transitorio,
+      // ja re-tentado N vezes). Distinto de `sessao_expirada`, que e' a
+      // NOSSA sessao do Vault, tratada acima.
+      const etapa = sigma.motivo === "auth_painel" ? "sigma_info_auth" : "sigma_info";
+      return jsonResponse({ outcome: "unavailable", etapa, tentativas });
     }
     if (sigma.outcome === "pacote_vazio") {
-      return jsonResponse({ outcome: "pacote_vazio" });
+      return jsonResponse({ outcome: "pacote_vazio", tentativas });
     }
     return jsonResponse({
       outcome: "success",
       sessaoValida: true,
       pacoteAtual: sigma.package,
       expiresAt: sigma.expiresAt,
+      tentativas,
     });
   } catch {
     return jsonResponse({ outcome: "unavailable", etapa: "excecao" });

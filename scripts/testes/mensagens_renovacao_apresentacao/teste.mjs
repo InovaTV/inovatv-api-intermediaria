@@ -27,6 +27,7 @@ import {
   MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO,
   MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE,
   MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO,
+  MENSAGEM_RENOVACAO_INSTABILIDADE,
   mensagemFalhaResolucaoUnitv,
 } from "../../../supabase/functions/_shared/mensagens_fixas.ts";
 
@@ -380,6 +381,19 @@ checarLista("C3(venc null)", [
   ok(mensagemFalhaResolucaoUnitv("unitv_sem_usuario", "individual") === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_sem_usuario' individual -> nao identificado");
   ok(mensagemFalhaResolucaoUnitv("unitv_conta_ambiguo", "lote") === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_conta_ambiguo' lote -> nao identificado");
   ok(mensagemFalhaResolucaoUnitv("unitv_sem_usuario", "lote") === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_sem_usuario' lote -> nao identificado");
+
+  // Iteracao 1 (2026-08-29) -- MENSAGEM_RENOVACAO_INSTABILIDADE (Sigma /
+  // generica). Mesmo PADRAO da instabilidade da UniTV, mas NEUTRA.
+  ok(typeof MENSAGEM_RENOVACAO_INSTABILIDADE === "string" && MENSAGEM_RENOVACAO_INSTABILIDADE.length > 0, "instab-geral: constante existe e nao e' vazia");
+  ok(/instabilidade tempor/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: fala em 'instabilidade temporária'");
+  ok(/de novo|minutos/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: convida a pedir de novo em alguns minutos (transitorio)");
+  ok(/atendente/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: informa que ja encaminhou para um atendente");
+  ok(!/ainda não está disponível|não está disponível|não existe|nao existe/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: NUNCA diz que a renovacao 'nao esta disponivel'/'nao existe'");
+  ok(!/uni ?tv/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: NEUTRA -- nao nomeia UniTV");
+  ok(!/sigma/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: NEUTRA -- nao nomeia Sigma (serve pra qualquer acesso)");
+  ok(!/pix|r\$|cobran|promo|desconto/i.test(MENSAGEM_RENOVACAO_INSTABILIDADE), "instab-geral: nao fala de pagamento/promo");
+  // as constantes UniTV continuam INTOCADAS (ainda nomeiam UniTV)
+  ok(/uni ?tv/i.test(MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE), "instab-geral: a constante UniTV segue intocada (ainda nomeia UniTV)");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

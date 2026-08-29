@@ -117,6 +117,9 @@ globalThis.fetch = async (url, opts = {}) => {
 function timeout(ms) {
   return new Promise((_, rej) => setTimeout(() => rej(new Error("timeout esperando callback do lote")), ms));
 }
+// Iteracao 1 (2026-08-29): a Camada B pode re-clicar ate 3x com backoff
+// real [1000, 2000]ms -- um cenario que esgota as tentativas leva ~3s.
+const TIMEOUT_LOTE_MS = 20000;
 
 async function rodar(nome, cfg) {
   seq = 0;
@@ -135,7 +138,7 @@ async function rodar(nome, cfg) {
 
   const urlMod = new URL("../../renovacao-sigma-workflow.mjs", import.meta.url).href + `?cenario=${nome}`;
   await import(urlMod);
-  const callback = await Promise.race([promessaCallback, timeout(3000)]);
+  const callback = await Promise.race([promessaCallback, timeout(TIMEOUT_LOTE_MS)]);
   await new Promise((r) => setTimeout(r, 15)); // deixa o finally (browser.close) assentar
   return { callback, chamadas: [...chamadasFetch], eventos: [...eventosPlaywright()] };
 }
@@ -246,7 +249,15 @@ function itemPorTipo(callback, tipo) {
   const sig = itemPorTipo(callback, "sigma");
   const uni = itemPorTipo(callback, "unitv");
   ok(sig && sig.resultado === "falha", "M2: item Sigma -> 'falha' (venc nao mudou)");
-  ok(sig && sig.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique", "M2: item Sigma -> detalhe do veredito 'falha'");
+  ok(
+    sig && sig.detalhe === "vencimento nao mudou em nenhum dos dois sistemas apos o clique (com reconsulta extra)",
+    "M2: item Sigma -> detalhe do veredito 'falha' cita a reconsulta extra (nunca multiplos cliques)",
+  );
+  ok(sig && sig.sigmaIndisponivel === undefined, "M2: item Sigma 'falha' (lote) NAO carrega sigmaIndisponivel");
+  ok(
+    eventos.filter((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento").length === 1,
+    "M2: filho Sigma disparou o POST /pagamento/add/ EXATAMENTE 1x (nunca repetido no lote)",
+  );
   ok(uni && uni.resultado === "sucesso", "M2: item UniTV -> 'sucesso' mesmo com o filho Sigma falhando");
   ok(uni && uni.rocketDesync === undefined, "M2: item UniTV sem rocketDesync");
   ok(chamadasRenovarUniTV().length === 1, "M2: executor UniTV ainda foi chamado (filho Sigma falho nao aborta o lote)");
@@ -275,6 +286,39 @@ function itemPorTipo(callback, tipo) {
   ok(uni && uni.rocketDesync === true, "M3: item UniTV -> rocketDesync = true");
   const sync = chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-rocket-vencimento"));
   ok(sync.length === 1, "M3: 1 tentativa de sync (do filho UniTV)");
+}
+
+// =====================================================================
+// M4 (spec Iteracao 1, teste 17): LOTE MISTO -- o filho Sigma cai em
+// ctxAntes=unavailable (painel Sigma indisponivel, a Camada A ja
+// re-tentou dentro da EF). O filho Sigma -> item 'resultado_ambiguo'
+// (NUNCA 'falha', NUNCA re-clica); o filho UniTV -> 'sucesso',
+// independente. Callback UNICO. O item de lote NAO carrega
+// sigmaIndisponivel (a mensagem consolidada + avisarCliente:false do
+// lote e' quem trata isso -- comportamento validado, inalterado).
+// =====================================================================
+{
+  const { callback, eventos } = await rodar("misto-m4-sigma-unavailable", {
+    filhos: filhosMisto,
+    // Sigma le o cliente 1x (baseline) e depois bate no ctxAntes unavailable.
+    clienteSeq: [{ outcome: "success", cliente: { vencimento: VENC_A } }],
+    contextoSeq: [{ outcome: "unavailable", etapa: "sigma_info_auth", tentativas: 4 }],
+    sync: { outcome: "sincronizado" },
+    unitv: { resultado: "sucesso", vencimentoConfirmado: VENC_UNITV },
+    dom: [btnAddPag(ID_INTERNO)],
+    opcoesSelect,
+  });
+
+  ok(callback.grupo_id === GRUPO_ID && Array.isArray(callback.resultados) && callback.resultados.length === 2, "M4: callback UNICO de lote com 2 itens");
+  const sig = itemPorTipo(callback, "sigma");
+  const uni = itemPorTipo(callback, "unitv");
+  ok(sig && sig.resultado === "resultado_ambiguo", "M4: filho Sigma -> 'resultado_ambiguo' (NUNCA 'falha') com painel Sigma indisponivel");
+  ok(sig && String(sig.detalhe).includes("painel Sigma indisponivel (auth)"), "M4: detalhe do filho Sigma cita 'painel Sigma indisponivel (auth)'");
+  ok(sig && sig.sigmaIndisponivel === undefined, "M4: item de LOTE NAO carrega sigmaIndisponivel (tratamento e' a consolidada + avisarCliente:false)");
+  ok(uni && uni.resultado === "sucesso", "M4: filho UniTV -> 'sucesso', independente da falha do Sigma");
+  ok(chamadasRenovarUniTV().length === 1, "M4: executor UniTV chamado 1x (nao abortou pela falha do Sigma)");
+  ok(eventos.filter((e) => e.tipo === "launch").length === 1, "M4: Playwright lancado 1x (filho Sigma)");
+  ok(!eventos.some((e) => e.tipo === "click" && e.sel === "#btn_adicionar_pagamento"), "M4: filho Sigma NUNCA clica Salvar (bail no ctxAntes unavailable)");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM (renovacao_sigma_workflow_misto)" : `${falhas} FALHA(S) (renovacao_sigma_workflow_misto)`}`);

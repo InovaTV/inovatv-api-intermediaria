@@ -28,15 +28,33 @@ const ID_INTERNO = "1569178";
 // ---------------------------------------------------------------------
 let cfg;
 let chamadas;
+let sigmaInfoChamadas; // Iteracao 1: quantas vezes GET .../sigma/info/ foi batido (p/ testar a Camada A)
 
 function resetCfg() {
   cfg = {
     // "valida" | "login" | "erroRede"
     sessaoCheck: "valida",
-    // Response | "throw" para GET .../sigma/info/?cliente_id=...
+    // Response | "throw" | array de (Response | "throw") consumida 1 por
+    // chamada (o ultimo item repete). Iteracao 1: permite testar o retry
+    // da Camada A com respostas diferentes por tentativa.
     sigma: null,
   };
   chamadas = [];
+  sigmaInfoChamadas = 0;
+}
+
+function proximaRespostaSigma() {
+  const s = cfg.sigma;
+  // Um Response so' pode ter o corpo lido 1x -- quando o cenario dispara
+  // retry (outcome "unavailable"), cada tentativa precisa de um Response
+  // NOVO. Por isso: funcao = factory (chamada a cada tentativa); array =
+  // 1 por tentativa (ultimo repete); Response/"throw" = 1 uso so'.
+  if (typeof s === "function") return s(sigmaInfoChamadas);
+  if (Array.isArray(s)) {
+    const i = Math.min(sigmaInfoChamadas, s.length - 1);
+    return s[i];
+  }
+  return s;
 }
 
 globalThis.fetch = async (url, opts = {}) => {
@@ -52,8 +70,10 @@ globalThis.fetch = async (url, opts = {}) => {
   }
 
   if (u.startsWith("https://app.rocketgestor.com/gerenciador/cliente/sigma/info/")) {
-    if (cfg.sigma === "throw") throw new Error("sigma down");
-    return cfg.sigma;
+    const resp = proximaRespostaSigma();
+    sigmaInfoChamadas++;
+    if (resp === "throw") throw new Error("sigma down");
+    return resp;
   }
 
   throw new Error(`fetch inesperado no teste: ${opts.method ?? "GET"} ${u}`);
@@ -72,7 +92,13 @@ globalThis.Deno = {
   },
 };
 
-await import("../../../supabase/functions/renovacao-sigma-contexto/index.ts");
+const { SIGMA_CTX_RETRY } = await import("../../../supabase/functions/renovacao-sigma-contexto/index.ts");
+
+// Iteracao 1: por padrao, backoff ZERO nos testes (rapidez). O unico
+// teste que valida o TEMPO real do backoff restaura os valores de
+// producao localmente.
+const SIGMA_CTX_BACKOFF_PROD = [...SIGMA_CTX_RETRY.backoffMs];
+SIGMA_CTX_RETRY.backoffMs = [0, 0, 0, 0];
 
 // ---------------------------------------------------------------------
 // helpers
@@ -288,6 +314,161 @@ async function chamar(reqObj) {
   cfg.sigma = "throw";
   const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
   ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info", "17: fetch do sigma/info lanca -> unavailable etapa sigma_info");
+}
+
+// =====================================================================
+// ITERACAO 1 (2026-08-29) -- reclassificacao de auth Sigma + retry Camada A.
+// Numeracao dos testes = spec da Iteracao 1 (1..10).
+// =====================================================================
+
+// spec 1: {"error":true,"msg":"...Unauthenticated..."} -> unavailable
+//         (etapa sigma_info_auth), NUNCA pacote_vazio.
+{
+  resetCfg();
+  resetarFakeSupabase();
+  // factory: cada uma das 4 tentativas do retro recebe um Response NOVO
+  cfg.sigma = () => resp200Json({ error: true, msg: '{"message":"Unauthenticated."}' });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable", "spec1: Unauthenticated no corpo -> unavailable (NUNCA pacote_vazio)");
+  ok(r.json?.etapa === "sigma_info_auth", "spec1: etapa = 'sigma_info_auth' (distinta de sigma_info generico)");
+  ok(sigmaInfoChamadas === 4, "spec1: unavailable -> Camada A re-tentou (4 chamadas a sigma/info)");
+}
+
+// spec 2: {"error":false,"data":{"package":"", ...}} -> pacote_vazio
+//         (resposta VALIDA do painel + realmente sem pacote).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({ error: false, data: { package: "", status: "ACTIVE" } });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "pacote_vazio", "spec2: error:false + data.package vazio -> pacote_vazio (cliente sem plano)");
+}
+
+// spec 3: {"error":false,"data":{package, expires_at, status:ACTIVE}} -> success
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({
+    error: false,
+    data: { id: "loL7ZaZ1XM", package: "⭐1 MÊS C/ADULTOS⭐ 🔞", expires_at: "2026-09-01T02:59:59.000000Z", status: "ACTIVE" },
+  });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "success", "spec3: resposta valida com pacote -> success");
+  ok(r.json?.pacoteAtual === "⭐1 MÊS C/ADULTOS⭐ 🔞", "spec3: pacoteAtual = data.package");
+  ok(r.json?.expiresAt === "2026-09-01T02:59:59.000000Z", "spec3: expiresAt = data.expires_at");
+  ok(r.json?.status === undefined && r.json?.id === undefined, "spec3: data.status / data.id NAO vazam (fora do contrato)");
+  semVazamento(r.txt, "spec3");
+}
+
+// spec 4: HTTP 401 / 403 -> unavailable (etapa sigma_info_auth).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = respStatus(401, "Unauthorized");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info_auth", "spec4: HTTP 401 -> unavailable etapa sigma_info_auth");
+}
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = respStatus(403, "Forbidden");
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info_auth", "spec4: HTTP 403 -> unavailable etapa sigma_info_auth");
+}
+
+// spec 5: sessao_expirada do Vault segue categoria DISTINTA de unavailable
+//         (e nem entra no retry da Camada A -- sigma/info nunca e' batido).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  definirSessaoVault({ sessionid: null, csrftoken: null });
+  cfg.sigma = resp200Json({ error: true, msg: '{"message":"Unauthenticated."}' }); // nao deveria nem ser lido
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "sessao_expirada", "spec5: sessao do Vault ausente -> sessao_expirada (nunca 'unavailable')");
+  ok(sigmaInfoChamadas === 0, "spec5: sessao_expirada NAO entra no retry da Camada A (0 chamadas a sigma/info)");
+}
+
+// spec 6: 1a e 2a unavailable, 3a success -> EF success, EXATAMENTE 3
+//         chamadas a sigma/info, tentativas=3.
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = [
+    resp200Json({ error: true, msg: '{"message":"Unauthenticated."}' }),
+    respStatus(401, "Unauthorized"),
+    resp200Json({ error: false, data: { package: "1 MES - X", expires_at: "2026-10-01T00:00:00-03:00" } }),
+  ];
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "success" && r.json?.pacoteAtual === "1 MES - X", "spec6: unavailable x2 depois success -> EF success");
+  ok(sigmaInfoChamadas === 3, "spec6: sigma/info batido EXATAMENTE 3x (parou na 1a que nao foi unavailable)");
+  ok(r.json?.tentativas === 3, "spec6: campo tentativas = 3");
+}
+
+// spec 7: todas as N (4) unavailable -> unavailable apos N (nunca N+1).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = [
+    respStatus(401),
+    resp200Json({ error: true, msg: '{"message":"Unauthenticated."}' }),
+    respStatus(403),
+    respStatus(401),
+  ];
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "unavailable" && r.json?.etapa === "sigma_info_auth", "spec7: 4x unavailable -> unavailable (auth)");
+  ok(sigmaInfoChamadas === 4, "spec7: EXATAMENTE 4 chamadas a sigma/info (nao 5)");
+  ok(r.json?.tentativas === 4, "spec7: campo tentativas = 4");
+}
+
+// spec 8: 1a success -> 1 chamada, zero retry.
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({ error: false, data: { package: "1 MES - X", expires_at: "2026-10-01T00:00:00-03:00" } });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "success" && sigmaInfoChamadas === 1 && r.json?.tentativas === 1, "spec8: 1a success -> 1 chamada, tentativas=1 (zero retry)");
+}
+
+// spec 9: 1a pacote_vazio -> 1 chamada, zero retry (nao e' transitorio).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sigma = resp200Json({ error: false, data: { package: "   " } });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "pacote_vazio" && sigmaInfoChamadas === 1 && r.json?.tentativas === 1, "spec9: 1a pacote_vazio -> 1 chamada, tentativas=1 (zero retry)");
+}
+
+// spec 10: 1a sessao_expirada (checagem de sessao = login) -> zero retry
+//          da Camada A (sigma/info nunca batido).
+{
+  resetCfg();
+  resetarFakeSupabase();
+  cfg.sessaoCheck = "login";
+  cfg.sigma = resp200Json({ error: true, msg: '{"message":"Unauthenticated."}' });
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  ok(r.json?.outcome === "sessao_expirada" && sigmaInfoChamadas === 0, "spec10: sessao invalida (login) -> sessao_expirada, 0 chamadas a sigma/info (zero retry)");
+}
+
+// spec 6 (parte de tempo): com o backoff REAL de producao, uma sequencia
+// [unavailable x3, success] tem que ESPERAR pelo menos ~ (400+900)*0.8 ms.
+{
+  resetCfg();
+  resetarFakeSupabase();
+  SIGMA_CTX_RETRY.backoffMs = [...SIGMA_CTX_BACKOFF_PROD]; // [0, 400, 900, 1600]
+  cfg.sigma = [
+    respStatus(401),
+    respStatus(401),
+    respStatus(401),
+    resp200Json({ error: false, data: { package: "1 MES - X", expires_at: "2026-10-01T00:00:00-03:00" } }),
+  ];
+  const t0 = Date.now();
+  const r = await chamar(req({ corpo: { idClienteInterno: ID_INTERNO } }));
+  const decorrido = Date.now() - t0;
+  SIGMA_CTX_RETRY.backoffMs = [0, 0, 0, 0]; // restaura rapidez pros proximos
+  ok(r.json?.outcome === "success" && r.json?.tentativas === 4, "spec6-tempo: 3x unavailable + success -> success na 4a");
+  // esperas antes das tentativas 2,3,4 = 400,900,1600; a 4a e' success ->
+  // esperou 400+900+1600 = 2900ms de base, com jitter -20% = >= 2320ms.
+  ok(decorrido >= 2000, `spec6-tempo: respeitou o backoff acumulado (decorrido=${decorrido}ms >= 2000)`);
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

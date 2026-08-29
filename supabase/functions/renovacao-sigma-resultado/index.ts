@@ -47,6 +47,7 @@ import {
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   montarTextoConfirmacaoPagamentoRenovacao,
   montarMensagemResultadoLote,
+  MENSAGEM_RENOVACAO_INSTABILIDADE,
 } from "../_shared/mensagens_fixas.ts";
 
 // Etapa 2 (Renovacao UniTV, Bloco 4). Dessincronia: a renovacao UniTV
@@ -122,6 +123,12 @@ Deno.serve(async (req: Request) => {
     // Etapa 2 (Bloco 4): individual UniTV -- renovou no painel mas o
     // Rocket nao sincronizou. resultado continua "sucesso".
     rocketDesync?: boolean;
+    // Iteracao 1 (2026-08-29): o workflow esgotou as N tentativas da
+    // Camada A e o painel Sigma segue devolvendo Unauthenticated
+    // (instabilidade transitoria de auth). resultado continua
+    // "resultado_ambiguo" (estado/transferencia inalterados) -- so' a
+    // mensagem ao cliente passa a ser a de instabilidade temporaria.
+    sigmaIndisponivel?: boolean;
   };
   try {
     body = await req.json();
@@ -224,6 +231,22 @@ Deno.serve(async (req: Request) => {
   // mecanismo generico ja existente de transferencia humana, nunca um
   // mecanismo novo.
   const motivoTransferencia = `renovacao_sigma:${resultado}`;
+
+  // Iteracao 1 (2026-08-29): painel Sigma indisponivel (auth) apos as N
+  // tentativas da Camada A -> o cliente recebe a mensagem de
+  // INSTABILIDADE TEMPORARIA (neutra, nunca "nao esta disponivel"), e a
+  // transferencia acontece com avisarCliente:false pra NAO duplicar com
+  // a frase generica de transferencia. Estado (resultado_ambiguo ->
+  // renovacao_indeterminada), aviso ao Jose e a rede de seguranca da
+  // Peca 3 seguem exatamente iguais.
+  const sigmaIndisponivel = body.sigmaIndisponivel === true && resultado === "resultado_ambiguo";
+  if (sigmaIndisponivel) {
+    const envio = await enviarMensagemWhatsApp(atualizado.telefone, MENSAGEM_RENOVACAO_INSTABILIDADE);
+    if (envio.outcome === "success") {
+      await inserirMensagem(atualizado.conversation_id, "ia", MENSAGEM_RENOVACAO_INSTABILIDADE, null).catch(() => {});
+    }
+  }
+
   let transferenciaAcionada = false;
   try {
     const transferencia = await acionarTransferenciaHumana(
@@ -236,7 +259,13 @@ Deno.serve(async (req: Request) => {
   } catch (erro) {
     console.log("[renovacao-sigma-resultado] falha ao acionar transferencia humana", String(erro));
   }
-  await notificarTransferenciaHumana(atualizado.telefone, motivoTransferencia, transferenciaAcionada, atualizado.conversation_id);
+  await notificarTransferenciaHumana(
+    atualizado.telefone,
+    motivoTransferencia,
+    transferenciaAcionada,
+    atualizado.conversation_id,
+    sigmaIndisponivel ? { avisarCliente: false } : undefined,
+  );
 
   return jsonResponse({ outcome: `${resultado}_processado` });
 });

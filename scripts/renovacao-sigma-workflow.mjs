@@ -43,6 +43,21 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CALLBACK_TOKEN = process.env.RENOVACAO_SIGMA_CALLBACK_TOKEN;
 
+// Camada B (Iteracao 1, 2026-08-29 -- revisada 2026-08-29 apos revisao de
+// seguranca): o POST /pagamento/add/ (renovar_painel=true) NAO e'
+// idempotente -- consome 1 credito de revenda e empurra +1 mes a CADA
+// chamada, sem nenhuma chave de idempotencia. REGRA: o clique roda no
+// MAXIMO 1x por acesso, NUNCA repetido, em nenhum cenario de duvida.
+// O retry fica so' na LEITURA (Camada A do sigma/info) e numa unica
+// reconsulta EXTRA pos-clique (tambem leitura), pra cobrir propagacao
+// lenta do painel/Rocket sem nunca re-executar o POST.
+const SIGMA_RECONSULTA_EXTRA_MS = 4000; // respiro antes da 1 reconsulta extra (so' leitura)
+const TETO_RESULTADO_MS = 20000; // teto seguro da espera orientada ao resultado do painel
+// Toast/alerta de resultado da UI do Rocket -- se nenhum aparecer no
+// teto, seguimos: quem decide e' a reconsulta independente, nunca este wait.
+const SELETOR_RESULTADO_PAINEL =
+  '.toast-body, .swal2-popup, .alert-success, .alert-danger, .alert-warning, #toast-container .toast, .Toastify__toast';
+
 function requireEnv() {
   const faltando = [
     ["OPERACAO_ID", OPERACAO_ID],
@@ -239,12 +254,12 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
   let idClienteInterno = null;
   let pacoteAtualTexto = null;
   let expiresAtAntes = null;
-  let clicouSalvar = false;
 
   try {
     // URL so' para navegacao do Playwright (navegador real executa o JS
     // da pagina -- nao e' um fetch direto do runner).
     const paginaClienteUrl = `https://app.rocketgestor.com/gerenciador/cliente/info/${publicId}/`;
+    const SELETOR_ADD_PAGAMENTO = '[data-bs-target="#modal-add-pagamento"][cliente_id]';
 
     // Playwright real -- mesma sequencia ja comprovada em
     // executar-renovacao-controlada.mjs, so' parametrizada.
@@ -269,7 +284,6 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       // telefone -- por isso o seletor e' escopado por
       // data-bs-target="#modal-add-pagamento", nunca so' por [cliente_id].
       // Desambigua por nome+telefone, nunca por posicao/ordem, exatamente 1.
-      const SELETOR_ADD_PAGAMENTO = '[data-bs-target="#modal-add-pagamento"][cliente_id]';
       await page
         .waitForSelector(SELETOR_ADD_PAGAMENTO, { timeout: 15000 })
         .catch(() => {}); // sem nenhum elemento -> lista abaixo vira [] -> "nao encontrado"
@@ -298,13 +312,28 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       idClienteInterno = ids[0];
 
       // --- Pacote atual + expires_at (baseline) via renovacao-sigma-contexto
-      // (Supabase), agora com o id ja resolvido pelo DOM.
+      // (Supabase), agora com o id ja resolvido pelo DOM. A Camada A
+      // (retry curto) roda DENTRO daquela Edge Function -- aqui uma unica
+      // chamada ja vem com "success" ou com "unavailable" ja esgotado.
       const ctxAntes = await lerContextoSigma(idClienteInterno);
       if (ctxAntes.outcome === "sessao_expirada") {
         return { resultado: "sessao_expirada", detalhe: ctxAntes.detalhe ?? "sessao invalida" };
       }
       if (ctxAntes.outcome === "pacote_vazio") {
+        // Pos-reclassificacao (Iteracao 1): pacote_vazio agora SO' significa
+        // resposta valida do painel + cliente realmente sem plano -- nunca
+        // mais um Unauthenticated disfarcado.
         return { resultado: "resultado_ambiguo", detalhe: "Sigma nao informou o pacote atual (package vazio)" };
+      }
+      if (ctxAntes.outcome === "unavailable") {
+        // A Camada A ja re-tentou N vezes. Auth do painel Sigma
+        // indisponivel -> resultado_ambiguo + sigmaIndisponivel (mensagem
+        // de instabilidade temporaria ao cliente). NUNCA "falha".
+        return {
+          resultado: "resultado_ambiguo",
+          sigmaIndisponivel: true,
+          detalhe: `painel Sigma indisponivel (auth) na leitura de contexto -- ${ctxAntes.etapa ?? "unavailable"}${ctxAntes.tentativas ? `, ${ctxAntes.tentativas} tentativas` : ""}`,
+        };
       }
       if (ctxAntes.outcome !== "success" || !ctxAntes.pacoteAtual) {
         return {
@@ -315,93 +344,142 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       pacoteAtualTexto = String(ctxAntes.pacoteAtual).trim();
       expiresAtAntes = ctxAntes.expiresAt ?? null;
 
-      // --- Clique real (Playwright), no botao "Add Pagamento" da MESMA
-      // pagina ja aberta -- mesmo seletor de cima, escopado pelo
-      // cliente_id ja resolvido (nunca ambiguo). Abre #modal-add-pagamento.
-      await page
-        .locator(`[data-bs-target="#modal-add-pagamento"][cliente_id="${idClienteInterno}"]`)
-        .click({ timeout: 10000 });
-      await page.waitForTimeout(1000);
+      // --- UM UNICO clique de renovacao. NUNCA repetido, em nenhum
+      // cenario. O POST /pagamento/add/ consome credito e nao e'
+      // idempotente -- repetir renovaria 2x. Todo retry desta etapa fica
+      // so' na LEITURA (reconsulta), nunca no clique.
+      await executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto);
 
-      const renovarCheckbox = page.locator('input[name="renovar_painel"]');
-      await renovarCheckbox.waitFor({ state: "visible", timeout: 10000 });
-      await renovarCheckbox.check();
-
-      await page.waitForTimeout(3000);
-
-      const selects = await page.locator("select:visible").all();
-      let pacoteSelecionado = null;
-      for (const sel of selects) {
-        const options = await sel.locator("option").allTextContents();
-        // Correcao de risco (2026-08-24, comprovada em
-        // scripts/poc-confirmar-expires-at-renovacao.mjs, dry-run
-        // real): o `<select>` real inclui um sufixo que o campo
-        // `package` do Sigma NAO tem (ex.: "1 MES - P2P & IPTV COM
-        // ADULTOS - 1 creditos - 1 tela(s)" no select, contra "1 MES -
-        // P2P & IPTV COM ADULTOS" em pacoteAtualTexto) -- o match
-        // exato nunca encontrava a opcao contra dado real. Corrigido
-        // pra prefixo -- pacoteAtualTexto continua sendo a fonte de
-        // verdade (Sigma), nunca um texto fixo.
-        const match = options.find((o) => o.trim().startsWith(pacoteAtualTexto));
-        if (match) {
-          await sel.selectOption({ label: match });
-          pacoteSelecionado = match.trim();
-          break;
+      // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
+      // Sigma (via renovacao-sigma-contexto), nunca confia no clique/toast
+      // da UI. `avaliarVeredito` devolve o resultado final OU null quando
+      // as duas fontes dizem "nada mudou" (com o painel autenticado) --
+      // unico caso que pede a reconsulta EXTRA.
+      const reconsultar = async () => {
+        const rocket = await lerClienteRocket(publicId);
+        const ctx = await lerContextoSigma(idClienteInterno);
+        return { okDepois: rocket.ok, clienteDepois: rocket.cliente, ctxDepois: ctx };
+      };
+      const avaliarVeredito = ({ okDepois, clienteDepois, ctxDepois }) => {
+        if (!okDepois || !clienteDepois) {
+          return { resultado: "resultado_ambiguo", detalhe: "falha ao reconsultar o cliente no Rocket apos o clique" };
         }
-      }
-      if (!pacoteSelecionado) {
-        throw new Error(`pacote "${pacoteAtualTexto}" nao encontrado nas opcoes do select`);
-      }
-      await page.waitForTimeout(1500);
+        if (ctxDepois.outcome === "unavailable") {
+          // A Camada A (4 tentativas) ja se esgotou nesta leitura. Nao da'
+          // pra confirmar NEM negar a renovacao -> resultado_ambiguo +
+          // sigmaIndisponivel. NUNCA "falha".
+          return {
+            resultado: "resultado_ambiguo",
+            sigmaIndisponivel: true,
+            detalhe: `painel Sigma indisponivel (auth) na reconsulta pos-clique -- ${ctxDepois.etapa ?? "unavailable"}${ctxDepois.tentativas ? `, ${ctxDepois.tentativas} tentativas` : ""}`,
+          };
+        }
+        if (ctxDepois.outcome !== "success" || !ctxDepois.expiresAt) {
+          return { resultado: "resultado_ambiguo", detalhe: `falha ao reconsultar o Sigma apos o clique (${ctxDepois.outcome})` };
+        }
+        const rocketMudou = clienteDepois.vencimento !== vencimentoAntes;
+        const sigmaMudou = ctxDepois.expiresAt !== expiresAtAntes;
+        if (rocketMudou && sigmaMudou) {
+          return { resultado: "sucesso", vencimentoConfirmado: clienteDepois.vencimento };
+        }
+        if (rocketMudou !== sigmaMudou) {
+          // XOR -- divergencia real entre os dois sistemas: sempre ambiguo.
+          return {
+            resultado: "resultado_ambiguo",
+            detalhe: `divergencia entre sistemas: rocketMudou=${rocketMudou}, sigmaMudou=${sigmaMudou}`,
+          };
+        }
+        return null; // !rocketMudou && !sigmaMudou && ctxDepois success -> reconsulta EXTRA
+      };
 
-      await page.locator("#btn_adicionar_pagamento").click({ timeout: 10000 });
-      clicouSalvar = true;
-      await page.waitForTimeout(3000);
+      let veredito = avaliarVeredito(await reconsultar());
+
+      if (veredito === null) {
+        // As duas fontes dizem "nada mudou" e o painel esta autenticado.
+        // UMA reconsulta EXTRA (so' leitura, SEM novo clique) apos um
+        // respiro -- cobre propagacao lenta do painel/Rocket sem nunca
+        // re-executar o POST.
+        await new Promise((r) => setTimeout(r, SIGMA_RECONSULTA_EXTRA_MS));
+        veredito = avaliarVeredito(await reconsultar());
+      }
+
+      if (veredito === null) {
+        // Ainda sem mudanca em nenhum dos dois sistemas, painel
+        // autenticado -> renovacao genuinamente nao aplicada. Um eventual
+        // falso-"falha" residual de POST muito lento e' coberto pelas
+        // redes ja existentes (transferencia humana + Peca 3/watchdog),
+        // NUNCA por um 2o clique.
+        veredito = {
+          resultado: "falha",
+          detalhe: "vencimento nao mudou em nenhum dos dois sistemas apos o clique (com reconsulta extra)",
+        };
+      }
+
+      return veredito;
     } finally {
       await browser.close();
     }
-
-    if (!clicouSalvar) {
-      return { resultado: "resultado_ambiguo", detalhe: "nao foi possivel completar o clique em Salvar" };
-    }
-
-    // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
-    // Sigma (via renovacao-sigma-contexto, mesmo endpoint, so' o
-    // expiresAt e' usado aqui), os dois, nunca confia so' no clique/
-    // toast da UI.
-    const { ok: okDepois, cliente: clienteDepois } = await lerClienteRocket(publicId);
-    const ctxDepois = await lerContextoSigma(idClienteInterno);
-
-    if (!okDepois || !clienteDepois || ctxDepois.outcome !== "success" || !ctxDepois.expiresAt) {
-      return { resultado: "resultado_ambiguo", detalhe: "falha ao reconsultar Rocket/Sigma apos o clique" };
-    }
-
-    const vencimentoDepois = clienteDepois.vencimento;
-    const expiresAtDepois = ctxDepois.expiresAt;
-
-    const rocketMudou = vencimentoDepois !== vencimentoAntes;
-    const sigmaMudou = expiresAtDepois !== expiresAtAntes;
-
-    if (rocketMudou && sigmaMudou) {
-      return { resultado: "sucesso", vencimentoConfirmado: vencimentoDepois };
-    }
-
-    if (!rocketMudou && !sigmaMudou) {
-      return { resultado: "falha", detalhe: "vencimento nao mudou em nenhum dos dois sistemas apos o clique" };
-    }
-
-    // Um mudou, o outro nao -- divergencia real entre os dois sistemas,
-    // nunca decide sozinho, sempre ambiguo.
-    return {
-      resultado: "resultado_ambiguo",
-      detalhe: `divergencia entre sistemas: rocketMudou=${rocketMudou}, sigmaMudou=${sigmaMudou}`,
-    };
   } catch (erro) {
     // Qualquer excecao nao prevista (elemento nao encontrado, timeout
     // do Playwright, etc.) -- NUNCA falha/sucesso por suposicao.
     console.error("[renovacao-sigma-workflow] excecao nao prevista", erro);
     return { resultado: "resultado_ambiguo", detalhe: `excecao: ${erro.message ?? String(erro)}` };
   }
+}
+
+// Sequencia de clique da renovacao no modal "Add Pagamento". Roda no
+// MAXIMO 1x por acesso (nunca repetida). Lanca se qualquer passo nao
+// completar (ex.: pacote nao encontrado no <select>) -- nesse caso o
+// POST /pagamento/add/ nunca chega a ser submetido.
+async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto) {
+  await page
+    .locator(`[data-bs-target="#modal-add-pagamento"][cliente_id="${idClienteInterno}"]`)
+    .click({ timeout: 10000 });
+  await page.waitForTimeout(1000);
+
+  const renovarCheckbox = page.locator('input[name="renovar_painel"]');
+  await renovarCheckbox.waitFor({ state: "visible", timeout: 10000 });
+  await renovarCheckbox.check();
+
+  await page.waitForTimeout(3000);
+
+  const selects = await page.locator("select:visible").all();
+  let pacoteSelecionado = null;
+  for (const sel of selects) {
+    const options = await sel.locator("option").allTextContents();
+    // Correcao de risco (2026-08-24, comprovada em
+    // scripts/poc-confirmar-expires-at-renovacao.mjs, dry-run real): o
+    // `<select>` real inclui um sufixo que o campo `package` do Sigma
+    // NAO tem (ex.: "1 MES - P2P & IPTV COM ADULTOS - 1 creditos - 1
+    // tela(s)" no select, contra "1 MES - P2P & IPTV COM ADULTOS" em
+    // pacoteAtualTexto) -- o match exato nunca encontrava a opcao contra
+    // dado real. Corrigido pra prefixo -- pacoteAtualTexto continua
+    // sendo a fonte de verdade (Sigma), nunca um texto fixo.
+    const match = options.find((o) => o.trim().startsWith(pacoteAtualTexto));
+    if (match) {
+      await sel.selectOption({ label: match });
+      pacoteSelecionado = match.trim();
+      break;
+    }
+  }
+  if (!pacoteSelecionado) {
+    throw new Error(`pacote "${pacoteAtualTexto}" nao encontrado nas opcoes do select`);
+  }
+  await page.waitForTimeout(1500);
+
+  // O clique submete o formulario Django (POST /pagamento/add/ ->
+  // navegacao). Executado UMA vez.
+  await page.locator("#btn_adicionar_pagamento").click({ timeout: 10000 });
+
+  // Espera ORIENTADA AO RESULTADO do painel, com teto seguro -- no lugar
+  // do antigo waitForTimeout(3000) cego, que reconsultava enquanto o POST
+  // ainda podia estar em curso. Aguarda a pagina de resultado carregar E
+  // um toast/alerta de resultado aparecer; se qualquer um estourar o
+  // teto, seguimos -- quem decide e' a reconsulta independente, nunca
+  // este wait. Cada passo e' best-effort (.catch), nunca lanca.
+  await page.waitForLoadState("load", { timeout: TETO_RESULTADO_MS }).catch(() => {});
+  await page.waitForSelector(SELETOR_RESULTADO_PAINEL, { timeout: TETO_RESULTADO_MS }).catch(() => {});
+  await page.waitForTimeout(1500); // respiro curto pro banco do Rocket assentar
 }
 
 // Renovacao em lote: processa os N filhos em sequencia e reporta um
@@ -531,6 +609,10 @@ async function main() {
   const extra = {};
   if (r.vencimentoConfirmado) extra.vencimentoConfirmado = r.vencimentoConfirmado;
   if (r.detalhe) extra.detalhe = r.detalhe;
+  // Iteracao 1 (2026-08-29): painel Sigma indisponivel (auth) apos a
+  // Camada A -- o callback carrega isso pra renovacao-sigma-resultado
+  // enviar a mensagem de instabilidade temporaria ao cliente (individual).
+  if (r.sigmaIndisponivel) extra.sigmaIndisponivel = true;
   await reportarResultado(r.resultado, extra);
 }
 

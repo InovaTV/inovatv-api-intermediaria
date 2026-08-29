@@ -99,6 +99,9 @@ const pageFake = {
   },
   locator: (sel) => locatorFake(sel),
   waitForTimeout: async () => {},
+  // Iteracao 1 (revisao de seguranca): espera orientada ao resultado do
+  // painel apos o unico clique -- no-op no fake, so' registra o evento.
+  waitForLoadState: async (state) => ev("waitForLoadState", { state }),
 };
 
 const contextFake = {

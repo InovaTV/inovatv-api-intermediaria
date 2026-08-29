@@ -30,6 +30,7 @@ globalThis.Deno = {
 };
 
 await import("../../../supabase/functions/renovacao-sigma-resultado/index.ts");
+const { MENSAGEM_RENOVACAO_INSTABILIDADE } = await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
 
 let falhas = 0;
 function ok(cond, msg) {
@@ -254,6 +255,82 @@ function blocoDoServidor(texto, servidor) {
 
   // cliente continua recebendo APENAS a mensagem consolidada (1)
   ok(fWa.mensagensEnviadas().length === 1, "C8: 1 unica mensagem ao cliente (a consolidada), nunca 2a por dessincronia");
+}
+
+// =====================================================================
+// ITERACAO 1 (2026-08-29) -- Sigma indisponivel (auth) apos a Camada A:
+// individual -> mensagem de INSTABILIDADE TEMPORARIA ao cliente +
+// transferencia com avisarCliente:false; estado/aviso ao Jose inalterados.
+// =====================================================================
+const TOKEN_SIGMA = {
+  conversation_id: "conv-sig",
+  cliente_nome: "Js Informatica Rp",
+  plano_nome: "Mensal",
+  servidor_nome: "ChannelTV",
+  telefone: "5517981625486",
+};
+
+// spec-instab: individual Sigma resultado_ambiguo + sigmaIndisponivel:true
+{
+  resetar();
+  fTok.configurarToken(TOKEN_SIGMA);
+  const resp = await handler(req({
+    operacao_id: "op-si-1",
+    resultado: "resultado_ambiguo",
+    detalhe: "painel Sigma indisponivel (auth) na leitura de contexto -- sigma_info_auth, 4 tentativas",
+    sigmaIndisponivel: true,
+  }));
+  const body = await resp.json();
+  ok(body.outcome === "resultado_ambiguo_processado", "spec-instab: outcome = resultado_ambiguo_processado (estado inalterado)");
+  ok(
+    fWa.mensagensEnviadas().length === 1 && fWa.mensagensEnviadas()[0].texto === MENSAGEM_RENOVACAO_INSTABILIDADE,
+    "spec-instab: cliente recebe a mensagem de INSTABILIDADE TEMPORARIA (neutra), 1x",
+  );
+  ok(
+    !/não está disponível|nao esta disponivel|não existe|nao existe/i.test(fWa.mensagensEnviadas()[0].texto),
+    "spec-instab: a mensagem NUNCA diz que a renovacao 'nao esta disponivel'/'nao existe'",
+  );
+  ok(fMsg.mensagens().some((m) => m.origem === "ia" && m.texto === MENSAGEM_RENOVACAO_INSTABILIDADE), "spec-instab: a mensagem e' gravada no historico do Painel (origem ia)");
+  const acion = fConv.acionamentos();
+  ok(acion.length === 1 && acion[0].motivo === "renovacao_sigma:resultado_ambiguo", "spec-instab: transferencia com o MESMO motivo generico de sempre (estado inalterado)");
+  ok(
+    fNotif.notificacoes().length === 1 && fNotif.notificacoes()[0].opcoes?.avisarCliente === false,
+    "spec-instab: notificarTransferenciaHumana com avisarCliente:false (nao duplica com a frase generica)",
+  );
+  ok(!fWa.templatesEnviados().some((t) => t.nome === "pagamento_confirmado"), "spec-instab: nenhum template de sucesso");
+}
+
+// spec-reg: resultado_ambiguo SEM sigmaIndisponivel -> comportamento
+// generico INALTERADO (EF nao envia mensagem de instabilidade; a
+// transferencia avisa o cliente com a frase generica de sempre).
+{
+  resetar();
+  fTok.configurarToken({ ...TOKEN_SIGMA, servidor_nome: "NewOne" });
+  const resp = await handler(req({ operacao_id: "op-amb-1", resultado: "resultado_ambiguo", detalhe: "divergencia entre sistemas: rocketMudou=true, sigmaMudou=false" }));
+  const body = await resp.json();
+  ok(body.outcome === "resultado_ambiguo_processado", "spec-reg: outcome resultado_ambiguo_processado");
+  ok(fWa.mensagensEnviadas().length === 0, "spec-reg: resultado_ambiguo comum -> EF NAO envia mensagem de instabilidade");
+  ok(
+    fNotif.notificacoes().length === 1 && fNotif.notificacoes()[0].opcoes === undefined,
+    "spec-reg: transferencia com opcoes default (frase generica ao cliente) -- inalterado",
+  );
+}
+
+// spec 18: 'falha' e 'sessao_expirada' NAO viram instabilidade mesmo se
+// sigmaIndisponivel vier no corpo (so' 'resultado_ambiguo' + a flag).
+// E o motivo/estado da transferencia continua o generico -- Camada 3 /
+// watchdog / Peca 3 nao dependem de nada disto, seguem intocados.
+{
+  resetar();
+  fTok.configurarToken(TOKEN_SIGMA);
+  const resp = await handler(req({ operacao_id: "op-f-1", resultado: "falha", detalhe: "x", sigmaIndisponivel: true }));
+  await resp.json();
+  ok(fWa.mensagensEnviadas().length === 0, "spec18: resultado 'falha' + sigmaIndisponivel -> NUNCA mensagem de instabilidade");
+  ok(
+    fConv.acionamentos().length === 1 && fConv.acionamentos()[0].motivo === "renovacao_sigma:falha",
+    "spec18: 'falha' -> motivo generico 'renovacao_sigma:falha' (estado/transferencia inalterados)",
+  );
+  ok(fNotif.notificacoes()[0].opcoes === undefined, "spec18: 'falha' -> avisarCliente default (nao suprime a frase generica)");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

@@ -118,16 +118,118 @@ próprio, sem deploy).** Zero mudança de comportamento — só
   trava a **não-exposição de PII** e um de **regressão do caminho
   feliz**. 24 suítes verdes.
 
+### Camada 3 — reconciliação antecipada: EM PRODUÇÃO (commit `a87a1df`, pushed) — CHECKPOINT 2026-08-29
+
+Sweep novo, dedicado e **recover-only**, dentro do `renovacao-sigma-watchdog`
+(mesmo cron `*/5`, sem Edge Function nova, sem migration). Alvo:
+`tokens_renovacao`/`renovacoes_lote` `estado='autorizada'` + `operacao_id`
+vinculado, **ainda dentro** da janela de 2h (`expira_em >= now()`),
+`criado_em < now() - 5min`. Chama `reconciliarSePago` (novo em
+`_shared/reconciliacao_renovacao.ts`): **`COMPLETED` + valor exato →
+recupera** pelo mesmo núcleo (`executarRecuperacao`:
+`marcarCobrancaComoPaga` CAS → `reivindicarInicio[Lote]` CAS → dispatch)
+que o `openpix-webhook` usa; **qualquer outro resultado**
+(`ACTIVE`/`EXPIRED`/Woovi indisponível/sem registro/valor divergente) →
+**zero escrita**. Nunca expira, cancela ou marca divergência — isso
+segue 100% com os Casos B/C/E do sweep de `expira_em` (Peça 3, intocada).
+
+- **Deploy:** `renovacao-sigma-watchdog` **v10 → v11**, `ACTIVE`,
+  `verify_jwt = false` (OFF, deploy `--no-verify-jwt`), 2026-08-29
+  ~13:39 UTC. Bundle **inclui** `_shared/reconciliacao_renovacao.ts` +
+  `tokens_renovacao.ts` + `renovacoes_lote.ts` (manifesto de upload da
+  CLI); boot confirmado (smoke `POST` sem token → `401`, antes de
+  qualquer lógica). Nenhuma outra função deployada. `ezbr_sha256`
+  `a1b21801…` → `d90d0c48…`.
+- **Testes: 24/24 suítes verdes** — 9 testes novos da Camada 3 em
+  `watchdog_lifecycle` (recupera ind/lote, ainda não pago, cedo demais,
+  já expirado fora da query, valor divergente sem efeito, concorrência
+  3×, corrida com webhook, Woovi indisponível) + regressão A/B/C/D/E.
+- **Verificação read-only pós-deploy (2026-08-29 ~13:46 UTC):**
+  - cron `*/5` **ativo** — `cron.job` `jobid 2`,
+    `jobname='renovacao-sigma-watchdog'`, `schedule='*/5 * * * *'`,
+    `active=true`.
+  - watchdog **executando após o deploy** — `cron.job_run_details`:
+    runs `succeeded` às 13:40:00 e 13:45:00 UTC (deploy ~13:39 UTC),
+    cadência de 5 min consistente antes e depois.
+  - **sweep é no-op** — sem item elegível: `H_elegiveis_camada3 = 0`;
+    `tokens_renovacao` sem nenhum `autorizada` (todos terminais:
+    `renovacao_concluida 8`, `renovacao_falhou 6`, `cancelada 4`,
+    `renovacao_indeterminada 3`, `expirada 2`); `renovacoes_lote` idem
+    (`concluida 2`, `parcial 2`, `falhou 1`); `cobrancas_pix` sem
+    nenhum `pendente` (`pago 11`, `cancelada 2`).
+  - **nenhuma alteração financeira decorrente do deploy** — única
+    mudança em `cobrancas_pix` nas últimas 6h é `d5241cc0` →
+    `cancelada` às **10:25 UTC** (limpeza manual do usuário, **antes**
+    do deploy). Zero writes em `cobrancas_pix`/`tokens_renovacao`/
+    `renovacoes_lote` após 13:39 UTC.
+- **Nenhum teste real após o deploy. Nenhuma cobrança criada. Nenhuma
+  ação financeira.**
+
+### Iteração 1 — instabilidade de auth do painel Sigma: COMMITADO, NÃO DEPLOYADO — CHECKPOINT 2026-08-29
+
+Trata a intermitência de autenticação do painel Sigma (`Unauthenticated`
+não-determinístico por requisição, caracterizado ao vivo no ChannelTV).
+**Nada deployado.** Suíte completa **24/24 verde**.
+
+**REGRA DE SEGURANÇA DEFINITIVA (aprovada pelo usuário, não reabrir):**
+> O `POST /gerenciador/pagamento/add/` (`renovar_painel=true`) **NÃO é
+> idempotente** — não tem chave de idempotência, consome 1 crédito de
+> revenda e empurra +1 mês a **cada** chamada. Repetir = renovação
+> dupla. Portanto: **o clique de renovação roda no máximo 1 vez por
+> acesso, nunca repetido, em nenhum cenário de dúvida.** **Nenhum retry
+> de operação que consome crédito.** Todo retry desta frente fica só na
+> **leitura** (Camada A do `sigma/info` + 1 reconsulta extra pós-clique,
+> também leitura). Um falso-`falha` residual de POST muito lento é
+> coberto pelas redes já existentes (transferência humana + Peça 3 Caso
+> D / watchdog reconciliando a cobrança paga) — **nunca** por um 2º
+> clique.
+
+- **`_shared/rocket_sigma_contexto.ts`** — `lerSigmaInfo` reclassifica:
+  HTTP 401/403, `error:true` com mensagem de auth, ou resposta sem bloco
+  `data` → `unavailable` (`motivo: auth_painel|http|resposta_invalida|
+  excecao`). `pacote_vazio` **só** com resposta válida (`error != true`)
+  + `data` presente + `package` vazio. `Unauthenticated` **nunca mais**
+  vira `pacote_vazio`.
+- **`renovacao-sigma-contexto/index.ts`** — Camada A: `lerSigmaInfoComRetry`
+  (`SIGMA_CTX_RETRY = { tentativas: 4, backoffMs: [0,400,900,1600], jitter: 0.2 }`),
+  retry **só** em `unavailable`; `success`/`pacote_vazio` são terminais.
+  `unavailable` de auth → `etapa: "sigma_info_auth"` + `tentativas` no
+  corpo.
+- **`scripts/renovacao-sigma-workflow.mjs`** — `executarCliqueAddPagamento`
+  extraída, roda **1×**. Removidos `SIGMA_CLIQUE_RETENTATIVAS`,
+  `SIGMA_CLIQUE_BACKOFF_MS`, o laço de re-clique. Após o clique: espera
+  orientada ao resultado (`waitForLoadState("load")` + `waitForSelector`
+  de toast/alerta, teto `TETO_RESULTADO_MS = 20000`, ambos best-effort
+  `.catch`) no lugar do `waitForTimeout(3000)` cego → reconsulta
+  independente → `avaliarVeredito`. Se as duas fontes = "nada mudou" com
+  painel autenticado → **1 reconsulta extra** (só leitura, respiro
+  `SIGMA_RECONSULTA_EXTRA_MS = 4000`, **sem novo clique**) → se ainda
+  nada, `resultado: "falha"`. `ctxAntes`/`ctxDepois` `unavailable` →
+  `resultado_ambiguo` + `sigmaIndisponivel` (nunca `falha`). XOR →
+  `resultado_ambiguo`.
+- **`renovacao-sigma-resultado/index.ts`** + **`_shared/mensagens_fixas.ts`**
+  — nova `MENSAGEM_RENOVACAO_INSTABILIDADE` (neutra — não nomeia
+  UniTV/Sigma, nunca diz "não está disponível"). Individual Sigma
+  `resultado_ambiguo` + `sigmaIndisponivel` → cliente recebe essa
+  mensagem, transferência com `avisarCliente:false` (sem duplicar a
+  frase genérica). Estado (`resultado_ambiguo → renovacao_indeterminada`),
+  aviso ao José e Peça 3 **inalterados**.
+- **NÃO nesta iteração:** pré-check Sigma antes da cobrança (deferido
+  para Iteração 2, só se o retry de leitura provar insuficiente).
+- **Intocados:** UniTV (100%), Camada 3/watchdog, OpenPix, prompt/Gemini,
+  Validador, estado conversacional.
+- **Testes:** `rocket-sigma-contexto` (spec 1–10), `renovacao-sigma-workflow-leitura`
+  (spec 11–16 + G reescrito — provam POST ≤ 1×, `goto` 1×),
+  `renovacao_sigma_workflow_misto` (M2/M4), `renovacao_sigma_resultado_unitv`
+  (spec-instab/spec-reg/spec18), `mensagens_renovacao_apresentacao`.
+  Removidos os testes que pressupunham 2º clique.
+- **Sem deploy, sem teste real, sem cobrança.**
+
 ### Pendências desta frente
-- Deploy da correção de UX (`orchestrator` + `mensagens_fixas.ts`,
-  commit `aa9895d`).
-- Deploy da Camada 1 (`openpix-webhook`).
-- **Camada 3 — reconciliação antecipada (PRÓXIMA DECISÃO):** sweep leve
-  para `cobrancas_pix.status='pendente'` + lote/token `autorizada` há
-  > ~5–10 min → `reconciliarPagamentoRenovacao` → recupera **agora** se
-  a Woovi disser `COMPLETED`. Reduz o silêncio de até ~2h. Reusa a
-  função já construída (CAS-safe, idempotente). **Não** interpreta
-  transações não associadas.
+- Deploy da correção de UX UniTV (`orchestrator` + `mensagens_fixas.ts`,
+  commit `aa9895d`) — **ainda não deployado** (`orchestrator` segue v57).
+- Deploy da Camada 1 — observabilidade do `openpix-webhook` (commit
+  `e3bee32`) — **ainda não deployado** (`openpix-webhook` segue v11).
 - Camada 2 (ampliar eventos aceitos) — só depois de capturar um
   `TRANSACTION_RECEIVED` real e seu payload completo (a Camada 1 é o
   pré-requisito).
@@ -139,30 +241,55 @@ próprio, sem deploy).** Zero mudança de comportamento — só
 
 ## 0. PONTO EXATO DA RETOMADA
 
-**Primeira ação amanhã (só leitura, nenhuma ação real sem autorização
-própria):**
+**Camada 3 em produção (watchdog v11). Iteração 1 COMMITADA, NÃO
+DEPLOYADA (checkpoint acima, 24/24 verde).**
 
-> **Investigar o segundo PIX que ficou `pendente`** — o fluxo de teste
-> das ~03:35 UTC de 2026-08-29 gerou uma cobrança que **nunca foi
-> confirmada** pelo nosso sistema:
-> - `cobrancas_pix.operacao_id = d5241cc0-3a46-401a-bbed-4a00ce3dd8c2`,
->   `status = pendente` (criada 03:35:22 UTC).
-> - PIX pay URL: `https://woovi-sandbox.com/pay/79d4aa6d-ed2e-47b5-afe2-222a5b38422c`
->   (`79d4aa6d…` = id da charge na Woovi; `d5241cc0…` = nosso
->   `operacao_id`/`correlationID`).
-> - `renovacoes_lote` desse fluxo: `estado = autorizada` (não avançou).
-> - **Nenhum workflow run novo** (`gh run list --workflow=renovacao-sigma.yml`
->   confirma só `33231493655` de 03:28:48).
-> - `conversas_estado` da conversa `43fcff07-80e5-4d0a-b814-62323ef6c3a9`
->   voltou a `normal`.
->
-> **Hipótese:** o webhook `OPENPIX:CHARGE_COMPLETED` dessa cobrança
-> não chegou ao `openpix-webhook` (ou o pagamento simulado no painel
-> Woovi Sandbox não foi concluído). Checar no dashboard da Woovi
-> Sandbox: a cobrança consta paga? o webhook foi disparado/entregue?
-> URL configurada (`https://nduxsuxkopuvhwugdkqi.supabase.co/functions/v1/openpix-webhook`),
-> tentativas, código de resposta. Se paga lá e `pendente` aqui →
-> problema de entrega/assinatura de webhook, não do fluxo de lote.
+**Próxima etapa: decidir o deploy da Iteração 1.** Antes de decidir,
+**verificar se ainda precisamos do pré-check Sigma antes da cobrança ou
+se os retries de leitura (Camada A + reconsulta extra) são
+suficientes** — a Iteração 1 foi desenhada justamente para testar a
+eficácia do retry primeiro, sem criar gate específico de ChannelTV.
+Alvos de deploy da Iteração 1: `renovacao-sigma-contexto` (Camada A),
+`renovacao-sigma-resultado` (mensagem de instabilidade), `_shared`
+empacotado com elas. `scripts/renovacao-sigma-workflow.mjs` é script do
+GitHub Actions (commitado, não deployado ao Supabase). Nada de teste
+real/cobrança sem autorização própria.
+
+**Depois disso: voltar à matriz de Renovação Automática e tratar os
+pendentes já conhecidos, nesta ordem (nada é ação financeira sem
+autorização própria):**
+
+1. **ChannelTV** — lote misto Sigma+UniTV: o UniTV renovou/sincronizou
+   com sucesso; o ChannelTV deu `resultado_ambiguo` / `pacote_vazio`
+   (o guard está correto — não é bug). Causa é config/dados no Rocket
+   (`GET /gerenciador/cliente/sigma/info/` → `{error:true}` sem
+   `data.package`; painel Sigma trocou de domínio `channeltv.top` →
+   `channeltvbr.store`; após ajuste do usuário virou
+   `{"message":"Unauthenticated."}` — credenciais do servidor
+   "ChannelTV" no Rocket). Campo **"Painel id"** do cliente `759334773`
+   estava VAZIO e foi auto-preenchido para `loL7ZaZ1XM` por um submit
+   acidental de formulário — usuário decide manter ou reverter.
+2. **Mensagem intermediária "🔄 Renovação em andamento…"** (commit
+   `7f6cdc0`) — código pronto no `openpix-webhook`, best-effort, suíte
+   `renovacao_em_andamento` verde. **NÃO deployada** (`openpix-webhook`
+   = v11). *(Deploy dela pode ir junto com a Camada 1 `e3bee32` — as
+   duas mexem só no `openpix-webhook`.)*
+3. **Latência da mensagem final** — pendência transversal de UX (a
+   mensagem final de sucesso demora a chegar após o processamento;
+   observada em Sigma ind/lote, UniTV ind, UniTV 2× lote, lote misto).
+   É do pipeline de resultado (`renovacao-sigma-resultado` + callback do
+   workflow), não específico de um tipo de acesso. **Uma única solução
+   para todo o pipeline**, nunca patch por tipo.
+4. **Revisão final dos cenários e encerramento** da Renovação
+   Automática.
+
+**Segundo PIX `d5241cc0` (fluxo de teste das ~03:35 UTC de 2026-08-29):**
+resolvido/limpo manualmente pelo usuário (`marcar_lote_como_falha` +
+`UPDATE cobrancas_pix SET status='cancelada'`, 10:25 UTC). Não pendente.
+A Camada 3, se ativa na época, também não teria agido — `reconciliarSePago`
+só recupera `COMPLETED`+valor exato; um pagamento que nunca virou
+`CHARGE_COMPLETED` na Woovi fica com a Camada 4 (transação não
+associada), fora de escopo.
 
 ---
 
