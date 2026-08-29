@@ -70,6 +70,26 @@ async function dispararWebhook(correlationId, event) {
 
 function idx(label) { return fSeq.sequencia().indexOf(label); }
 
+// Camada 1 de observabilidade (2026-08-29): captura das linhas de log
+// do proprio openpix-webhook (prefixo "[openpix-webhook]"), sem perder
+// a saida no console. Resetada por resetarLogs().
+const logsWebhook = [];
+const _origLog = console.log;
+console.log = (...args) => {
+  const linha = args.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
+  if (linha.includes("[openpix-webhook]")) logsWebhook.push(linha);
+  _origLog(...args);
+};
+function resetarLogs() { logsWebhook.length = 0; }
+function logsDoWebhook() { return logsWebhook.slice(); }
+function reqRaw(bodyObj) {
+  return new Request("https://x.test/openpix-webhook", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-webhook-signature": "assinatura-fake" },
+    body: JSON.stringify(bodyObj),
+  });
+}
+
 // =====================================================================
 // C1: individual, caminho feliz.
 //     Mensagem UMA vez, texto exato, ao telefone/conversa do token,
@@ -297,6 +317,94 @@ function idx(label) { return fSeq.sequencia().indexOf(label); }
   const resp = await dispararWebhook("op-c12", "OPENPIX:CHARGE_EXPIRED");
   ok(resp.status === 200, "C12: webhook responde 200");
   ok(fWa.enviadasFeitas().length === 0 && fDisp.chamadasFeitas().length === 0, "C12: nada processado");
+}
+
+// =====================================================================
+// OBS-1 (Camada 1, 2026-08-29): evento != CHARGE_COMPLETED agora deixa
+// RASTRO em log -- antes era descarte 100% silencioso. Comportamento
+// inalterado (200, nada processado).
+// =====================================================================
+{
+  resetar(); resetarLogs();
+  const resp = await handler(reqRaw({
+    event: "OPENPIX:TRANSACTION_RECEIVED",
+    pixTransaction: { endToEndId: "Ecd190030d05b45aaa3d9197e21deebc0", transactionID: "bc036e5d1f15454e8f63af8b8ac805ac" },
+    charge: { correlationID: "d5241cc0-3a46-401a-bbed-4a00ce3dd8c2", status: "ACTIVE" },
+  }));
+  await Promise.allSettled(pendentes); pendentes = [];
+
+  ok(resp.status === 200, "OBS-1: 200 (comportamento inalterado)");
+  ok(fCob.chamadasFeitas().length === 0 && fWa.enviadasFeitas().length === 0 && fDisp.chamadasFeitas().length === 0, "OBS-1: NADA processado");
+  const l = logsDoWebhook();
+  ok(l.some((x) => x.includes("evento ignorado") && x.includes("OPENPIX:TRANSACTION_RECEIVED")), "OBS-1: loga o evento ignorado com o tipo");
+  ok(l.some((x) => x.includes("d5241cc0-3a46-401a-bbed-4a00ce3dd8c2")), "OBS-1: loga o correlationID (id nao sensivel)");
+  ok(l.some((x) => x.includes("Ecd190030d05b45aaa3d9197e21deebc0")), "OBS-1: loga o endToEndId (id nao sensivel)");
+}
+
+// =====================================================================
+// OBS-2 (Camada 1): payload de evento ignorado com dados do PAGADOR
+// (nome / CPF / chave Pix) -- os identificadores nao-sensiveis sao
+// logados, os dados do pagador NUNCA.
+// =====================================================================
+{
+  resetar(); resetarLogs();
+  const resp = await handler(reqRaw({
+    event: "OPENPIX:TRANSACTION_RECEIVED",
+    pixTransaction: {
+      endToEndId: "E00000000TESTE",
+      payer: { name: "FULANO DE TAL DA SILVA", taxID: { taxID: "12345678900", type: "BR:CPF" } },
+    },
+    charge: { correlationID: "op-obs2", customer: { name: "FULANO DE TAL DA SILVA", taxID: "12345678900" } },
+  }));
+  await Promise.allSettled(pendentes); pendentes = [];
+
+  ok(resp.status === 200, "OBS-2: 200");
+  const blob = logsDoWebhook().join(" || ");
+  ok(blob.includes("op-obs2") && blob.includes("E00000000TESTE"), "OBS-2: loga correlationID + endToEndId");
+  ok(!/FULANO DE TAL|12345678900/i.test(blob), "OBS-2: NUNCA loga nome / CPF do pagador");
+}
+
+// =====================================================================
+// OBS-3 (Camada 1): CHARGE_COMPLETED sem correlationID -- rastro + 200.
+// =====================================================================
+{
+  resetar(); resetarLogs();
+  const resp = await handler(reqRaw({ event: "OPENPIX:CHARGE_COMPLETED", charge: {} }));
+  await Promise.allSettled(pendentes); pendentes = [];
+
+  ok(resp.status === 200, "OBS-3: 200");
+  ok(fCob.chamadasFeitas().length === 0, "OBS-3: nada processado (sem correlationID)");
+  ok(logsDoWebhook().some((x) => x.includes("sem correlationID")), "OBS-3: loga 'sem correlationID'");
+}
+
+// =====================================================================
+// OBS-4 (Camada 1): caminho feliz continua funcionando + agora deixa
+// rastro "recebido -- reconsultando". REGRESSAO de comportamento.
+// =====================================================================
+{
+  resetar(); resetarLogs();
+  fCob.configurarRetornoPaga({ grupo_id: null });
+  fTok.configurar({ telefone: "5517981625486", conversation_id: "conv-1" });
+
+  const resp = await dispararWebhook("op-obs4");
+  ok(resp.status === 200, "OBS-4: 200");
+  ok(fWa.enviadasFeitas().length === 1 && fDisp.chamadasFeitas().length === 1, "OBS-4: caminho feliz INTACTO (msg + dispatch)");
+  ok(logsDoWebhook().some((x) => x.includes("recebido -- reconsultando") && x.includes("op-obs4")), "OBS-4: rastro do CHARGE_COMPLETED recebido");
+}
+
+// =====================================================================
+// OBS-5 (Camada 1): reenvio de webhook (cobranca ja processada) --
+// rastro 'ja processada (reenvio)', nada disparado de novo.
+// =====================================================================
+{
+  resetar(); resetarLogs();
+  fCob.configurarRetornoPaga(null); // marcarCobrancaComoPaga -> null (ja processada)
+  fTok.configurar({ telefone: "5517981625486", conversation_id: "conv-1" });
+
+  const resp = await dispararWebhook("op-obs5");
+  ok(resp.status === 200, "OBS-5: 200");
+  ok(fDisp.chamadasFeitas().length === 0 && fWa.enviadasFeitas().length === 0, "OBS-5: reenvio -> nada disparado");
+  ok(logsDoWebhook().some((x) => x.includes("ja processada (reenvio)")), "OBS-5: rastro do reenvio");
 }
 
 // =====================================================================

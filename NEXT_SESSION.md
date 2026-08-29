@@ -80,15 +80,60 @@ Distinção de mensagem ao cliente na falha de resolução da conta UniTV,
   `renovacao-unitv-conta`, `unitv-renovar.mjs`, timeouts, criptografia,
   lógica de roteamento. **Sem deploy ainda.**
 
+### Frente `openpix-webhook` / reconciliação de pagamento perdido
+
+**Estado real do `d5241cc0` (verificação read-only, Camada 0):** o caso
+foi **resolvido MANUALMENTE por José ~10:25 UTC, ANTES do deploy da
+Peça 3 (12:15 UTC)** — `cobrancas_pix` → `cancelada` (UPDATE manual),
+`renovacoes_lote` → `falhou` + tokens → `renovacao_falhou` (via
+`marcar_lote_como_falha` manual, `motivo_falha` = "webhook OpenPix
+CHARGE_COMPLETED nunca chegou … limpeza manual pos-investigacao"). A
+Peça 3 **nunca tocou o `d5241cc0`** — já era terminal quando entrou no
+ar. **NÃO é evidência de que o watchdog tenha recuperado ou expirado
+essa operação.** A transação `bc036e5d…` (R$ 70, Confirmado no Woovi
+Sandbox) permanece "perdida" do ponto de vista do sistema (classe (ii):
+pagamento virou transação não associada, `GET /charge` nunca fica
+`COMPLETED`).
+
+**Evidência independente de que a Peça 3 funciona em produção:** às
+**12:40:02 UTC**, mesma conversa (`43fcff07`), o watchdog rodou o
+**Caso A** e expirou corretamente um token `aguardando_confirmacao`
+órfão após a janela de 2h (`expira_em`) — `sistema`: *"Watchdog:
+solicitação de renovação sem confirmação após a janela de 2h --
+expirada, acesso liberado."*
+
+**Camada 1 — observabilidade do `openpix-webhook`: IMPLEMENTADA (commit
+próprio, sem deploy).** Zero mudança de comportamento — só
+`console.log` + tipagem opcional + helper puro `idsNaoSensiveis`:
+- `event ≠ OPENPIX:CHARGE_COMPLETED` → agora **loga** `[openpix-webhook]
+  evento ignorado …` com `event` + ids não sensíveis
+  (`correlationID`/`endToEndId`/`transactionID`/`chargeGlobalID`/
+  `chargeStatus`), **nunca** nome/CPF/chave Pix do pagador. Antes era
+  `return 200` sem nenhum rastro (foi por isso que o diagnóstico do
+  `d5241cc0` precisou do dashboard da Woovi).
+- `!correlationId`, "recebido -- reconsultando" e "cobrança já
+  processada (reenvio)" também passam a deixar rastro. Os 3
+  early-returns de `processarCobrancaCompleted` já logavam.
+- 5 testes novos (`renovacao_em_andamento`: OBS-1..5), incl. um que
+  trava a **não-exposição de PII** e um de **regressão do caminho
+  feliz**. 24 suítes verdes.
+
 ### Pendências desta frente
-- Deploy da correção de UX (`orchestrator` + `mensagens_fixas.ts`).
-- Endurecer `openpix-webhook` para não ignorar silenciosamente eventos
-  ≠ `CHARGE_COMPLETED` (a raiz do `d5241cc0`) — não iniciado.
+- Deploy da correção de UX (`orchestrator` + `mensagens_fixas.ts`,
+  commit `aa9895d`).
+- Deploy da Camada 1 (`openpix-webhook`).
+- **Camada 3 — reconciliação antecipada (PRÓXIMA DECISÃO):** sweep leve
+  para `cobrancas_pix.status='pendente'` + lote/token `autorizada` há
+  > ~5–10 min → `reconciliarPagamentoRenovacao` → recupera **agora** se
+  a Woovi disser `COMPLETED`. Reduz o silêncio de até ~2h. Reusa a
+  função já construída (CAS-safe, idempotente). **Não** interpreta
+  transações não associadas.
+- Camada 2 (ampliar eventos aceitos) — só depois de capturar um
+  `TRANSACTION_RECEIVED` real e seu payload completo (a Camada 1 é o
+  pré-requisito).
+- Camada 4 (transação não associada) — separada; **sem** heurística de
+  valor/janela sem evidência suficiente.
 - Retry / distinção de erro do painel UniTV — adiado.
-- Limpeza do estado travado do `d5241cc0` (cobrança `pendente` +
-  lote/tokens `autorizada` antigos) — a Peça 3 agora resolve isso
-  automaticamente no próximo ciclo do watchdog (janela `expira_em`), mas
-  não foi verificado ao vivo.
 
 ---
 

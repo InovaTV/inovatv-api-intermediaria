@@ -67,7 +67,32 @@ import { MENSAGEM_RENOVACAO_EM_ANDAMENTO } from "../_shared/mensagens_fixas.ts";
 
 interface OpenPixWebhookPayload {
   event?: string;
-  charge?: { correlationID?: string };
+  // Camada 1 de observabilidade (2026-08-29): campos opcionais e
+  // DEFENSIVOS -- so' pra LOGAR identificadores de cobranca/transacao
+  // quando o evento NAO e' CHARGE_COMPLETED (payload de estrutura
+  // diferente). Nenhum deles altera comportamento; o unico campo lido
+  // pra decidir algo continua sendo `charge.correlationID` no caminho
+  // CHARGE_COMPLETED.
+  charge?: { correlationID?: string; globalID?: string; status?: string };
+  pixQrCode?: { correlationID?: string };
+  pixTransaction?: { endToEndId?: string; transactionID?: string };
+  pix?: { endToEndId?: string; transactionID?: string };
+}
+
+// Observabilidade (Camada 1) -- extrai SO' identificadores de
+// cobranca/transacao do payload. NUNCA nome, CPF/CNPJ, chave Pix ou
+// qualquer dado do pagador. Tudo opcional/defensivo.
+function idsNaoSensiveis(p: OpenPixWebhookPayload): Record<string, string> {
+  const ids: Record<string, string> = {};
+  const cc = p.charge?.correlationID ?? p.pixQrCode?.correlationID;
+  if (cc) ids.correlationID = cc;
+  if (p.charge?.globalID) ids.chargeGlobalID = p.charge.globalID;
+  if (p.charge?.status) ids.chargeStatus = p.charge.status;
+  const e2e = p.pixTransaction?.endToEndId ?? p.pix?.endToEndId;
+  if (e2e) ids.endToEndId = e2e;
+  const txid = p.pixTransaction?.transactionID ?? p.pix?.transactionID;
+  if (txid) ids.transactionID = txid;
+  return ids;
 }
 
 async function processarCobrancaCompleted(correlationId: string): Promise<void> {
@@ -107,6 +132,15 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
 
   if (valorBate) {
     const registroPago = await marcarCobrancaComoPaga(correlationId);
+    if (!registroPago) {
+      // Camada 1 de observabilidade: reenvio de webhook de uma cobranca
+      // ja processada (status != 'pendente'). Comportamento inalterado
+      // (nao dispara nada) -- so' deixa rastro.
+      console.log(
+        "[openpix-webhook] cobranca ja processada (reenvio) -- nada a fazer",
+        JSON.stringify({ correlationId }),
+      );
+    }
     if (registroPago) {
       // So' dispara se marcarCobrancaComoPaga afetou uma linha DE
       // VERDADE (nunca em reenvio de webhook ja processado). Async,
@@ -223,16 +257,34 @@ Deno.serve(async (req: Request) => {
   }
 
   if (payload.event !== "OPENPIX:CHARGE_COMPLETED") {
-    // Reconhece e descarta -- outros eventos (ex: futuros tipos que a
-    // OpenPix venha a enviar) nao sao relevantes pro Bloco 1.
+    // Reconhece e descarta -- outros eventos (transacao recebida,
+    // cobranca expirada, futuros tipos) nao sao tratados pelo Bloco 1.
+    // Camada 1 de observabilidade (2026-08-29): ANTES isso era um
+    // `return 200` SEM NENHUM rastro -- foi por isso que o diagnostico
+    // do d5241cc0 (pagamento que virou uma transacao nao associada a
+    // cobranca) precisou do dashboard da Woovi. Comportamento
+    // INALTERADO: continua reconhecido com 200 e ignorado; so' passa a
+    // ser visivel em `functions logs`.
+    console.log(
+      "[openpix-webhook] evento ignorado (nao e OPENPIX:CHARGE_COMPLETED)",
+      JSON.stringify({ event: payload.event ?? null, ...idsNaoSensiveis(payload) }),
+    );
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
 
   const correlationId = payload.charge?.correlationID;
   if (!correlationId) {
-    console.log("[openpix-webhook] payload CHARGE_COMPLETED sem correlationID");
+    console.log(
+      "[openpix-webhook] CHARGE_COMPLETED sem correlationID -- nada a processar",
+      JSON.stringify({ event: payload.event, ...idsNaoSensiveis(payload) }),
+    );
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
+
+  console.log(
+    "[openpix-webhook] CHARGE_COMPLETED recebido -- reconsultando",
+    JSON.stringify({ correlationId }),
+  );
 
   try {
     await processarCobrancaCompleted(correlationId);
