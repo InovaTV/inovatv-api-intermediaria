@@ -214,8 +214,8 @@ não-determinístico por requisição, caracterizado ao vivo no ChannelTV).
   mensagem, transferência com `avisarCliente:false` (sem duplicar a
   frase genérica). Estado (`resultado_ambiguo → renovacao_indeterminada`),
   aviso ao José e Peça 3 **inalterados**.
-- **NÃO nesta iteração:** pré-check Sigma antes da cobrança (deferido
-  para Iteração 2, só se o retry de leitura provar insuficiente).
+- **Pré-check Sigma antes da cobrança:** ver decisão arquitetural
+  fechada logo abaixo — **DESNECESSÁRIO**, não haverá.
 - **Intocados:** UniTV (100%), Camada 3/watchdog, OpenPix, prompt/Gemini,
   Validador, estado conversacional.
 - **Testes:** `rocket-sigma-contexto` (spec 1–10), `renovacao-sigma-workflow-leitura`
@@ -224,6 +224,38 @@ não-determinístico por requisição, caracterizado ao vivo no ChannelTV).
   (spec-instab/spec-reg/spec18), `mensagens_renovacao_apresentacao`.
   Removidos os testes que pressupunham 2º clique.
 - **Sem deploy, sem teste real, sem cobrança.**
+
+### DECISÃO ARQUITETURAL FECHADA — PRÉ-CHECK SIGMA = DESNECESSÁRIO (2026-08-29, aprovada pelo usuário)
+
+Análise read-only completa (o que a Iteração 1 já protege · falhas
+possíveis pós-pagamento · o que um pré-check evitaria · custo de
+resolver `public_id → idClienteInterno` antes da cobrança · risco de
+falso positivo/negativo pela mesma intermitência · impacto em
+individual e lote misto · geral para Sigma ou não existir). Conclusão:
+
+- **Não haverá pré-check Sigma antes da cobrança.**
+- **Não haverá tratamento especial de ChannelTV (nem de qualquer
+  servidor) no Orquestrador.**
+- **Prevenção** = qualidade da integração/configuração do servidor no
+  Rocket (URL do painel, credenciais/token de revenda). **Recuperação**
+  = Camada A (retry só de leitura) + Peça 3 (reconciliação financeira,
+  dinheiro nunca perdido).
+- **A Iteração 1 é a solução definitiva para a intermitência de
+  autenticação**, exatamente com este escopo: `Unauthenticated` nunca
+  vira `pacote_vazio`; retry somente de leitura; clique de renovação no
+  máximo 1×; dúvida pós-clique → resultado seguro/atendimento, nunca
+  2º clique; Peça 3 protege a reconciliação financeira.
+- **Só reabrir** se **dados reais em produção** mostrarem falhas
+  recorrentes de auth que o retry da Camada A comprovadamente não
+  consiga absorver — nunca por especulação.
+
+**Fora de escopo, explicitamente (correção do usuário, 2026-08-29):**
+crédito/saldo negativo no Rocket é questão interna do usuário, **vale
+para todos os servidores, não só ChannelTV**. Não é bloqueio do fluxo
+de Renovação Automática, não entra em nenhuma lista de pendências desta
+frente, e **não haverá** teste, pré-check, regra, log ou tratamento
+relacionado a saldo negativo. Crédito negativo no Rocket **não impede**
+o fluxo da Renovação Automática.
 
 ### Pendências desta frente
 - Deploy da correção de UX UniTV (`orchestrator` + `mensagens_fixas.ts`,
@@ -244,16 +276,18 @@ não-determinístico por requisição, caracterizado ao vivo no ChannelTV).
 **Camada 3 em produção (watchdog v11). Iteração 1 COMMITADA, NÃO
 DEPLOYADA (checkpoint acima, 24/24 verde).**
 
-**Próxima etapa: decidir o deploy da Iteração 1.** Antes de decidir,
-**verificar se ainda precisamos do pré-check Sigma antes da cobrança ou
-se os retries de leitura (Camada A + reconsulta extra) são
-suficientes** — a Iteração 1 foi desenhada justamente para testar a
-eficácia do retry primeiro, sem criar gate específico de ChannelTV.
-Alvos de deploy da Iteração 1: `renovacao-sigma-contexto` (Camada A),
-`renovacao-sigma-resultado` (mensagem de instabilidade), `_shared`
-empacotado com elas. `scripts/renovacao-sigma-workflow.mjs` é script do
-GitHub Actions (commitado, não deployado ao Supabase). Nada de teste
-real/cobrança sem autorização própria.
+**Pré-check Sigma: DECISÃO FECHADA — DESNECESSÁRIO** (ver "DECISÃO
+ARQUITETURAL FECHADA" no checkpoint da Iteração 1, acima). A Iteração 1
+(reclassificação + retry só de leitura + clique único + Peça 3) **é** a
+solução da intermitência de auth; a pergunta "precisamos de pré-check?"
+está respondida.
+
+**Próxima etapa: decidir o deploy da Iteração 1.** Alvos:
+`renovacao-sigma-contexto` (Camada A), `renovacao-sigma-resultado`
+(mensagem de instabilidade), `_shared` empacotado com elas.
+`scripts/renovacao-sigma-workflow.mjs` é script do GitHub Actions
+(commitado, não deployado ao Supabase). Nada de teste real/cobrança
+sem autorização própria.
 
 **Depois disso: voltar à matriz de Renovação Automática e tratar os
 pendentes já conhecidos, nesta ordem (nada é ação financeira sem
