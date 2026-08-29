@@ -410,6 +410,28 @@ export async function buscarLotesAutorizadosVinculadosExpirados(): Promise<Renov
   return (data as RenovacaoLote[]) ?? [];
 }
 
+// CAMADA 3 (2026-08-29) -- espelho lote de
+// buscarAutorizacoesVinculadasAindaNaJanela (tokens_renovacao.ts). Lote
+// 'autorizada' + cobranca vinculada, AINDA dentro da janela de 2h, criado ha'
+// pelo menos `minutosMinimos`. So' recupera se a Woovi confirmar COMPLETED +
+// valor exato -- NUNCA expira o lote aqui (sweep de expira_em e' o dono).
+export async function buscarLotesAutorizadosVinculadosAindaNaJanela(
+  minutosMinimos: number,
+): Promise<RenovacaoLote[]> {
+  const client = getServiceClient();
+  const agora = Date.now();
+  const tetoCriadoEm = new Date(agora - minutosMinimos * 60 * 1000).toISOString();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .eq("estado", "autorizada")
+    .not("operacao_id", "is", null)
+    .gte("expira_em", new Date(agora).toISOString())
+    .lt("criado_em", tetoCriadoEm);
+  if (error) throw error;
+  return (data as RenovacaoLote[]) ?? [];
+}
+
 // CASO C -- expira um lote 'autorizada' + filhos 'autorizada' via RPC
 // atomica expirar_lote_autorizado (migration
 // 20260829140000_expirar_lote_autorizado.sql). 'expirada' (janela

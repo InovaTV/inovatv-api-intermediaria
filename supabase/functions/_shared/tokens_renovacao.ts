@@ -451,6 +451,33 @@ export async function buscarAutorizacoesVinculadasExpiradas(): Promise<TokenReno
   return (data as TokenRenovacao[]) ?? [];
 }
 
+// CAMADA 3 (2026-08-29) -- reconciliacao ANTECIPADA. Mesmo recorte de
+// buscarAutorizacoesVinculadasExpiradas, mas do lado de DENTRO da janela de 2h:
+// 'autorizada' + cobranca vinculada, expira_em ainda no futuro, criada ha' pelo
+// menos `minutosMinimos` (piso pra nao consultar a Woovi por uma cobranca que o
+// cliente simplesmente ainda nao pagou). O conjunto e' naturalmente proximo de
+// zero (so' cobrancas genuinamente aguardando pagamento ha' > 5min, menos as ja
+// recuperadas). O chamador so' AGE se a Woovi disser COMPLETED+valor exato --
+// NUNCA expira nada aqui (isso e' 100% do sweep de expira_em).
+export async function buscarAutorizacoesVinculadasAindaNaJanela(
+  minutosMinimos: number,
+): Promise<TokenRenovacao[]> {
+  const client = getServiceClient();
+  const agora = Date.now();
+  const tetoCriadoEm = new Date(agora - minutosMinimos * 60 * 1000).toISOString();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("*")
+    .eq("estado", "autorizada")
+    .not("operacao_id", "is", null)
+    .is("grupo_id", null)
+    .gte("expira_em", new Date(agora).toISOString())
+    .lt("criado_em", tetoCriadoEm);
+
+  if (error) throw error;
+  return (data as TokenRenovacao[]) ?? [];
+}
+
 // CASO C -- expira um token 'autorizada' (avulso) que a Woovi confirmou
 // NAO pago. CAS por estado: 0 linhas = o token ja avancou (webhook
 // ganhou a corrida de milissegundos, ou outro watchdog) -> o chamador

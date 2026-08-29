@@ -29,6 +29,8 @@ import {
   buscarTokensTerminaisComCobrancaSemRenovacao,
   marcarCicloRenovacaoEncerrado,
   expirarSeVencido,
+  // Camada 3 (2026-08-29) -- reconciliacao ANTECIPADA (dentro da janela de 2h)
+  buscarAutorizacoesVinculadasAindaNaJanela,
 } from "../_shared/tokens_renovacao.ts";
 import {
   buscarLotesEmAndamentoAntigos,
@@ -44,6 +46,8 @@ import {
   buscarLotesTerminaisComCobrancaSemRenovacao,
   marcarLoteCicloRenovacaoEncerrado,
   expirarLoteSeVencido,
+  // Camada 3 (2026-08-29) -- reconciliacao ANTECIPADA (dentro da janela de 2h)
+  buscarLotesAutorizadosVinculadosAindaNaJanela,
 } from "../_shared/renovacoes_lote.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
@@ -51,11 +55,19 @@ import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { montarMensagemResultadoLote, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO } from "../_shared/mensagens_fixas.ts";
 import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
 // Peca 3 (2026-08-29) -- reconciliacao de pagamento (reusa as primitivas CAS do openpix-webhook)
-import { reconciliarPagamentoRenovacao } from "../_shared/reconciliacao_renovacao.ts";
+import { reconciliarPagamentoRenovacao, reconciliarSePago } from "../_shared/reconciliacao_renovacao.ts";
 import { buscarCobrancaPorOperacaoId, marcarCobrancaComoPaga, expirarCobrancaPendente } from "../_shared/cobrancas_pix.ts";
 import { consultarCobrancaOpenPix } from "../_shared/openpix_client.ts";
 
 const JANELA_MINUTOS = 15;
+
+// CAMADA 3 (2026-08-29) -- piso de idade da cobranca antes da 1a reconsulta
+// antecipada. 5min: acima da latencia real de um Pix (o cliente costuma pagar em
+// segundos-a-minutos), entao uma cobranca ainda 'pendente' passados 5min ou o
+// cliente nao pagou (reconsulta barata, no-op) ou o webhook se perdeu
+// (recupera). Casado com a cadencia do cron (*/5) -> recuperacao em ~10min, no
+// lugar das 2h do sweep de expira_em.
+const JANELA_RECONCILIACAO_ANTECIPADA_MINUTOS = 5;
 
 Deno.serve(async (req: Request) => {
   const tokenInterno = Deno.env.get("RENOVACAO_SIGMA_WATCHDOG_TOKEN");
@@ -102,6 +114,16 @@ Deno.serve(async (req: Request) => {
   // CASO A -- 'aguardando_confirmacao' vencido (cliente nunca clicou).
   const aguardandoExpiradas = await buscarSolicitacoesAguardandoExpiradas();
   const lotesAguardandoExpirados = await buscarLotesAguardandoExpirados();
+  // CAMADA 3 -- reconciliacao ANTECIPADA: 'autorizada' + cobranca vinculada,
+  // AINDA dentro da janela de 2h, criada ha' >= 5min. So' recupera se a Woovi
+  // disser COMPLETED + valor exato; qualquer outro resultado e' no-op absoluto
+  // (a expiracao continua 100% nos CASOS B/C/E abaixo).
+  const reconciliacaoAntecipada = await buscarAutorizacoesVinculadasAindaNaJanela(
+    JANELA_RECONCILIACAO_ANTECIPADA_MINUTOS,
+  );
+  const lotesReconciliacaoAntecipada = await buscarLotesAutorizadosVinculadosAindaNaJanela(
+    JANELA_RECONCILIACAO_ANTECIPADA_MINUTOS,
+  );
   // CASOS B/C/E -- 'autorizada' COM cobranca vinculada, alem do expira_em.
   const autorizacoesVinculadas = await buscarAutorizacoesVinculadasExpiradas();
   const lotesVinculados = await buscarLotesAutorizadosVinculadosExpirados();
@@ -117,6 +139,8 @@ Deno.serve(async (req: Request) => {
     lotesOrfaos.length === 0 &&
     aguardandoExpiradas.length === 0 &&
     lotesAguardandoExpirados.length === 0 &&
+    reconciliacaoAntecipada.length === 0 &&
+    lotesReconciliacaoAntecipada.length === 0 &&
     autorizacoesVinculadas.length === 0 &&
     lotesVinculados.length === 0 &&
     tokensConciliar.length === 0 &&
@@ -375,6 +399,52 @@ Deno.serve(async (req: Request) => {
     lotesAguardandoProcessados.push(lote.grupo_id);
   }
 
+  // ===== CAMADA 3 -- reconciliacao ANTECIPADA (DENTRO da janela de 2h) =====
+  // Corta a janela de silencio de ~2h para ~10min quando um webhook
+  // OPENPIX:CHARGE_COMPLETED se perde. NUNCA expira / cancela / marca
+  // divergencia: reconciliarSePago so' AGE em "COMPLETED + valor exato" e, nesse
+  // caso, recupera pelo MESMO nucleo (executarRecuperacao) que o openpix-webhook
+  // usa -- convergindo exatamente para o fluxo normal. Todo o resto
+  // (ACTIVE / EXPIRED / Woovi indisponivel / sem registro / valor divergente) e'
+  // no-op absoluto aqui; a expiracao e a conciliacao de divergencia seguem
+  // exclusivas dos CASOS B/C/E abaixo. Idempotencia/concorrencia: mesmos CAS da
+  // Peca 3 -- reivindicarInicio* e' o portao de vencedor unico; a query
+  // buscar*AindaNaJanela ja nao devolve o item apos a recuperacao (saiu de
+  // 'autorizada'); a nota de sistema so' e' inserida pelo vencedor da CAS.
+  const reconciliadasAntecipadas: string[] = [];
+  for (const token of reconciliacaoAntecipada) {
+    if (!token.operacao_id) continue;
+    const r = await reconciliarSePago({ operacaoId: token.operacao_id, tipo: "individual" });
+    if (r.outcome === "recuperado_disparado" || r.outcome === "recuperado_dispatch_falhou") {
+      await inserirMensagem(
+        token.conversation_id,
+        "sistema",
+        "Watchdog: pagamento confirmado na Woovi antes da janela de 2h (webhook nao chegou) -- renovacao recuperada e disparada.",
+        null,
+      ).catch(() => {});
+      reconciliadasAntecipadas.push(token.id);
+    }
+    // r.outcome === "ja_em_andamento" -> outro caminho (webhook real / sweep /
+    //   outro watchdog) ja ganhou; nada a fazer, nem nota.
+    // r.outcome === "nao_recuperado" (nao_pago / ACTIVE / EXPIRED /
+    //   woovi_indisponivel / sem_registro / valor_divergente) -> NO-OP ABSOLUTO.
+  }
+
+  const lotesReconciliadosAntecipados: string[] = [];
+  for (const lote of lotesReconciliacaoAntecipada) {
+    if (!lote.operacao_id) continue;
+    const r = await reconciliarSePago({ operacaoId: lote.operacao_id, tipo: "lote" });
+    if (r.outcome === "recuperado_disparado" || r.outcome === "recuperado_dispatch_falhou") {
+      await inserirMensagem(
+        lote.conversation_id,
+        "sistema",
+        "Watchdog: pagamento do lote confirmado na Woovi antes da janela de 2h (webhook nao chegou) -- renovacao recuperada e disparada.",
+        null,
+      ).catch(() => {});
+      lotesReconciliadosAntecipados.push(lote.grupo_id);
+    }
+  }
+
   // ===== CASOS B / C / E -- 'autorizada' + cobranca vinculada + venceu =====
   const vinculadasProcessadas: string[] = [];
   for (const token of autorizacoesVinculadas) {
@@ -609,6 +679,8 @@ Deno.serve(async (req: Request) => {
       lotesOrfaosProcessados.length +
       aguardandoProcessadas.length +
       lotesAguardandoProcessados.length +
+      reconciliadasAntecipadas.length +
+      lotesReconciliadosAntecipados.length +
       vinculadasProcessadas.length +
       lotesVinculadosProcessados.length +
       conciliadas.length,
@@ -622,5 +694,8 @@ Deno.serve(async (req: Request) => {
     autorizacoesVinculadasExpiradas: vinculadasProcessadas,
     lotesVinculadosExpirados: lotesVinculadosProcessados,
     conciliadas,
+    // Camada 3 (2026-08-29) -- reconciliacao antecipada
+    reconciliadasAntecipadas,
+    lotesReconciliadosAntecipados,
   });
 });

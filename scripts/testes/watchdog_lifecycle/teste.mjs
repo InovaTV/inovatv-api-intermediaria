@@ -75,6 +75,10 @@ function run() {
 
 const H_ATRAS = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h atras (vencido)
 const DIAS2_ATRAS = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(); // > carencia de 24h
+// Camada 3 -- reconciliacao ANTECIPADA (dentro da janela de 2h)
+const MIN10_ATRAS = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // criado ha' 10min (> piso de 5min)
+const MIN2_ATRAS = new Date(Date.now() - 2 * 60 * 1000).toISOString(); // criado ha' 2min (< piso de 5min -> cedo demais)
+const FUTURO_2H = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(); // expira_em ainda no futuro
 
 // ---------------------------------------------------------------------
 // CASO A -- 'aguardando_confirmacao' vencido, sem cobranca
@@ -300,6 +304,172 @@ async function lote_C_naoPago() {
 }
 
 // ---------------------------------------------------------------------
+// CAMADA 3 -- reconciliacao ANTECIPADA (dentro da janela de 2h)
+//   COMPLETED + valor exato -> recupera pelo MESMO nucleo do fluxo normal
+//   qualquer outro resultado -> NO-OP ABSOLUTO (nunca expira/cancela/diverge)
+// ---------------------------------------------------------------------
+async function c3_recupera_individual() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3a", estado: "autorizada", operacao_id: "op-C3a", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3a", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3a", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+
+  await run();
+
+  ok(C._all().find((c) => c.operacao_id === "op-C3a").status === "pago", "C3 recupera ind: cobranca 'pendente' -> 'pago'");
+  ok(
+    T._all().find((t) => t.id === "tk-C3a").estado === "renovacao_em_andamento",
+    "C3 recupera ind: token 'autorizada' -> 'renovacao_em_andamento' ANTES das 2h",
+  );
+  ok(
+    GH.disparosRegistrados().length === 1 && GH.disparosRegistrados()[0] === "op-C3a",
+    "C3 recupera ind: workflow disparado exatamente 1x (fluxo normal, executarRecuperacao)",
+  );
+  ok(CV.acionamentos().length === 0, "C3 recupera ind: NENHUMA transferencia");
+  ok(WA.mensagensEnviadas().length === 0, "C3 recupera ind: nenhuma mensagem fixa ao cliente (renovacao segue normal)");
+  ok(MA.mensagens().filter((m) => m.origem === "sistema").length === 1, "C3 recupera ind: 1 nota de sistema (so' o vencedor da CAS)");
+
+  await run(); // idempotencia
+  ok(GH.disparosRegistrados().length === 1, "C3 recupera ind: 2a execucao NAO redispara (token saiu de 'autorizada')");
+}
+async function c3_recupera_lote() {
+  resetarTudo();
+  L._seed([{ grupo_id: "gp-C3a", estado: "autorizada", operacao_id: "op-LC3a", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-LC3a", status: "pendente", valor_esperado_centavos: 7000 }]);
+  OP._definir("op-LC3a", { outcome: "success", status: "COMPLETED", amountCentavos: 7000 });
+
+  await run();
+
+  ok(L._all().find((l) => l.grupo_id === "gp-C3a").estado === "renovacao_em_andamento", "C3 recupera lote: lote 'autorizada' -> 'renovacao_em_andamento' ANTES das 2h");
+  ok(C._all().find((c) => c.operacao_id === "op-LC3a").status === "pago", "C3 recupera lote: cobranca 'pago'");
+  ok(GH.disparosRegistrados().length === 1, "C3 recupera lote: workflow disparado 1x");
+  ok(CV.acionamentos().length === 0, "C3 recupera lote: nenhuma transferencia");
+}
+async function c3_ainda_nao_pago() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3b", estado: "autorizada", operacao_id: "op-C3b", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3b", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3b", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+
+  ok(C._all().find((c) => c.operacao_id === "op-C3b").status === "pendente", "C3 nao pago: cobranca INTOCADA ('pendente')");
+  ok(T._all().find((t) => t.id === "tk-C3b").estado === "autorizada", "C3 nao pago: token INTOCADO ('autorizada') -- NAO expira");
+  ok(GH.disparosRegistrados().length === 0, "C3 nao pago: nenhum workflow");
+  ok(CV.acionamentos().length === 0, "C3 nao pago: nenhuma transferencia");
+  ok(WA.mensagensEnviadas().length === 0, "C3 nao pago: nenhuma mensagem ao cliente");
+  ok(MA.mensagens().length === 0, "C3 nao pago: nenhuma nota de sistema");
+
+  await run();
+  ok(C._all().find((c) => c.operacao_id === "op-C3b").status === "pendente", "C3 nao pago: 2a execucao segue no-op");
+}
+async function c3_cedo_demais() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3c", estado: "autorizada", operacao_id: "op-C3c", expira_em: FUTURO_2H, criado_em: MIN2_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3c", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3c", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+
+  await run();
+
+  ok(!OP.consultasRegistradas().includes("op-C3c"), "C3 cedo demais: Woovi NUNCA consultada (criado ha' < 5min)");
+  ok(T._all().find((t) => t.id === "tk-C3c").estado === "autorizada", "C3 cedo demais: token INTOCADO");
+  ok(C._all().find((c) => c.operacao_id === "op-C3c").status === "pendente", "C3 cedo demais: cobranca INTOCADA");
+  ok(GH.disparosRegistrados().length === 0, "C3 cedo demais: nenhum workflow");
+}
+async function c3_ja_expirado_fora_da_query() {
+  resetarTudo();
+  // token VENCIDO (expira_em no passado): pertence ao sweep de expira_em (Caso B/C/E),
+  // NUNCA a' Camada 3.
+  T._seed([{ id: "tk-C3d", estado: "autorizada", operacao_id: "op-C3d", expira_em: H_ATRAS, criado_em: MIN10_ATRAS }]);
+  const naJanela = await T.buscarAutorizacoesVinculadasAindaNaJanela(5);
+  ok(naJanela.length === 0, "C3 ja expirado: token vencido NAO entra na query da Camada 3");
+
+  // e o sweep de expira_em continua funcionando normal, sem caminho duplo:
+  C._seed([{ operacao_id: "op-C3d", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3d", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+  await run();
+  ok(T._all().find((t) => t.id === "tk-C3d").estado === "renovacao_em_andamento", "C3 ja expirado: recuperado pelo sweep de expira_em (Caso B), sem regressao");
+  ok(GH.disparosRegistrados().length === 1, "C3 ja expirado: workflow 1x (nao ha' caminho duplo)");
+}
+async function c3_valor_divergente_sem_efeito() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3e", estado: "autorizada", operacao_id: "op-C3e", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3e", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3e", { outcome: "success", status: "COMPLETED", amountCentavos: 3499 }); // diverge
+
+  await run();
+
+  ok(
+    C._all().find((c) => c.operacao_id === "op-C3e").status === "pendente",
+    "C3 divergente: cobranca INTOCADA ('pendente') -- Camada 3 NAO marca 'valor_divergente' (isso e' do Caso E)",
+  );
+  ok(T._all().find((t) => t.id === "tk-C3e").estado === "autorizada", "C3 divergente: token INTOCADO ('autorizada')");
+  ok(GH.disparosRegistrados().length === 0, "C3 divergente: nenhum workflow");
+  ok(CV.acionamentos().length === 0, "C3 divergente: nenhuma transferencia");
+  ok(MA.mensagens().length === 0, "C3 divergente: nenhuma nota de sistema");
+}
+async function c3_concorrencia() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3f", estado: "autorizada", operacao_id: "op-C3f", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3f", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3f", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+
+  await Promise.all([run(), run(), run()]); // 3 watchdogs concorrentes
+
+  ok(GH.disparosRegistrados().length === 1, "C3 concorrencia: 3 watchdogs -> workflow disparado EXATAMENTE 1x");
+  ok(T._all().find((t) => t.id === "tk-C3f").estado === "renovacao_em_andamento", "C3 concorrencia: token consistente");
+  ok(C._all().find((c) => c.operacao_id === "op-C3f").status === "pago", "C3 concorrencia: cobranca 'pago' (nunca perdida)");
+  ok(
+    MA.mensagens().filter((m) => m.origem === "sistema").length === 1,
+    "C3 concorrencia: no maximo 1 nota de sistema (so' o vencedor da CAS)",
+  );
+}
+async function c3_corrida_com_webhook() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3g", estado: "autorizada", operacao_id: "op-C3g", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3g", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3g", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+  // Simula o WEBHOOK real ganhando a corrida enquanto a Camada 3 "espera" a
+  // Woovi: marca 'pago' + avanca o token + dispara -- exatamente o
+  // openpix-webhook. reconciliarSePago segue, mas reivindicarInicio devolve
+  // null -> 'ja_em_andamento' -> Camada 3 nao faz nada.
+  OP._aoConsultar(async () => {
+    await C.marcarCobrancaComoPaga("op-C3g");
+    await T.reivindicarInicioRenovacao("op-C3g");
+    await GH.dispararWorkflowRenovacaoSigma("op-C3g");
+  });
+
+  await run();
+
+  ok(GH.disparosRegistrados().length === 1, "C3 corrida-webhook: workflow disparado EXATAMENTE 1x (webhook ganhou; Camada 3 nao redispara)");
+  ok(T._all().find((t) => t.id === "tk-C3g").estado === "renovacao_em_andamento", "C3 corrida-webhook: token consistente");
+  ok(C._all().find((c) => c.operacao_id === "op-C3g").status === "pago", "C3 corrida-webhook: cobranca 'pago' (nunca perdida)");
+  ok(
+    MA.mensagens().filter((m) => m.origem === "sistema").length === 0,
+    "C3 corrida-webhook: Camada 3 NAO emite nota (recebeu 'ja_em_andamento')",
+  );
+}
+async function c3_woovi_indisponivel() {
+  resetarTudo();
+  T._seed([{ id: "tk-C3h", estado: "autorizada", operacao_id: "op-C3h", expira_em: FUTURO_2H, criado_em: MIN10_ATRAS }]);
+  C._seed([{ operacao_id: "op-C3h", status: "pendente", valor_esperado_centavos: 3500 }]);
+  OP._definir("op-C3h", { outcome: "unavailable" });
+
+  await run();
+
+  ok(T._all().find((t) => t.id === "tk-C3h").estado === "autorizada", "C3 woovi indisponivel: token INTOCADO");
+  ok(C._all().find((c) => c.operacao_id === "op-C3h").status === "pendente", "C3 woovi indisponivel: cobranca INTOCADA");
+  ok(GH.disparosRegistrados().length === 0, "C3 woovi indisponivel: nenhum workflow");
+  ok(CV.acionamentos().length === 0, "C3 woovi indisponivel: nenhuma transferencia");
+  ok(MA.mensagens().length === 0, "C3 woovi indisponivel: nenhuma nota de sistema");
+
+  // proximo ciclo tenta de novo (token continua elegivel)
+  OP._definir("op-C3h", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 });
+  await run();
+  ok(T._all().find((t) => t.id === "tk-C3h").estado === "renovacao_em_andamento", "C3 woovi indisponivel: proximo ciclo recupera quando a Woovi volta");
+}
+
+// ---------------------------------------------------------------------
 async function vazio() {
   resetarTudo();
   const resp = await run();
@@ -322,6 +492,16 @@ await casoD_housekeeping();
 await casoD_housekeeping_dentroDaCarencia();
 await lote_B_recuperar();
 await lote_C_naoPago();
+// Camada 3 -- reconciliacao antecipada
+await c3_recupera_individual();
+await c3_recupera_lote();
+await c3_ainda_nao_pago();
+await c3_cedo_demais();
+await c3_ja_expirado_fora_da_query();
+await c3_valor_divergente_sem_efeito();
+await c3_concorrencia();
+await c3_corrida_com_webhook();
+await c3_woovi_indisponivel();
 await vazio();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

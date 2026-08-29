@@ -93,6 +93,12 @@ class QueryBuilder {
     this.filtros.push({ tipo: "lt", coluna, valor });
     return this;
   }
+  gte(coluna, valor) {
+    // Camada 3 (2026-08-29): buscar*VinculadasAindaNaJanela usa
+    // .gte("expira_em", now) = "expira_em >= now" (ainda na janela de 2h).
+    this.filtros.push({ tipo: "gte", coluna, valor });
+    return this;
+  }
   order() {
     return this;
   }
@@ -123,6 +129,7 @@ class QueryBuilder {
         }
         if (f.tipo === "in") return f.valores.includes(linha[f.coluna]);
         if (f.tipo === "lt") return linha[f.coluna] != null && linha[f.coluna] < f.valor;
+        if (f.tipo === "gte") return linha[f.coluna] != null && linha[f.coluna] >= f.valor;
         return true;
       }),
     );

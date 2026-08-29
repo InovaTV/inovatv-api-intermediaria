@@ -13,6 +13,7 @@ export function _seed(lista) {
     operacao_id: l.operacao_id ?? null,
     conversation_id: l.conversation_id ?? "conv-1",
     telefone: l.telefone ?? "5511999999999",
+    criado_em: l.criado_em ?? null,
     expira_em: l.expira_em,
     renovacao_concluida_em: l.renovacao_concluida_em ?? null,
   }));
@@ -38,6 +39,20 @@ export async function buscarLotesTerminaisComCobrancaSemRenovacao() {
   const TERM = ["expirada", "falhou", "cancelada"];
   return lotes
     .filter((l) => TERM.includes(l.estado) && l.operacao_id && !l.renovacao_concluida_em)
+    .map((l) => ({ ...l }));
+}
+// CAMADA 3 -- espelho lote de buscarAutorizacoesVinculadasAindaNaJanela.
+export async function buscarLotesAutorizadosVinculadosAindaNaJanela(minutosMinimos) {
+  const teto = Date.now() - minutosMinimos * 60 * 1000;
+  return lotes
+    .filter(
+      (l) =>
+        l.estado === "autorizada" &&
+        l.operacao_id &&
+        !venceu(l) &&
+        l.criado_em &&
+        new Date(l.criado_em).getTime() < teto,
+    )
     .map((l) => ({ ...l }));
 }
 

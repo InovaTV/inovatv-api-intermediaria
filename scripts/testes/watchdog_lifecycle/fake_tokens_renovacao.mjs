@@ -16,6 +16,7 @@ export function _seed(lista) {
     grupo_id: t.grupo_id ?? null,
     conversation_id: t.conversation_id ?? "conv-1",
     telefone: t.telefone ?? "5511999999999",
+    criado_em: t.criado_em ?? null,
     expira_em: t.expira_em,
     renovacao_iniciada_em: t.renovacao_iniciada_em ?? null,
     renovacao_concluida_em: t.renovacao_concluida_em ?? null,
@@ -45,6 +46,22 @@ export async function buscarTokensTerminaisComCobrancaSemRenovacao() {
   const TERM = ["expirada", "renovacao_falhou", "renovacao_indeterminada", "cancelada"];
   return tokens
     .filter((t) => TERM.includes(t.estado) && t.operacao_id && !t.grupo_id && !t.renovacao_concluida_em)
+    .map((t) => ({ ...t }));
+}
+// CAMADA 3 -- 'autorizada' + cobranca vinculada, AINDA na janela (expira_em no
+// futuro) e criada ha' >= minutosMinimos.
+export async function buscarAutorizacoesVinculadasAindaNaJanela(minutosMinimos) {
+  const teto = Date.now() - minutosMinimos * 60 * 1000;
+  return tokens
+    .filter(
+      (t) =>
+        t.estado === "autorizada" &&
+        t.operacao_id &&
+        !t.grupo_id &&
+        !venceu(t) &&
+        t.criado_em &&
+        new Date(t.criado_em).getTime() < teto,
+    )
     .map((t) => ({ ...t }));
 }
 
