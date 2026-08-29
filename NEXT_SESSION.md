@@ -11,6 +11,87 @@
 
 ---
 
+## SESSÃO 2026-08-29 (continuação) — gerenciamento de estado + ciclo de vida financeiro + UX UniTV
+
+**O §0 abaixo (investigar o PIX `d5241cc0`) foi CONCLUÍDO nesta sessão.**
+Achado: o PIX `d5241cc0` **foi pago no Woovi Sandbox**, mas o webhook
+entregue ao `openpix-webhook` era um evento de **transação** (coluna
+"Cobrança" vazia), não `OPENPIX:CHARGE_COMPLETED` — e o `openpix-webhook`
+ignora silenciosamente (sem log) todo evento ≠ `CHARGE_COMPLETED`. Isso
+motivou o trabalho abaixo.
+
+### Peças 1/2/3 — EM PRODUÇÃO (commit `5b6e991`, pushed)
+- **Peça 1** (`orchestrator`): mensagem atual com gatilho explícito de
+  renovar → `acesso_selecionado`/`intencao_atual` guardados NÃO
+  participam da decisão desta requisição.
+- **Peça 2** (`orchestrator` + `renovacoes_lote.ts`): `acesso_selecionado`
+  só é honrado se a última operação daquele `public_id` não estiver
+  terminal (`ultimaOperacaoRenovacaoEhTerminal`). Único write de sessão:
+  apresentar a lista zera `acesso_selecionado`.
+- **Peça 3** (`renovacao-sigma-watchdog` + `reconciliacao_renovacao.ts` +
+  migration `20260829140000_expirar_lote_autorizado.sql`): ciclo de vida
+  garantido dos estados não-terminais, janela = `expira_em` (2h). Casos
+  A/B/C/D/E, todas as transições CAS. Nunca perde um pagamento COMPLETED
+  na Woovi (Caso D concilia o webhook atrasado / a corrida de ms).
+- **Deploy:** `orchestrator` **v57** (12:14:58 UTC), `renovacao-sigma-watchdog`
+  **v10** (12:15:05 UTC), ambos jwt=OFF. Migration
+  `20260829140000_expirar_lote_autorizado.sql` **aplicada** manualmente
+  no SQL Editor (verificada: `SECURITY DEFINER`, `search_path=public`,
+  execute só p/ `service_role`; corpo com os 2 `and estado = 'autorizada'`;
+  NUNCA toca `renovacao_em_andamento` nem `cobrancas_pix`).
+- Testes: **24 suítes verdes** (23 pré-existentes + `orchestrator_multiplos_acessos`
+  com testes Z1–Z8 + nova suíte `watchdog_lifecycle`, incl. concorrência
+  3× e webhook-atrasado).
+
+### Falha real pós-deploy: `0` (1 Sigma + 1 UniTV) caiu no fallback UniTV
+- **Não é regressão de código nem contaminação de estado.** Peça 1/2
+  funcionou (a lista voltou a aparecer). O `0` entrou corretamente no
+  fluxo de lote misto do Bloco 4 e `chamarResolverContaUnitv("gcnv6v")`
+  retornou **`indisponivel`** (`motivo` gravado:
+  `renovacao:lote_unitv_conta_indisponivel`).
+- **Causa do `indisponivel` (evidência de log, 12:22:32 UTC):**
+  - `orchestrator → renovacao-unitv-conta`: **SUCESSO** — EF invocada,
+    `POST`, `200`. **Não** foi timeout do Orquestrador nem falha nesse hop.
+  - `renovacao-unitv-conta → panel-web.revenda.site/api/account`:
+    **rejeição RÁPIDA** — a EF inteira rodou em **~291 ms** (muito abaixo
+    do timeout de 15 s). Não foi timeout, não foi painel lento.
+  - **O erro exato do painel NÃO está disponível nos logs atuais** —
+    `unitv_conta.ts` não loga o caminho de falha; a EF só devolveu
+    `{outcome:"indisponivel"}`. Compatível com `returnCode != 0`
+    (erro transitório do painel) ou HTTP de erro com corpo não-JSON.
+  - `gcnv6v` foi resolvido com sucesso às ~02:12 UTC do mesmo dia (mesmo
+    caminho, 2×UniTV lote). Transitória, não estrutural. Sem diferença de
+    timeout/concorrência/contexto entre resolução individual e a dos
+    filhos do lote.
+- **Retry de `/api/account` NÃO adicionado** — decisão adiada,
+  deliberadamente separada.
+
+### Correção de UX (commit próprio — ver "Estado do git" abaixo)
+Distinção de mensagem ao cliente na falha de resolução da conta UniTV,
+**mantendo os motivos internos de transferência exatamente como estão**:
+- `indisponivel` → **instabilidade temporária** (encaminha + convida a
+  tentar de novo).
+- `nao_encontrado` / `ambiguo` / `sem_usuario` → **não identificação
+  segura** (só encaminha).
+- `MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA` / `MENSAGEM_RENOVACAO_LOTE_COM_UNITV`
+  mantidas no código, **reservadas a um eventual desligamento funcional**
+  da integração UniTV — não mais usadas no fluxo de falha de resolução.
+- **Não tocados:** `chamarResolverContaUnitv`, `resolverContaUnitv`,
+  `renovacao-unitv-conta`, `unitv-renovar.mjs`, timeouts, criptografia,
+  lógica de roteamento. **Sem deploy ainda.**
+
+### Pendências desta frente
+- Deploy da correção de UX (`orchestrator` + `mensagens_fixas.ts`).
+- Endurecer `openpix-webhook` para não ignorar silenciosamente eventos
+  ≠ `CHARGE_COMPLETED` (a raiz do `d5241cc0`) — não iniciado.
+- Retry / distinção de erro do painel UniTV — adiado.
+- Limpeza do estado travado do `d5241cc0` (cobrança `pendente` +
+  lote/tokens `autorizada` antigos) — a Peça 3 agora resolve isso
+  automaticamente no próximo ciclo do watchdog (janela `expira_em`), mas
+  não foi verificado ao vivo.
+
+---
+
 ## 0. PONTO EXATO DA RETOMADA
 
 **Primeira ação amanhã (só leitura, nenhuma ação real sem autorização

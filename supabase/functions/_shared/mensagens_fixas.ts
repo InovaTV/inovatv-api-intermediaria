@@ -376,16 +376,52 @@ export const MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO =
 export const MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO =
   "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure os botões que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
 
-// Etapa 1.5 (Lacuna A, 2026-08-28) -- tentativa de renovar um acesso
-// UniTV. A renovacao UniTV nao esta integrada ate a Etapa 2: o
-// Orquestrador NUNCA cria token/cobranca para UniTV -- envia esta
-// mensagem fixa e aciona atendimento humano. Sem cobranca, sem Sigma.
+// Etapa 1.5 (Lacuna A, 2026-08-28) -- redacao ORIGINAL, hoje reservada
+// exclusivamente a uma eventual condicao de DESLIGAMENTO FUNCIONAL da
+// integracao UniTV. NAO e' mais usada no fluxo de falha de resolucao
+// da conta (isso passou a ser tratado por mensagemFalhaResolucaoUnitv,
+// abaixo -- correcao de UX 2026-08-29: dizer "ainda nao esta
+// disponivel" para uma falha transitoria de resolucao era enganoso,
+// pois a renovacao UniTV JA e' funcionalidade real desde o Bloco 4).
 export const MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA =
   "A renovação de acessos UniTV ainda não está disponível por aqui. Já encaminhei seu atendimento para que um de nossos atendentes conclua essa renovação para você.";
-
-// Etapa 1.5 -- pedido de renovar TODOS ("0") quando pelo menos um dos
-// acessos e' UniTV. Como a UniTV nao esta integrada, o lote nao pode
-// ser criado com esse acesso -- nenhum lote e' gerado, nenhuma
-// cobranca. O cliente e' avisado e o atendimento e' encaminhado.
 export const MENSAGEM_RENOVACAO_LOTE_COM_UNITV =
   "Um dos seus acessos é UniTV, e a renovação em lote com acesso UniTV ainda não está disponível por aqui. Já encaminhei seu atendimento para que um atendente cuide da sua renovação. Se preferir, você também pode renovar os acessos Sigma um a um pelo número de cada um na lista.";
+
+// Correcao de UX (2026-08-29) -- a falha de RESOLUCAO da conta UniTV
+// (sn -> id do painel de revenda) tem duas naturezas distintas, que
+// NUNCA devem dizer ao cliente que a funcionalidade nao existe:
+//   * INSTABILIDADE TEMPORARIA  -- `indisponivel` (falha transitoria
+//     do painel / rede). Encaminha + convida a tentar de novo.
+//   * NAO IDENTIFICACAO SEGURA  -- `nao_encontrado` / `ambiguo` /
+//     `sem_usuario`. Problema de identificacao da conta, nunca
+//     "escolher por aproximacao" (regra do projeto). So' encaminha.
+// Os MOTIVOS INTERNOS de transferencia (renovacao:unitv_conta_*,
+// renovacao:lote_unitv_conta_*) NAO mudam -- so' o texto ao cliente.
+export const MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE =
+  "Tive uma instabilidade temporária pra preparar a renovação do seu acesso UniTV agora. Já encaminhei para um de nossos atendentes concluir — se preferir, é só me pedir de novo daqui a alguns minutos.";
+export const MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO =
+  "Não consegui identificar seu acesso UniTV com segurança para renovar por aqui. Já encaminhei seu atendimento para que um atendente verifique e conclua sua renovação.";
+export const MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE =
+  "Tive uma instabilidade temporária pra preparar a renovação do seu acesso UniTV agora. Já encaminhei para um de nossos atendentes concluir. Se preferir, você também pode renovar os acessos Sigma um a um pelo número de cada um na lista, ou me pedir de novo daqui a alguns minutos.";
+export const MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO =
+  "Não consegui identificar seu acesso UniTV com segurança para renovar em lote. Já encaminhei seu atendimento para que um atendente conclua. Se preferir, você também pode renovar os acessos Sigma um a um pelo número de cada um na lista.";
+
+// `falha` = valor bruto de `resolucao.outcome` (individual) OU de
+// `falhaResolucaoUnitv` (lote). "indisponivel" em qualquer forma
+// ("indisponivel", "unitv_conta_indisponivel") -> instabilidade
+// temporaria; qualquer outro -> nao identificacao segura.
+export function mensagemFalhaResolucaoUnitv(
+  falha: string,
+  escopo: "individual" | "lote",
+): string {
+  const instabilidade = falha.includes("indisponivel");
+  if (escopo === "lote") {
+    return instabilidade
+      ? MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE
+      : MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO;
+  }
+  return instabilidade
+    ? MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE
+    : MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO;
+}

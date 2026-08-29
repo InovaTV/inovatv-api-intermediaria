@@ -161,8 +161,7 @@ import {
   MENSAGEM_SESSAO_EXPIRADA,
   MENSAGEM_BUSCANDO_DADOS_RENOVACAO,
   MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
-  MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
-  MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
+  mensagemFalhaResolucaoUnitv,
   formatarValorBRL,
   paraCentavos,
   montarMensagemBotoesConfirmacaoRenovacao,
@@ -480,16 +479,22 @@ async function processarCobrancaRenovacao(
   if (classificarTipoAcesso(acessoResolvido.cliente?.servidorNome) === "unitv") {
     const sn = acessoResolvido.cliente?.usuario ?? usuarioResolvido;
     if (!sn) {
+      // Motivo interno inalterado; texto ao cliente = "nao identificacao
+      // segura" (o cadastro Rocket nao tem o `usuario`/`sn`).
       return await transferirPorFalha(
         "renovacao:unitv_sem_usuario",
-        MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+        mensagemFalhaResolucaoUnitv("unitv_sem_usuario", "individual"),
       );
     }
     const resolucao = await chamarResolverContaUnitv(sn);
     if (resolucao.outcome !== "resolvido") {
+      // Motivo interno inalterado (renovacao:unitv_conta_<outcome>).
+      // Texto ao cliente: `indisponivel` -> instabilidade temporaria;
+      // nao_encontrado/ambiguo -> nao identificacao segura. NUNCA
+      // "funcionalidade nao existe".
       return await transferirPorFalha(
         `renovacao:unitv_conta_${resolucao.outcome}`,
-        MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+        mensagemFalhaResolucaoUnitv(resolucao.outcome, "individual"),
       );
     }
     tokenTipo = "unitv";
@@ -1263,7 +1268,13 @@ Deno.serve(async (req: Request) => {
       }
 
       if (falhaResolucaoUnitv) {
+        // Motivo interno inalterado (renovacao:lote_<falhaResolucaoUnitv>).
+        // Texto ao cliente escolhido pela natureza da falha:
+        // "..._indisponivel" -> instabilidade temporaria; qualquer outro
+        // (nao_encontrado/ambiguo/sem_usuario) -> nao identificacao
+        // segura. NUNCA "lote com UniTV nao esta disponivel".
         const motivoLoteUnitv = `renovacao:lote_${falhaResolucaoUnitv}`;
+        const textoFalhaLoteUnitv = mensagemFalhaResolucaoUnitv(falhaResolucaoUnitv, "lote");
         let acionada = false;
         try {
           const r = await acionarTransferenciaHumana(
@@ -1280,13 +1291,13 @@ Deno.serve(async (req: Request) => {
           ? { acionada: true, motivo: motivoLoteUnitv }
           : { acionada: false, motivo: "ja_transferida_ou_falha" };
         if (acionada) {
-          const env = await enviarMensagemWhatsApp(telefone, MENSAGEM_RENOVACAO_LOTE_COM_UNITV);
+          const env = await enviarMensagemWhatsApp(telefone, textoFalhaLoteUnitv);
           envioResultado = { enviado: env.outcome === "success" };
           if (env.outcome === "success") {
             await inserirMensagem(
               conversa.conversation_id,
               "ia",
-              MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
+              textoFalhaLoteUnitv,
               null,
             ).catch(() => {});
           }

@@ -23,6 +23,11 @@ import {
   montarMensagemResultadoLote,
   MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
   MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
+  MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE,
+  MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO,
+  MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE,
+  MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO,
+  mensagemFalhaResolucaoUnitv,
 } from "../../../supabase/functions/_shared/mensagens_fixas.ts";
 
 let falhas = 0;
@@ -340,6 +345,41 @@ checarLista("C3(venc null)", [
   ok(/atendente/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: encaminha para atendente");
   ok(/sigma/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: sugere renovar os Sigma um a um");
   ok(!/promo|desconto|r\$/i.test(MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Lote-UniTV-msg: sem promocao/desconto/valor");
+}
+
+// =====================================================================
+// UX 2026-08-29 -- distincao INSTABILIDADE TEMPORARIA x NAO IDENTIFICACAO
+// segura na falha de resolucao da conta UniTV.
+// =====================================================================
+{
+  const todas = [
+    MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE,
+    MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO,
+    MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE,
+    MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO,
+  ];
+  for (const m of todas) {
+    ok(/uni ?tv/i.test(m), `falha-UniTV-msg: cita UniTV (${m.slice(0, 30)}...)`);
+    ok(/atendente/i.test(m), `falha-UniTV-msg: encaminha para atendente (${m.slice(0, 30)}...)`);
+    ok(!/pix|pagamento|r\$|cobran|promo|desconto/i.test(m), `falha-UniTV-msg: nunca fala de pagamento/promo (${m.slice(0, 30)}...)`);
+    ok(!/ainda não está disponível|não está disponível/i.test(m), `falha-UniTV-msg: NUNCA diz que a funcionalidade nao existe (${m.slice(0, 30)}...)`);
+  }
+
+  // instabilidade -> convida a tentar de novo; nao-identificacao -> nao convida
+  ok(/de novo|minutos|instabilidade/i.test(MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE), "instabilidade (individual): sinaliza temporario / retentar");
+  ok(/de novo|minutos|instabilidade/i.test(MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE), "instabilidade (lote): sinaliza temporario / retentar");
+  ok(/identificar/i.test(MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO), "nao-identificacao (individual): fala em identificar a conta");
+  ok(/identificar/i.test(MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO), "nao-identificacao (lote): fala em identificar a conta");
+  ok(/sigma/i.test(MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE) && /sigma/i.test(MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO), "lote: mantem a sugestao de renovar os Sigma um a um");
+
+  // roteamento do helper (individual + lote), pelos valores brutos reais
+  ok(mensagemFalhaResolucaoUnitv("indisponivel", "individual") === MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE, "helper: 'indisponivel' individual -> instabilidade");
+  ok(mensagemFalhaResolucaoUnitv("unitv_conta_indisponivel", "lote") === MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE, "helper: 'unitv_conta_indisponivel' lote -> instabilidade");
+  ok(mensagemFalhaResolucaoUnitv("nao_encontrado", "individual") === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO, "helper: 'nao_encontrado' individual -> nao identificado");
+  ok(mensagemFalhaResolucaoUnitv("ambiguo", "individual") === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO, "helper: 'ambiguo' individual -> nao identificado");
+  ok(mensagemFalhaResolucaoUnitv("unitv_sem_usuario", "individual") === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_sem_usuario' individual -> nao identificado");
+  ok(mensagemFalhaResolucaoUnitv("unitv_conta_ambiguo", "lote") === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_conta_ambiguo' lote -> nao identificado");
+  ok(mensagemFalhaResolucaoUnitv("unitv_sem_usuario", "lote") === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO, "helper: 'unitv_sem_usuario' lote -> nao identificado");
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

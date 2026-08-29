@@ -850,8 +850,12 @@ async function testeR() {
 // =====================================================================
 // Etapa 1.5 (Lacuna A) -- roteamento por tipo de acesso (Sigma x UniTV)
 // =====================================================================
-const { MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA, MENSAGEM_RENOVACAO_LOTE_COM_UNITV } =
-  await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
+const {
+  MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE,
+  MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO,
+  MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE,
+  MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO,
+} = await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
 
 // Etapa 2 (Bloco 4) -- roteamento UniTV VIRADO: UniTV resolvida segue
 // o fluxo normal de renovacao (token tipo='unitv' + ACEITO/CANCELAR);
@@ -886,8 +890,10 @@ async function testeS() {
   ok(chamadasCriarLote().length === 0, "Teste S: nao cria lote");
   ok(acionamentosRegistrados().length === 0, "Teste S: NENHUMA transferencia humana (UniTV resolvida)");
   ok(
-    !getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
-    "Teste S: mensagem fixa de 'UniTV nao integrada' NUNCA aparece quando resolve",
+    !getMensagensEnviadas().some((m) =>
+      [MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE, MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO].includes(m.texto),
+    ),
+    "Teste S: nenhuma mensagem de fallback UniTV quando a conta resolve",
   );
   ok(body?.renovacao?.acessoResolvido?.servidorNome === "UNITV", "Teste S: diagnostico -- acesso selecionado era UniTV");
 }
@@ -914,8 +920,8 @@ async function testeS2() {
     "Teste S2: transferencia com motivo 'renovacao:unitv_conta_nao_encontrado'",
   );
   ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
-    "Teste S2: cliente recebe a mensagem fixa de fallback (UX aprovada preservada)",
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO),
+    "Teste S2: nao_encontrado -> mensagem de NAO IDENTIFICACAO segura (nunca 'nao esta disponivel')",
   );
   ok(
     getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:unitv_conta_nao_encontrado"),
@@ -954,8 +960,42 @@ async function testeS3() {
     "Teste S3: transferencia com motivo 'renovacao:unitv_sem_usuario'",
   );
   ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
-    "Teste S3: mensagem fixa de fallback",
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO),
+    "Teste S3: sem_usuario -> mensagem de NAO IDENTIFICACAO segura",
+  );
+}
+
+// Teste S4 (UX 2026-08-29): acesso UniTV individual, resolucao da conta
+// = 'indisponivel' (falha TRANSITORIA do painel) -> mensagem de
+// INSTABILIDADE TEMPORARIA (nunca "ainda nao esta disponivel"). Motivo
+// interno de transferencia INALTERADO.
+async function testeS4() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  definirResolucaoContaUnitv({ outcome: "indisponivel" });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
+  await resp.json();
+
+  ok(chamadasCriarToken() === 0, "Teste S4: indisponivel -> nenhum token criado");
+  const acion = acionamentosRegistrados();
+  ok(
+    acion.length === 1 && acion[0].motivo === "renovacao:unitv_conta_indisponivel",
+    "Teste S4: motivo interno de transferencia INALTERADO ('renovacao:unitv_conta_indisponivel')",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE),
+    "Teste S4: cliente recebe mensagem de INSTABILIDADE TEMPORARIA",
+  );
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO),
+    "Teste S4: NAO recebe a mensagem de 'nao identificacao segura'",
+  );
+  ok(
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:unitv_conta_indisponivel"),
+    "Teste S4: aviso ao Jose com o motivo especifico (inalterado)",
   );
 }
 
@@ -1005,7 +1045,12 @@ async function testeU() {
   ok(c.valorTotalCentavos === 7000, "Teste U: total = soma dos valores reais (35,00 + 35,00 = R$ 70,00)");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste U: confirmacao interativa do lote enviada");
   ok(acionamentosRegistrados().length === 0, "Teste U: nenhuma transferencia (lote criado)");
-  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Teste U: mensagem fixa de lote+UniTV NUNCA aparece quando resolve");
+  ok(
+    !getMensagensEnviadas().some((m) =>
+      [MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE, MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO].includes(m.texto),
+    ),
+    "Teste U: nenhuma mensagem de fallback UniTV (lote resolve)",
+  );
 }
 
 // Teste U2: "0" com Sigma + UniTV, a conta UniTV NAO resolve
@@ -1030,8 +1075,8 @@ async function testeU2() {
     "Teste U2: transferencia com motivo 'renovacao:lote_unitv_conta_indisponivel'",
   );
   ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
-    "Teste U2: cliente recebe a mensagem fixa de 'lote com UniTV' (fallback)",
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE),
+    "Teste U2: indisponivel -> mensagem de INSTABILIDADE TEMPORARIA (lote), nunca 'nao esta disponivel'",
   );
   ok(
     getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:lote_unitv_conta_indisponivel"),
@@ -1081,8 +1126,42 @@ async function testeV2() {
     "Teste V2: transferencia com motivo 'renovacao:lote_unitv_conta_ambiguo'",
   );
   ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
-    "Teste V2: mensagem fixa de lote com UniTV (fallback)",
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO),
+    "Teste V2: ambiguo -> mensagem de NAO IDENTIFICACAO segura (lote)",
+  );
+}
+
+// Teste V4 (UX 2026-08-29): "0" com Sigma + UniTV, conta UniTV =
+// 'nao_encontrado' -> mensagem de NAO IDENTIFICACAO segura (lote),
+// nunca "lote com UniTV nao esta disponivel". Motivo interno
+// INALTERADO ('renovacao:lote_unitv_conta_nao_encontrado').
+async function testeV4() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  definirResolucaoContaUnitv({ outcome: "nao_encontrado" });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  await resp.json();
+
+  ok(chamadasCriarLote().length === 0, "Teste V4: nao_encontrado -> nenhum lote");
+  const acion = acionamentosRegistrados();
+  ok(
+    acion.length === 1 && acion[0].motivo === "renovacao:lote_unitv_conta_nao_encontrado",
+    "Teste V4: motivo interno de transferencia INALTERADO",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO),
+    "Teste V4: cliente recebe mensagem de NAO IDENTIFICACAO segura (lote)",
+  );
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE),
+    "Teste V4: NAO recebe a mensagem de instabilidade temporaria",
+  );
+  ok(
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:lote_unitv_conta_nao_encontrado"),
+    "Teste V4: aviso ao Jose com o motivo especifico (inalterado)",
   );
 }
 
@@ -1117,7 +1196,12 @@ async function testeV3() {
   const c = chamadasCriarLote()[0] ?? {};
   ok(c.filhos.length === 2 && c.filhos.every((f) => f.tipo === "unitv" && f.unitvSn && f.unitvId), "Teste V3: 2 filhos UniTV com unitv_sn/unitv_id");
   ok(acionamentosRegistrados().length === 0, "Teste V3: NENHUMA transferencia (nao caiu em 'unitv_sem_usuario')");
-  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Teste V3: mensagem fixa de lote+UniTV NUNCA aparece");
+  ok(
+    !getMensagensEnviadas().some((m) =>
+      [MENSAGEM_RENOVACAO_LOTE_UNITV_INSTABILIDADE, MENSAGEM_RENOVACAO_LOTE_UNITV_NAO_IDENTIFICADO].includes(m.texto),
+    ),
+    "Teste V3: nenhuma mensagem de fallback UniTV (lote resolve via /match)",
+  );
 }
 
 // Teste W: 2 UniTV, seleciona 1 por NUMERO, resolve OK -> token
@@ -1143,7 +1227,12 @@ async function testeW() {
   ok(arg.tipo === "unitv" && arg.unitvSn === "gcnv6v" && arg.unitvId === 3433363, "Teste W: token tipo='unitv' com sn/id do acesso 1");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste W: confirmacao interativa enviada");
   ok(acionamentosRegistrados().length === 0, "Teste W: nenhuma transferencia");
-  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA), "Teste W: sem mensagem fixa de UniTV");
+  ok(
+    !getMensagensEnviadas().some((m) =>
+      [MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE, MENSAGEM_RENOVACAO_UNITV_NAO_IDENTIFICADO].includes(m.texto),
+    ),
+    "Teste W: sem mensagem de fallback UniTV (conta resolve)",
+  );
 }
 
 
@@ -1469,11 +1558,13 @@ await testeR();
 await testeS();
 await testeS2();
 await testeS3();
+await testeS4();
 await testeT();
 await testeU();
 await testeU2();
 await testeV();
 await testeV2();
+await testeV4();
 await testeV3();
 await testeW();
 await testeX();
