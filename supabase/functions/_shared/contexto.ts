@@ -1,9 +1,13 @@
-// Monta o contexto minimo em texto enviado ao Gemini. So entra o que
-// /status realmente devolve (nome, vencimento, planoNome,
-// servidorNome, telas) -- nunca senha nem device_key, que nunca
-// existem na resposta real do /status (Componente 1 §7,
-// inovatv_central). Telefone vem de quem chama (e' o identificador da
-// propria conversa, nao um campo do /status).
+// Monta o contexto minimo em texto enviado ao Gemini. Surface
+// DELIBERADAMENTE apenas nome, plano, servidor, vencimento e telas
+// (lista fixa em camposCliente abaixo) -- nunca senha nem device_key,
+// que nunca existem na resposta real do /status (Componente 1 §7,
+// inovatv_central). O /status hoje tambem devolve `valor` (2026-08-28)
+// e `usuario` (Etapa 2, Bloco 2), mas nenhum dos dois entra no contexto
+// do Gemini: sao usados so' pelo Orquestrador (lista de multiplos
+// acessos / resolucao de conta UniTV), fora do prompt congelado.
+// Telefone vem de quem chama (e' o identificador da propria conversa,
+// nao um campo do /status).
 //
 // O bloco de um unico acesso reproduz literalmente o formato real
 // testado no Componente 1 §12 (recuperado de

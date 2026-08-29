@@ -33,6 +33,12 @@ function normalizeCliente(cliente: Record<string, unknown>) {
     // do Rocket, repassado sem transformacao (mesmo estilo dos demais).
     // Continua NUNCA repassando senha/device_key_or_OTP_code.
     valor: cliente.valor ?? null,
+    // `usuario` exposto (Etapa 2 -- Renovacao UniTV, Bloco 2): para um
+    // acesso UniTV, Rocket.usuario == `sn` da conta no painel de revenda
+    // (necessario pra resolver a conta e renovar). Campo JA existente no
+    // cadastro, repassado cru. Mesmo estilo de `valor`. Continua NUNCA
+    // repassando senha/device_key_or_OTP_code.
+    usuario: cliente.usuario ?? null,
   };
 }
 

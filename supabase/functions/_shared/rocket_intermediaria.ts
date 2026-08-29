@@ -35,6 +35,14 @@ export interface StatusCliente {
   // pra apresentacao na lista de multiplos acessos da renovacao --
   // formatado com formatarValorBRL na hora de exibir, nunca recalculado.
   valor: string | null;
+  // `usuario` do cadastro Rocket. Exposto (Etapa 2 -- Renovacao UniTV,
+  // Bloco 2): para um acesso UniTV, Rocket.usuario == `sn` da conta no
+  // painel de revenda (juncao confirmada 2026-08-28). Campo JA existente
+  // no cadastro, repassado cru. NUNCA e' surfado ao Gemini
+  // (montarContextoCliente so' inclui nome/plano/servidor/vencimento/
+  // telas -- ver _shared/contexto.ts). Continua NUNCA repassando
+  // senha/device_key_or_OTP_code.
+  usuario: string | null;
 }
 
 export interface StatusResult {

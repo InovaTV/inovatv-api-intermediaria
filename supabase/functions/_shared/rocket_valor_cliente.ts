@@ -40,6 +40,11 @@ export interface ClienteCompletoRocket {
   planoNome: string;
   valor: string | number | null;
   vencimento: string;
+  // `usuario` do cadastro Rocket (Etapa 2 -- Renovacao UniTV, Bloco 2).
+  // Para um acesso UniTV == `sn` da conta no painel de revenda. Pode ser
+  // null (acessos que nao o tenham cadastrado -- Sigma nao precisa dele).
+  // NUNCA senha/device_key_or_OTP_code.
+  usuario: string | null;
 }
 
 export type ConsultaClienteCompletoResultado = ClienteCompletoRocket | { outcome: "unavailable" };
@@ -74,6 +79,11 @@ export async function consultarClienteCompletoRocket(
       planoNome: cliente.plano.nome,
       valor: cliente.valor ?? null,
       vencimento: cliente.vencimento,
+      // `usuario` NAO entra no guard de sucesso acima (um acesso sem
+      // usuario cadastrado ainda resolve, so' vem null) -- Sigma nao
+      // depende dele; UniTV sim (Bloco 3 trata usuario null como
+      // fallback, nunca inventa).
+      usuario: cliente.usuario ?? null,
     };
   } catch {
     return { outcome: "unavailable" };
