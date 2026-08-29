@@ -292,94 +292,145 @@ o fluxo da Renovação Automática.
 
 ---
 
-## 0. PONTO EXATO DA RETOMADA
+## 0. CHECKPOINT DE ENCERRAMENTO — 2026-08-29 (troca de máquina)
 
-**Camada 3 em produção (watchdog v11). Iteração 1 COMMITADA, NÃO
-DEPLOYADA (checkpoint acima, 24/24 verde).**
+### 0.1 Estado APROVADO (fechado, não reabrir sem evidência nova)
 
-**Pré-check Sigma: DECISÃO FECHADA — DESNECESSÁRIO** (ver "DECISÃO
-ARQUITETURAL FECHADA" no checkpoint da Iteração 1, acima). A Iteração 1
-(reclassificação + retry só de leitura + clique único + Peça 3) **é** a
-solução da intermitência de auth; a pergunta "precisamos de pré-check?"
-está respondida.
+- **Renovação Automática Sigma + UniTV integrada** — roteamento por
+  tipo de acesso no `orchestrator`, executor no workflow, resultado
+  consolidado.
+- **UniTV individual** — validada em produção (Sandbox OpenPix).
+- **Lote 2×UniTV** — validado em produção (Sandbox).
+- **Lote misto Sigma + UniTV** — execução conjunta validada (2 tipos no
+  mesmo `processarLote`, callback único com `resultados[]` misto,
+  `parcial` derivado, UniTV independente da falha do Sigma).
+- **Gerenciamento de estado conversacional** — corrigido (Peças 1/2/3,
+  commit `5b6e991`).
+- **Camada 3 — reconciliação antecipada** — EM PRODUÇÃO
+  (`renovacao-sigma-watchdog`, commit `a87a1df`).
+- **Iteração 1 (Sigma auth)** — COMMITADA (`3b0e01d`) **e DEPLOYADA**
+  (`renovacao-sigma-contexto` + `renovacao-sigma-resultado`, registro
+  em `64d5a02`).
+- **Pré-check Sigma = DESNECESSÁRIO** — decisão arquitetural fechada
+  (`18331b3`; ver §4.6.1 e o checkpoint da Iteração 1).
+- **Regra definitiva:** `POST /gerenciador/pagamento/add/` roda **no
+  máximo 1× por acesso**, nunca repetido em nenhum cenário de dúvida.
+- **Retry somente em LEITURA** (Camada A do `sigma/info` + 1 reconsulta
+  extra pós-clique). Nenhum retry de operação que consome crédito.
+- **Suíte: 24/24 verdes** (rodada final desta sessão).
 
-**Próxima etapa: decidir o deploy da Iteração 1.** Alvos:
-`renovacao-sigma-contexto` (Camada A), `renovacao-sigma-resultado`
-(mensagem de instabilidade), `_shared` empacotado com elas.
-`scripts/renovacao-sigma-workflow.mjs` é script do GitHub Actions
-(commitado, não deployado ao Supabase). Nada de teste real/cobrança
-sem autorização própria.
+### 0.2 Estado ATUAL da UniTV — `UNITV_DEALER_TOKEN`
 
-**Depois disso: voltar à matriz de Renovação Automática e tratar os
-pendentes já conhecidos, nesta ordem (nada é ação financeira sem
-autorização própria):**
+- O `UNITV_DEALER_TOKEN` **antigo foi invalidado pelo painel de
+  revenda** (não por ação nossa; ver §4.6).
+- Um **token novo foi capturado passivamente** (sessão logada, sem
+  login automatizado) e **atualizado nos secrets Supabase + GitHub**
+  (commit de registro `963e092`; valor nunca gravado em arquivo).
+- `renovacao-unitv-conta {"sn":"gcnv6v"}` voltou a **`resolvido`,
+  `id=3433363`** (verificação read-only pós-troca).
+- **Nenhuma renovação real foi feita depois dessa troca.** O token
+  atual está **válido e não deve ser alterado** enquanto a próxima
+  etapa (autocura) estiver sendo estudada.
 
-1. **ChannelTV** — lote misto Sigma+UniTV: o UniTV renovou/sincronizou
-   com sucesso; o ChannelTV deu `resultado_ambiguo` / `pacote_vazio`
-   (o guard está correto — não é bug). Causa é config/dados no Rocket
-   (`GET /gerenciador/cliente/sigma/info/` → `{error:true}` sem
-   `data.package`; painel Sigma trocou de domínio `channeltv.top` →
-   `channeltvbr.store`; após ajuste do usuário virou
-   `{"message":"Unauthenticated."}` — credenciais do servidor
-   "ChannelTV" no Rocket). Campo **"Painel id"** do cliente `759334773`
-   estava VAZIO e foi auto-preenchido para `loL7ZaZ1XM` por um submit
-   acidental de formulário — usuário decide manter ou reverter.
-2. **Mensagem intermediária "🔄 Renovação em andamento…"** (commit
-   `7f6cdc0`) — código pronto no `openpix-webhook`, best-effort, suíte
-   `renovacao_em_andamento` verde. **NÃO deployada** (`openpix-webhook`
-   = v11). *(Deploy dela pode ir junto com a Camada 1 `e3bee32` — as
-   duas mexem só no `openpix-webhook`.)*
-3. **Latência da mensagem final** — pendência transversal de UX (a
-   mensagem final de sucesso demora a chegar após o processamento;
-   observada em Sigma ind/lote, UniTV ind, UniTV 2× lote, lote misto).
-   É do pipeline de resultado (`renovacao-sigma-resultado` + callback do
-   workflow), não específico de um tipo de acesso. **Uma única solução
-   para todo o pipeline**, nunca patch por tipo.
-4. **Revisão final dos cenários e encerramento** da Renovação
-   Automática.
+### 0.3 NOVA PENDÊNCIA ARQUITETURAL — autocura do `UNITV_DEALER_TOKEN`
 
-**Segundo PIX `d5241cc0` (fluxo de teste das ~03:35 UTC de 2026-08-29):**
-resolvido/limpo manualmente pelo usuário (`marcar_lote_como_falha` +
-`UPDATE cobrancas_pix SET status='cancelada'`, 10:25 UTC). Não pendente.
-A Camada 3, se ativa na época, também não teria agido — `reconciliarSePago`
-só recupera `COMPLETED`+valor exato; um pagamento que nunca virou
-`CHARGE_COMPLETED` na Woovi fica com a Camada 4 (transação não
-associada), fora de escopo.
+- O `UNITV_DEALER_TOKEN` **é um token de sessão** (32 hex, usado como
+  `Authorization` + header `token` + `dealer_token` no corpo — o mesmo
+  valor), emitido no **login**. **Pode ser invalidado sem ação nossa**
+  (TTL de sessão / eviction / troca de senha).
+- **Não existe endpoint de refresh conhecido**; `getDealerInfo`
+  consome, não emite; sem tela de API key.
+- **Meta:** não depender de recaptura manual recorrente. Intervenção
+  manual só como **fallback de emergência**. **Objetivo futuro:
+  autocura automática.**
+- **U1 CONCLUÍDO:** o CAPTCHA do login é **4 dígitos numéricos
+  simples** (grandes, separados, sem ruído, sem linhas; formato
+  client-side `[0-9]{4}`; ex. real `7052`). Reclassificado de
+  "moderado" para **facilmente automatizável por template matching**
+  (10 templates de dígito; refresh "Eu não vejo" é grátis/ilimitado e
+  **não** conta como tentativa de login).
+- **U3/U4 INCONCLUSIVOS** (deliberado — não fizemos probe de login):
+  não sabemos como o servidor diferencia "CAPTCHA errado" de
+  "senha/conta inválida", nem o limite de lockout/rate-limit.
+- **Comparação A × B (ver §4.6.2):** **B (renovar token SEM login) não
+  existe** pelo que se pôde determinar — único lead não verificado é se
+  "Lembrar-me" estende muito o TTL. **A (OCR/template + login
+  automático controlado) é viável** dado o CAPTCHA trivial, **desde
+  que** cap ≤ 2 POSTs de login/ciclo + cooldown + fallback humano +
+  secrets `UNITV_DEALER_LOGIN`/`SENHA`.
 
 ---
 
-## 1. Estado do git (2026-08-29)
+## PONTO EXATO DA RETOMADA (próxima sessão, outra máquina)
 
-Os três repositórios: **`HEAD == origin/main`, working tree limpo,
-`0 0` ahead/behind.**
+> **Estudar e projetar a autocura automática do `UNITV_DEALER_TOKEN`.**
+
+**Primeira investigação da próxima sessão (nesta ordem, NÃO começar
+agora):**
+
+1. **Login concorrente** — um novo login invalida o token da sessão
+   anterior? (define se a autocura pode rodar sem derrubar a sessão
+   manual do José, e vice-versa).
+2. **Lockout / rate-limit do login** — existe? qual o limiar? (define o
+   cap seguro de tentativas).
+3. **Arquitetura da autocura** — monitor (`getDealerInfo` cron) +
+   healer (solve CAPTCHA desacoplado do POST + cap rígido + fallback) +
+   gate pré-cobrança para renovação com UniTV. Também: verificar (read-
+   only) se o payload decodificado de `security/get-info` vaza a
+   resposta do CAPTCHA, e se "Lembrar-me" estende o TTL.
+4. **Só depois** decidir/implementar OCR + login automático.
+
+**Não iniciado nesta sessão:** especificação técnica das partes
+seguras (monitor + gate pré-cobrança) — o usuário interrompeu antes.
+Retomar por elas se a investigação 1/2 mostrar que a autocura completa
+é arriscada; senão, especificar as duas partes seguras primeiro (elas
+não precisam de login).
+
+**Pendências de matriz que continuam abertas (não bloqueiam):**
+ChannelTV (config Rocket do servidor "ChannelTV" ainda retorna
+`Unauthenticated` no `sigma/info` — §4.5) · mensagem intermediária
+"🔄 Renovação em andamento" (`7f6cdc0`, NÃO deployada, `openpix-webhook`
+v12) · latência da mensagem final (transversal, pipeline de resultado).
+
+---
+
+## 1. Estado do git (2026-08-29 — fim de sessão)
+
+Todos os repositórios: **`HEAD == origin/main`, working tree limpo**
+(ressalva: 3 diretórios untracked pré-existentes em
+`inovatv-api-intermediaria`, ver abaixo).
 
 | Repositório | HEAD | Último commit |
 |---|---|---|
-| `inovatv-api-intermediaria` | `57effb1` | Fecha Gap 1 e Gap 3 do lote misto Sigma+UniTV (so testes) |
-| `inovatv_central` | `ce61faa` | Registra 2xUniTV lote VALIDADO + correcao da assimetria lote/individual + latencia como pendencia transversal de UX |
-| `inovatv_painel` | `ccb31be` | Remove 3 colunas nao usadas de apps (Database ja limpo) |
+| `inovatv-api-intermediaria` | *(commit deste checkpoint)* | UNITV_DEALER_TOKEN + Iteração 1 + pré-check + checkpoint de encerramento |
+| `inovatv_central` | *(commit deste checkpoint)* | Checkpoint 2026-08-29 fim de sessão + desativa Chrome interativo |
+| `inovatv_painel` | `ccb31be` | Remove 3 colunas nao usadas de apps (sem alteração nesta sessão) |
 
 `inovatv_meta_business_agent` — **não existe mais nesta máquina**
 (descontinuado; conteúdo já migrado).
 
-### Cadeia de commits desta frente (do checkpoint anterior até hoje)
+### Cadeia de commits — sessão 2026-08-29 (continuação)
 
 ```
-5e829f4  Docs: encerramento da Etapa 1 (checkpoint anterior)
-8c02568  Etapa 2 Bloco 1 — fundação: executor do painel UniTV (scripts/lib/unitv-renovar.mjs, CONGELADO)
-         + _shared/rocket_vencimento.ts + EF renovacao-rocket-vencimento
-c8732e0  Etapa 2 Bloco 2 — expõe `usuario` no contrato Rocket/status
-ffa2f26  Etapa 2 Bloco 3 — criação/adequação do token UniTV (tipo/unitv_sn/unitv_id) + EF renovacao-unitv-conta
-74aca2c  Etapa 2 Bloco 4 — integração completa (commit único, sem janela "cobra e cai no stub"):
-         roteamento no orchestrator (individual + lote) + executor no workflow + resultado + .yml env
-8f9c31d  Corrige assimetria lote×individual na resolução UniTV: fallback /match no laço do lote  → orchestrator v56
-7f6cdc0  Adiciona mensagem intermediária "🔄 Renovação em andamento..." no openpix-webhook  → NÃO DEPLOYADO
-57effb1  Fecha Gap 1 e Gap 3 do lote misto Sigma+UniTV (só testes; nada a deployar)
+57effb1  Fecha Gap 1 e Gap 3 do lote misto Sigma+UniTV (só testes)   [início desta sessão]
+3b0e01d  Iteração 1: instabilidade de auth do painel Sigma (retry só de leitura) — CÓDIGO
+18331b3  Registra decisão arquitetural: PRÉ-CHECK SIGMA = DESNECESSÁRIO — doc
+64d5a02  Registra deploy da Iteração 1: renovacao-sigma-contexto v8→v9, renovacao-sigma-resultado v11→v12
+2a1f95c  Registra regra: indisponivel na resolução UniTV → hipótese token inválido antes de mexer em código — doc
+963e092  UNITV_DEALER_TOKEN invalidado: diagnóstico + recaptura passiva + secrets atualizados — doc + secrets
+62695bb  Análise read-only da dependência do UNITV_DEALER_TOKEN: classificação B (token de sessão, sem refresh) — doc
+<este>   Checkpoint de encerramento (U1/U3/U4, A×B, PONTO EXATO DA RETOMADA, versões de produção) — doc
 ```
+
+**Deploys reais desta sessão:** só `renovacao-sigma-contexto` e
+`renovacao-sigma-resultado` (Iteração 1, `--no-verify-jwt`, registro em
+`64d5a02`). **Secret alterado:** `UNITV_DEALER_TOKEN` (Supabase +
+GitHub, registro em `963e092`). Nenhum outro deploy, nenhuma cobrança,
+nenhuma renovação real.
 
 Diretórios não versionados que permanecem no disco (pré-existentes,
-não tocar): `scripts/.interactive-test-harness/`, `scripts/supabase/`,
-`supabase/functions/poc-sigma-renovacao-real/`.
+**não tocar**): `scripts/.interactive-test-harness/`,
+`scripts/supabase/`, `supabase/functions/poc-sigma-renovacao-real/`.
 
 ---
 
@@ -389,36 +440,44 @@ Projeto Supabase: `nduxsuxkopuvhwugdkqi` (`inovatv-api-intermediaria`,
 `sa-east-1`). Já `--linked` nesta máquina; na outra máquina rodar
 `npx supabase link --project-ref nduxsuxkopuvhwugdkqi` primeiro.
 
+Versões conferidas via `npx supabase functions list` no fim desta
+sessão (2026-08-29). Nota: um **redeploy de plataforma** (rotação de
+chaves JWT do Supabase, ~21:00 UTC) bumpou **todas** as funções +1
+versão com **`ezbr_sha256` inalterado** → código idêntico ao commit
+indicado, zero mudança de comportamento.
+
 ```
-orchestrator                v56  jwt=OFF   ✅ = HEAD (74aca2c + 8f9c31d)
-renovacao-sigma-resultado   v10  jwt=OFF   ✅ = HEAD (74aca2c — rocketDesync)
-renovacao-unitv-conta       v1   jwt=OFF   ✅ = HEAD (Bloco 3/4) — EF NOVA
-renovacao-rocket-vencimento v1   jwt=OFF   ✅ = HEAD (Bloco 1) — EF NOVA
-status                      v31  jwt=ON    ✅ = HEAD (c8732e0 — `usuario`)
-renovacao-confirmar         v10  jwt=OFF   ✅
-renovacao-sigma-contexto    v7   jwt=OFF   ✅
-renovacao-sigma-cliente     v4   jwt=OFF   ✅
-renovacao-sigma-watchdog    v9   jwt=OFF   ✅
-confirmacao-renovacao       v9   jwt=OFF   ✅ (fallback dos links antigos)
-webhook                     v17  jwt=OFF   ✅
-match                       v27  jwt=ON    ✅
-openpix-webhook             v11  jwt=OFF   ❌ NÃO tem 7f6cdc0 (mensagem intermediária) — ver §4
+orchestrator                v58  jwt=OFF   código = 8f9c31d (74aca2c + 8f9c31d); NÃO tem aa9895d (msg UniTV refinada, não deployada)
+renovacao-sigma-contexto    v9   jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — Camada A / reclassificação Unauthenticated)
+renovacao-sigma-resultado   v12  jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — MENSAGEM_RENOVACAO_INSTABILIDADE)
+renovacao-sigma-watchdog    v12  jwt=OFF   código = a87a1df (CAMADA 3 — reconciliação antecipada)
+renovacao-sigma-cliente     v5   jwt=OFF   código = HEAD
+renovacao-unitv-conta       v2   jwt=OFF   código = 74aca2c (Bloco 3/4); lê UNITV_DEALER_TOKEN novo (digest ad542cf70e…)
+renovacao-rocket-vencimento v2   jwt=OFF   código = 74aca2c (Bloco 1)
+renovacao-confirmar         v11  jwt=OFF   código = HEAD (botões ACEITO/CANCELAR)
+confirmacao-renovacao       v10  jwt=OFF   código = HEAD (fallback dos links antigos)
+openpix-webhook             v12  jwt=OFF   ❌ NÃO tem 7f6cdc0 (mensagem intermediária) — ver §4.4
+webhook                     v18  jwt=OFF   código = HEAD
+status                      v32  jwt=ON    código = c8732e0 (`usuario` no contrato)
+match                       v28  jwt=ON    código = HEAD
 ```
 
 Outras (não relacionadas a esta frente): `painel-atendimento-*`
-v21-23, `atualizar-sessao-rocket` v12, `monitorar-sessao-rocket` v12,
-`diag-cobrancas-pix` v8, `teste-patch-renovacao-newone` v16,
-`poc-*` (descartáveis), `fase3-mock` v27.
+v22-24, `atualizar-sessao-rocket` v13, `monitorar-sessao-rocket` v13,
+`diag-cobrancas-pix` v9, `teste-patch-renovacao-newone` v17,
+`poc-*` (descartáveis), `fase3-mock` v28.
 
-**Workflow GitHub Actions** `renovacao-sigma.yml` + o script
+**Workflow GitHub Actions** `renovacao-sigma.yml` +
 `scripts/renovacao-sigma-workflow.mjs`: rodam a partir do checkout de
-`origin/main` (`57effb14`) — **já refletem o Bloco 4** (branch UniTV
-em `processarLote` + `renovarUmAcessoUniTVComSync` + env
-`UNITV_DEALER_*`). Não há "deploy" deles.
+`origin/main` — **já refletem o Bloco 4 E a Iteração 1** (clique único,
+retries só de leitura, reconsulta extra, `sigmaIndisponivel`). Não há
+"deploy" deles; a próxima execução do workflow usa a versão de `main`.
+GitHub Actions Secret `UNITV_DEALER_TOKEN` atualizado nesta sessão
+(`2026-08-29T18:47Z`).
 
 ### Função com código commitado ainda NÃO em produção
 
-- **`openpix-webhook`** — prod `v11`. O commit `7f6cdc0` (mensagem
+- **`openpix-webhook`** — prod `v12`. O commit `7f6cdc0` (mensagem
   intermediária "🔄 Renovação em andamento...") **não foi deployado**.
   É o único caso. Ver §4.4.
 
@@ -719,6 +778,90 @@ novo.**
 **Ainda em aberto (read-only, sem renovação):** medir o TTL real —
 capturar token, `getDealerInfo` a cada N min até falhar; distingue
 idle-timeout de sessão-única-evictada de sweep. Não feito.
+
+### 4.6.2 U1 concluído · U3/U4 inconclusivos · A × B (2026-08-29)
+
+**U1 — proteção anti-bot do login `panel-web.revenda.site`: CONCLUÍDO.**
+- **Sem Turnstile / reCAPTCHA / hCaptcha** — zero desafio JS de
+  terceiros (verificado no DOM e no bundle de 1,9 MB). Só Cloudflare
+  Insights (RUM, inócuo).
+- Único obstáculo: **CAPTCHA de imagem próprio** — campo
+  `form_item_validateCode`, PNG 240×80 embutido como `data:image/png;
+  base64`, provável origem `POST /api/dealer-core/security/get-info`,
+  botão "Eu não vejo" gera outro (grátis, sem throttle observado em
+  ~8 refreshes).
+- **Evidência visual real:** **4 dígitos numéricos**, grandes,
+  separados, legíveis, praticamente sem ruído; formato client-side
+  `[0-9]{4}` (confirmado — `ab12`/`abcd` rejeitados, `1234` aceito);
+  exemplo `7052`. Cores aleatórias por dígito, irrelevantes após
+  binarização. Medições: fundo ~92% branco, `isolatedDarkPx: 0` (zero
+  speckle), `strikeLikeRows: 0` (zero linhas).
+- **Reclassificação: CAPTCHA fraco / facilmente automatizável.**
+  Template matching (10 templates de dígito) + refresh-até-alta-
+  confiança (sem POST) → ~100% de CAPTCHA correto antes de qualquer
+  login. Sem serviço pago, sem modelo pesado.
+
+**U3 — como o login diferencia os erros: INCONCLUSIVO.**
+- A validação client-side barra requisições malformadas antes do
+  servidor (senha 8–16 com maiúscula+minúscula+dígito; CAPTCHA exato
+  `[0-9]{4}`).
+- O probe de submit foi **bloqueado pelo classificador de segurança**
+  (submeter formulário de login = ação sensível). Decisão do usuário:
+  **não fazer o probe de login agora**, nem com usuário falso.
+- Consequência: não sabemos se o servidor retorna código distinto para
+  "CAPTCHA errado" vs "credencial errada" vs "conta bloqueada".
+  Mitigação de desenho: pré-validar o CAPTCHA localmente (alta
+  confiança) → qualquer falha de login passa a ser tratada como
+  **credencial/conta, não CAPTCHA** → parar + humano, nunca retentar
+  "achando que foi o CAPTCHA".
+
+**U4 — lockout / rate-limit: INCONCLUSIVO (só artefatos).**
+- Bundle do frontend **não tem strings de lockout** ("locked",
+  "lockout", "bloqueado", "too many attempts", "429", "retry-after" —
+  ausentes). `dealerInfo` tem campo `status` (`1` = Normal) — estado,
+  não mecanismo.
+- Nenhuma doc do painel sobre política de login.
+- **Presumir, conservadoramente, que há contador server-side.**
+
+**Cap conservador proposto (para quando A for desenhada):**
+- **≤ 2 POSTs de login por ciclo de autocura** (solve de CAPTCHA é
+  ilimitado; POST de login não).
+- Cooldown ≥ 2 h entre ciclos; teto global ≤ 6 POSTs / 24 h; espaçar
+  30–60 s entre POSTs.
+- 1ª falha com CAPTCHA de alta confiança → **parar o ciclo** (não usar
+  o 2º POST); alerta URGENTE ao José.
+- Kill-switch de config; **modo observação** (só solve, sem POST) na
+  estreia, por N dias, para calibrar o template matching.
+- Autocura só dispara quando o **monitor confirma token morto**
+  (`getDealerInfo` `returnCode != 0`), nunca especulativo.
+
+**A × B:**
+- **B (obter/renovar token SEM login) — NÃO existe** pelo que se pôde
+  determinar: sem endpoint de refresh, `getDealerInfo` consome e não
+  emite, sem tela de API key, token 32-hex tem componente de sessão
+  (mudou entre capturas → não é função pura). **Único lead não
+  verificado:** "Lembrar-me" pode estender muito o TTL — checar read-
+  only (exige observar 1–2 logins).
+- **A (OCR/template + login automático controlado) — VIÁVEL** dado o
+  CAPTCHA trivial, **desde que**: solve 100% desacoplado do POST; cap
+  ≤ 2/ciclo + cooldown + kill-switch + modo observação; falha com
+  CAPTCHA confiável → parar + humano; secrets novos
+  `UNITV_DEALER_LOGIN` / `UNITV_DEALER_SENHA` (Supabase + GitHub) — o
+  custo de A, que era o ponto de resistência.
+- **Independente de A/B:** as partes que NÃO precisam de login —
+  **monitor proativo** (`getDealerInfo` cron → detecta token inválido →
+  avisa o José) e **gate pré-cobrança** (no ACEITO, para renovação com
+  UniTV, validar o token com chamada read-only; inválido → não cria
+  cobrança → encaminha para atendimento; válido → segue) — cobrem os
+  Problemas "detectar" e "nunca perder renovação paga" **hoje**, sem
+  senha e sem OCR. **A especificação técnica dessas duas partes NÃO
+  foi escrita** (usuário interrompeu). É o primeiro trabalho concreto
+  se a investigação de login concorrente / lockout mostrar que a
+  autocura completa é arriscada.
+
+**NÃO implementado nesta sessão:** OCR, login automático, secrets de
+usuário/senha, monitor, gate pré-cobrança. Nenhum token/senha/secret
+real registrado neste arquivo.
 
 ---
 
