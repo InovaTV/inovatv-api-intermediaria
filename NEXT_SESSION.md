@@ -165,11 +165,32 @@ segue 100% com os Casos B/C/E do sweep de `expira_em` (Peça 3, intocada).
 - **Nenhum teste real após o deploy. Nenhuma cobrança criada. Nenhuma
   ação financeira.**
 
-### Iteração 1 — instabilidade de auth do painel Sigma: COMMITADO, NÃO DEPLOYADO — CHECKPOINT 2026-08-29
+### Iteração 1 — instabilidade de auth do painel Sigma: EM PRODUÇÃO — CHECKPOINT 2026-08-29
 
 Trata a intermitência de autenticação do painel Sigma (`Unauthenticated`
 não-determinístico por requisição, caracterizado ao vivo no ChannelTV).
-**Nada deployado.** Suíte completa **24/24 verde**.
+Suíte completa **24/24 verde**.
+
+**DEPLOY FEITO (2026-08-29, commit `3b0e01d`):**
+- `renovacao-sigma-contexto` **v7 → v8** — `ACTIVE`, `verify_jwt=false`
+  (`--no-verify-jwt`). Bundle inclui `_shared/rocket_sigma_contexto.ts`
+  reclassificado. `ezbr_sha256` `3cc9e8f0…` → `cbff4c8d…`.
+- `renovacao-sigma-resultado` **v10 → v11** — `ACTIVE`, `verify_jwt=false`
+  (`--no-verify-jwt`). Bundle inclui `_shared/mensagens_fixas.ts` com
+  `MENSAGEM_RENOVACAO_INSTABILIDADE`. `ezbr_sha256` `4fd197a1…` →
+  `1f343087…`.
+- Smoke pós-deploy: `POST` sem `X-Internal-Token` nas duas → **HTTP 401**
+  (boot OK, autenticação interna intacta).
+- **Nenhuma outra função redeployada** — `orchestrator` v57,
+  `renovacao-sigma-watchdog` v11 (Camada 3), `openpix-webhook` v11,
+  `renovacao-confirmar` v10, `confirmacao-renovacao` v9 — inalteradas.
+- `scripts/renovacao-sigma-workflow.mjs` **já está em `main`** (commit
+  `3b0e01d`) — é script do GitHub Actions (`node
+  scripts/renovacao-sigma-workflow.mjs` em `renovacao-sigma.yml`), roda
+  do checkout de `main`; **será usado automaticamente na próxima
+  execução do workflow**, sem deploy Supabase.
+- Sem migration, sem alteração de secret, sem teste real/cobrança.
+- **Não fazer teste de cobrança/renovação sem nova autorização.**
 
 **REGRA DE SEGURANÇA DEFINITIVA (aprovada pelo usuário, não reabrir):**
 > O `POST /gerenciador/pagamento/add/` (`renovar_painel=true`) **NÃO é
