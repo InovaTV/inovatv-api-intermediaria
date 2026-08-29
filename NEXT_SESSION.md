@@ -740,6 +740,17 @@ Nenhum destes deve ser reinvestigado sem **evidência nova e concreta**:
   (`8f9c31d`, fallback `/match` no laço do lote; teste V3 de
   regressão).
 
+**Regra de investigação — `renovacao-unitv-conta` = `indisponivel`
+(2026-08-29, §4.6):** a recaptura do `UNITV_DEALER_TOKEN` foi
+necessária porque **o painel de revenda invalidou o token anterior**
+(o `dealer_token` não vem de tela de API key; é capturado de sessão
+logada e tem validade limitada — rotação de senha / TTL). Se a
+resolução UniTV voltar a retornar `indisponivel` (resposta rápida,
+HTTP 200 ~1 s), **a primeira hipótese é token inválido** — refazer a
+recaptura passiva + `secrets set` (Supabase + GitHub), **antes de
+cogitar qualquer alteração de código** na mecânica UniTV (que segue
+congelada).
+
 ---
 
 ## 8. Ao retomar (outra máquina, amanhã)
