@@ -8,15 +8,29 @@ let forcarFalha = false;
 // Etapa 1 (ponto do buscarTokenAtivoPorPublicId): por padrao NENHUM
 // acesso tem lote ativo. Um teste pode marcar publicIds especificos.
 let publicIdsComLoteAtivo = new Set();
+// Peca 2 (2026-08-29): validade read-side. Por padrao NENHUM
+// acesso tem uma operacao de renovacao TERMINAL -- ausencia de
+// operacao (anafora) -> acesso_selecionado e' honrado. Um teste
+// marca publicIds cuja ultima operacao ja e' terminal.
+let publicIdsUltimaOperacaoTerminal = new Set();
 
 export function resetarRenovacoesLote() {
   chamadas = [];
   forcarFalha = false;
   publicIdsComLoteAtivo = new Set();
+  publicIdsUltimaOperacaoTerminal = new Set();
 }
 
 export function definirLoteAtivoParaPublicId(publicId) {
   publicIdsComLoteAtivo.add(publicId);
+}
+
+export function definirUltimaOperacaoTerminalParaPublicId(publicId) {
+  publicIdsUltimaOperacaoTerminal.add(publicId);
+}
+
+export async function ultimaOperacaoRenovacaoEhTerminal(_conversationId, publicId) {
+  return publicIdsUltimaOperacaoTerminal.has(publicId);
 }
 
 export async function existeLoteAtivoParaPublicId(publicId) {

@@ -80,6 +80,11 @@ class QueryBuilder {
     this.filtros.push({ tipo: "is", coluna, valor });
     return this;
   }
+  not(coluna, operador, valor) {
+    // Peca 3 (2026-08-29): .not("col", "is", null) = "col IS NOT NULL".
+    this.filtros.push({ tipo: "not", coluna, operador, valor });
+    return this;
+  }
   in(coluna, valores) {
     this.filtros.push({ tipo: "in", coluna, valores });
     return this;
@@ -112,6 +117,10 @@ class QueryBuilder {
       this.filtros.every((f) => {
         if (f.tipo === "eq") return linha[f.coluna] === f.valor;
         if (f.tipo === "is") return f.valor === null ? linha[f.coluna] == null : linha[f.coluna] === f.valor;
+        if (f.tipo === "not") {
+          if (f.operador === "is" && f.valor === null) return linha[f.coluna] != null;
+          return linha[f.coluna] !== f.valor;
+        }
         if (f.tipo === "in") return f.valores.includes(linha[f.coluna]);
         if (f.tipo === "lt") return linha[f.coluna] != null && linha[f.coluna] < f.valor;
         return true;

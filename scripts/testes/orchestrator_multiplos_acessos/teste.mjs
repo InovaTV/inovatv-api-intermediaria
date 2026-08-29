@@ -33,8 +33,12 @@ const {
 const { resetarValorCliente, chamadasConsultarValor } =
   await import("./fake_rocket_valor_cliente.mjs");
 const { resetarTokensRenovacao, chamadasCriarToken, argsCriarToken } = await import("./fake_tokens_renovacao.mjs");
-const { resetarRenovacoesLote, chamadasCriarLote, definirLoteAtivoParaPublicId } =
-  await import("./fake_renovacoes_lote.mjs");
+const {
+  resetarRenovacoesLote,
+  chamadasCriarLote,
+  definirLoteAtivoParaPublicId,
+  definirUltimaOperacaoTerminalParaPublicId,
+} = await import("./fake_renovacoes_lote.mjs");
 const { configurarTokenExistente } = await import("./fake_tokens_renovacao.mjs");
 const {
   resetarUnitvContaClient,
@@ -1229,6 +1233,221 @@ async function testeY() {
   );
 }
 
+// =====================================================================
+// Peca 1 (NOVA_INTENCAO_EXPLICITA) + Peca 2 (validade read-side do
+// estado de sessao) -- gerenciamento de estado conversacional,
+// 2026-08-29. Criterio: uma nova solicitacao explicita NUNCA pode ser
+// silenciosamente interpretada como continuacao de uma selecao antiga.
+// =====================================================================
+
+// Peca 1 -- caso real ChannelTV: 2 acessos, acesso_selecionado +
+// intencao_atual gravados de uma escolha anterior, Gemini (guiado pelo
+// que seria o contexto) propoe o acesso 1 -> "quero renovar" deve
+// RELISTAR, nunca ir direto pra "Confira os dados".
+async function testeZ1() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A; // escolha anterior (BLAZE)
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
+  await resp.json();
+  const enviadas = getMensagensEnviadas();
+
+  ok(resp.status === 200, "Teste Z1: HTTP 200");
+  ok(enviadas.length === 1, "Teste Z1: exatamente 1 mensagem ao cliente");
+  ok(enviadas[0]?.texto.includes("📋 *Seus acessos*"), "Teste Z1: VOLTOU a listar os acessos");
+  ok(
+    enviadas[0]?.texto.includes("BLAZE") && enviadas[0]?.texto.includes("UNITV"),
+    "Teste Z1: a lista mostra os DOIS acessos",
+  );
+  ok(
+    !enviadas.some((m) => m.texto.includes("Confira os dados")),
+    "Teste Z1: NAO foi direto pra 'Confira os dados'",
+  );
+  ok(chamadasCriarToken() === 0, "Teste Z1: nenhum token individual criado");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste Z1: nenhuma confirmacao ACEITO/CANCELAR");
+}
+
+// Peca 1 -- outras formas do verbo devem ter o mesmo efeito.
+async function testeZ2() {
+  for (const frase of ["preciso renovar", "vou renovar", "quero fazer a renovação"]) {
+    resetarTudo();
+    configurarSigmaMaisUnitv();
+    getConversaAtual().acesso_selecionado = PUBLIC_ID_A;
+    getConversaAtual().intencao_atual = "renovacao";
+    definirProximaRespostaGemini({
+      outcome: "success",
+      data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+    });
+    const resp = await handler(req({ telefone: TELEFONE, conteudo: frase }));
+    await resp.json();
+    const enviadas = getMensagensEnviadas();
+    ok(
+      enviadas.length === 1 && enviadas[0]?.texto.includes("📋 *Seus acessos*") && chamadasCriarToken() === 0,
+      `Teste Z2: "${frase}" -> relista (nova intencao explicita)`,
+    );
+  }
+}
+
+// Peca 2 -- CONTINUACAO: sem verbo renovar, com acesso_selecionado NAO
+// obsoleto (nenhuma operacao terminal) -> honra a selecao anterior,
+// vai pra "Confira os dados", NAO relista.
+async function testeZ3() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A; // BLAZE
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Confirmando sua renovação, um momento." },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "pode ser esse acesso mesmo" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Teste Z3: HTTP 200");
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("📋 *Seus acessos*")),
+    "Teste Z3: continuacao -> NAO relista",
+  );
+  ok(
+    body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A,
+    "Teste Z3: continuacao -> resolve pela selecao de sessao (BLAZE)",
+  );
+  ok(chamadasCriarToken() === 1, "Teste Z3: token individual criado (Confira os dados)");
+}
+
+// Peca 1 -- nova intencao explicita MAS o cliente nomeia o servidor na
+// mensagem atual -> resolve pela mensagem atual, NAO relista.
+async function testeZ4() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A; // BLAZE guardado
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Vou renovar seu acesso UNITV!" },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o UNITV" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Teste Z4: HTTP 200");
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("📋 *Seus acessos*")),
+    "Teste Z4: servidor nomeado na msg atual -> NAO relista",
+  );
+  ok(
+    body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_B,
+    "Teste Z4: resolve UNITV pela mensagem atual (nao a selecao guardada BLAZE)",
+  );
+}
+
+// Peca 2 -- selecao por numero "1" NAO e' afetada pelo gate, mesmo com
+// acesso_selecionado velho e diferente pre-setado.
+async function testeZ5() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_B; // velho, diferente
+  getConversaAtual().intencao_atual = "renovacao"; // lista foi enviada antes
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "responder", texto: "Qual acesso?" },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Teste Z5: HTTP 200");
+  ok(
+    body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A,
+    "Teste Z5: '1' resolve a POSICAO 1 da lista (BLAZE), gate nao interfere",
+  );
+  ok(
+    atualizacoesSessaoRegistradas().some((a) => a.dados?.acessoSelecionado === PUBLIC_ID_A),
+    "Teste Z5: acesso_selecionado re-gravado do zero (posicao 1)",
+  );
+}
+
+// Peca 2 -- validade read-side: acesso_selecionado cuja ULTIMA operacao
+// e' TERMINAL -> obsoleto -> "quero renovar" relista (cenario 1/2 da
+// analise: renovacao concluida, depois nova intencao).
+async function testeZ6() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A;
+  getConversaAtual().intencao_atual = "renovacao";
+  definirUltimaOperacaoTerminalParaPublicId(PUBLIC_ID_A); // ultima renovacao do BLAZE ja terminou
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
+  await resp.json();
+  const enviadas = getMensagensEnviadas();
+
+  ok(
+    enviadas.length === 1 && enviadas[0]?.texto.includes("📋 *Seus acessos*") && chamadasCriarToken() === 0,
+    "Teste Z6: selecao obsoleta por operacao terminal -> relista",
+  );
+}
+
+// Peca 2 -- read-side: acesso_selecionado com operacao NAO-terminal
+// (viva) + mensagem de continuacao -> honra.
+async function testeZ7() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A;
+  getConversaAtual().intencao_atual = "renovacao";
+  // NAO marca como terminal -> operacao viva / anafora -> honra
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Confirmando, um momento." },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "isso, esse mesmo" }));
+  const body = await resp.json();
+
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("📋 *Seus acessos*")) &&
+      body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A,
+    "Teste Z7: operacao viva + continuacao -> honra a selecao (Confira os dados)",
+  );
+}
+
+// Peca 2 -- UNICO write de sessao: apresentar a lista zera
+// acesso_selecionado.
+async function testeZ8() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A;
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
+  await resp.json();
+
+  ok(
+    getMensagensEnviadas()[0]?.texto.includes("📋 *Seus acessos*"),
+    "Teste Z8: (pre-condicao) lista enviada",
+  );
+  ok(
+    atualizacoesSessaoRegistradas().some(
+      (a) => "acessoSelecionado" in (a.dados ?? {}) && a.dados.acessoSelecionado === null,
+    ),
+    "Teste Z8: ao enviar a lista, acesso_selecionado e' zerado na sessao",
+  );
+}
+
 await testeA();
 await testeB();
 await testeC();
@@ -1259,6 +1478,14 @@ await testeV3();
 await testeW();
 await testeX();
 await testeY();
+await testeZ1();
+await testeZ2();
+await testeZ3();
+await testeZ4();
+await testeZ5();
+await testeZ6();
+await testeZ7();
+await testeZ8();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);

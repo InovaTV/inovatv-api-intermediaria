@@ -361,6 +361,15 @@ export function montarTextoConfirmacaoPagamentoRenovacao(dados: {
 export const MENSAGEM_CANCELAMENTO_RENOVACAO =
   "Ok, cancelado! Se quiser renovar depois, é só me chamar novamente.";
 
+// Peca 3 do gerenciamento de estado (2026-08-29) -- CASO C: o
+// watchdog expirou uma solicitacao de renovacao 'autorizada' cujo
+// pagamento a Woovi confirmou NAO concluido apos a janela de 2h. O
+// acesso e' liberado e o cliente e' avisado (NUNCA transferido para
+// humano -- nao ha' nada pra um atendente fazer, e um atendimento
+// humano bloquearia o proximo "quero renovar" do proprio cliente).
+export const MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO =
+  "Sua solicitação de renovação expirou porque o pagamento não foi concluído. Sem problema — é só me chamar de novo quando quiser renovar. 🙂";
+
 // Reaproveitada quando ja existe uma solicitacao ATIVA pro mesmo
 // acesso (tokens_renovacao_ativo_unico_por_acesso_idx) -- nunca cria
 // uma segunda, so' lembra o cliente do que ja esta em andamento.

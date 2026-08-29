@@ -19,6 +19,19 @@ export type EstadoTokenRenovacao =
   | "renovacao_falhou"
   | "renovacao_indeterminada";
 
+// Estados NAO-terminais de um token: uma solicitacao de renovacao ainda
+// "viva" (o mesmo conjunto do indice unico parcial
+// tokens_renovacao_ativo_unico_por_acesso_idx e de
+// buscarTokenAtivoPorPublicId). Qualquer outro estado e' terminal --
+// o ciclo daquela renovacao acabou. Usado pela Peca 2 (validade
+// read-side do estado de sessao, 2026-08-29) e pela Peca 3 (ciclo de
+// vida dos estados presos).
+export const ESTADOS_TOKEN_NAO_TERMINAIS: readonly EstadoTokenRenovacao[] = [
+  "aguardando_confirmacao",
+  "autorizada",
+  "renovacao_em_andamento",
+];
+
 export interface TokenRenovacao {
   id: string;
   token_hash: string;
@@ -390,4 +403,120 @@ export async function buscarAutorizacoesOrfasAntigas(minutosLimite: number): Pro
 
   if (error) throw error;
   return (data as TokenRenovacao[]) ?? [];
+}
+
+// ---------------------------------------------------------------------
+// Peca 3 (2026-08-29, regra arquitetural aprovada): ciclo de vida
+// garantido dos estados NAO-terminais. Toda solicitacao presa alcanca
+// um estado terminal automaticamente, apos o proprio expira_em (2h) --
+// nunca os 15min do ciclo do watchdog, que sao so' a cadencia de
+// varredura. Sem isso, um webhook OpenPix perdido / atrasado deixa o
+// token preso em 'autorizada' PARA SEMPRE, e o indice unico parcial
+// bloqueia toda nova renovacao daquele acesso.
+// ---------------------------------------------------------------------
+
+// CASO A -- 'aguardando_confirmacao' vencido: o cliente nunca clicou
+// ACEITO/CANCELAR. Sem cobranca, sem dinheiro. Renovacao avulsa
+// (grupo_id NULL); o equivalente de lote e'
+// buscarLotesAguardandoExpirados.
+export async function buscarSolicitacoesAguardandoExpiradas(): Promise<TokenRenovacao[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("*")
+    .eq("estado", "aguardando_confirmacao")
+    .is("grupo_id", null)
+    .lt("expira_em", new Date().toISOString());
+
+  if (error) throw error;
+  return (data as TokenRenovacao[]) ?? [];
+}
+
+// CASOS B/C -- 'autorizada' COM cobranca vinculada (operacao_id NOT
+// NULL), alem do expira_em. Complemento de buscarAutorizacoesOrfasAntigas
+// (que so' pega operacao_id IS NULL). AQUI ha' dinheiro: a decisao
+// (recuperar x expirar) depende de reconsultar a Woovi. Renovacao
+// avulsa (grupo_id NULL).
+export async function buscarAutorizacoesVinculadasExpiradas(): Promise<TokenRenovacao[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("*")
+    .eq("estado", "autorizada")
+    .not("operacao_id", "is", null)
+    .is("grupo_id", null)
+    .lt("expira_em", new Date().toISOString());
+
+  if (error) throw error;
+  return (data as TokenRenovacao[]) ?? [];
+}
+
+// CASO C -- expira um token 'autorizada' (avulso) que a Woovi confirmou
+// NAO pago. CAS por estado: 0 linhas = o token ja avancou (webhook
+// ganhou a corrida de milissegundos, ou outro watchdog) -> o chamador
+// aborta o item sem tocar em mais nada. NAO expira a cobranca -- ela
+// fica 'pendente' pro Caso D conciliar (nunca perder um pagamento
+// concluido de verdade).
+export async function expirarAutorizacaoVinculada(
+  id: string,
+  motivo: string,
+): Promise<TokenRenovacao | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .update({ estado: "expirada", motivo_falha: motivo })
+    .eq("id", id)
+    .eq("estado", "autorizada")
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as TokenRenovacao) ?? null;
+}
+
+// CASO D -- rede de seguranca de dinheiro: tokens avulsos ja TERMINAIS
+// (expirada/falhou/indeterminada/cancelada) que tem uma cobranca
+// vinculada mas nenhuma renovacao concluida. Cobre a janela de
+// milissegundos entre a reconsulta do Caso C e o write, e qualquer
+// pagamento feito depois da expiracao. Naturalmente pequeno (so'
+// vitimas de C/E). O chamador reconsulta a Woovi por cada um.
+// renovacao_concluida_em IS NULL exclui os ja tratados (a marcacao de
+// "ciclo encerrado" abaixo preenche esse campo -> item nao volta).
+export async function buscarTokensTerminaisComCobrancaSemRenovacao(): Promise<TokenRenovacao[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("*")
+    .in("estado", ["expirada", "renovacao_falhou", "renovacao_indeterminada", "cancelada"])
+    .not("operacao_id", "is", null)
+    .is("grupo_id", null)
+    .is("renovacao_concluida_em", null);
+
+  if (error) throw error;
+  return (data as TokenRenovacao[]) ?? [];
+}
+
+// CASO D -- marca o ciclo daquela solicitacao como ENCERRADO
+// (renovacao_concluida_em) para que buscarTokensTerminaisComCobrancaSemRenovacao
+// nao a devolva de novo. Usado tanto no pagamento-orfao (entregue a
+// atendente) quanto no housekeeping (cobranca 'pendente' expirada apos
+// a carencia). CAS renovacao_concluida_em IS NULL -> idempotente:
+// null = outro ciclo do watchdog ja tratou. NAO altera 'estado' (o
+// token continua no seu estado terminal real: expirada / falhou /
+// indeterminada).
+export async function marcarCicloRenovacaoEncerrado(
+  id: string,
+  motivo: string,
+): Promise<TokenRenovacao | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .update({ renovacao_concluida_em: new Date().toISOString(), motivo_falha: motivo })
+    .eq("id", id)
+    .is("renovacao_concluida_em", null)
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as TokenRenovacao) ?? null;
 }

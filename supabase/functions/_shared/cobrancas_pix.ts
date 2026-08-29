@@ -132,3 +132,26 @@ export async function marcarCobrancaComoDivergente(
   if (error) throw error;
   return (data as CobrancaPix) ?? null;
 }
+
+// Peca 3 (2026-08-29) -- CASO D, housekeeping. So' o watchdog chama,
+// e SO' depois de: (a) o token/lote da operacao ja estar terminal, e
+// (b) ter passado a carencia de expira_em + 24h sem a Woovi confirmar
+// COMPLETED. Nunca marca 'expirada' uma cobranca que ainda pode virar
+// 'pago' -- essa e' a garantia de "nunca perder um pagamento". CAS
+// duplo (operacao_id + status='pendente'): idempotente, no-op se algo
+// ja mexeu na linha.
+export async function expirarCobrancaPendente(
+  operacaoId: string,
+): Promise<CobrancaPix | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("cobrancas_pix")
+    .update({ status: "expirada", atualizado_em: new Date().toISOString() })
+    .eq("operacao_id", operacaoId)
+    .eq("status", "pendente")
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as CobrancaPix) ?? null;
+}

@@ -8,7 +8,12 @@
 // botao ACEITO/CANCELAR.
 
 import { getServiceClient } from "./supabase_client.ts";
-import { hashToken, type EstadoTokenRenovacao, type TokenRenovacao } from "./tokens_renovacao.ts";
+import {
+  hashToken,
+  ESTADOS_TOKEN_NAO_TERMINAIS,
+  type EstadoTokenRenovacao,
+  type TokenRenovacao,
+} from "./tokens_renovacao.ts";
 
 export type EstadoRenovacaoLote =
   | "aguardando_confirmacao"
@@ -19,6 +24,15 @@ export type EstadoRenovacaoLote =
   | "concluida"
   | "parcial"
   | "falhou";
+
+// Estados NAO-terminais de um lote (mesmo principio do token: o ciclo
+// da renovacao ainda esta' vivo). Qualquer outro e' terminal. Usado
+// pela Peca 2 e pela Peca 3 (2026-08-29).
+export const ESTADOS_LOTE_NAO_TERMINAIS: readonly EstadoRenovacaoLote[] = [
+  "aguardando_confirmacao",
+  "autorizada",
+  "renovacao_em_andamento",
+];
 
 export interface RenovacaoLote {
   grupo_id: string;
@@ -314,4 +328,132 @@ export async function marcarResultadoFilhoLote(
     .maybeSingle();
   if (error) throw error;
   return (data as TokenRenovacao) ?? null;
+}
+
+// ---------------------------------------------------------------------
+// Peca 2 (2026-08-29): validade read-side do estado de sessao. O
+// Orquestrador so' honra conversas_estado.acesso_selecionado se ele
+// for consistente com o estado AUTORITATIVO da operacao de renovacao.
+// Consulta a ULTIMA operacao (token individual OU lote) para
+// (conversation_id, public_id):
+//   - terminal            -> obsoleto (ciclo de renovacao ja acabou)
+//   - nao-terminal          -> vivo, honra
+//   - nenhuma operacao       -> anafora conversacional pura, honra
+// Escopo por public_id (nunca por conversa inteira): uma renovacao
+// concluida de UM acesso nao invalida uma intencao nova para OUTRO,
+// nem a intencao gravada quando a lista foi reapresentada.
+export async function ultimaOperacaoRenovacaoEhTerminal(
+  conversationId: string,
+  publicId: string,
+): Promise<boolean> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("estado, grupo_id")
+    .eq("conversation_id", conversationId)
+    .eq("public_id", publicId)
+    .order("criado_em", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return false; // nenhuma operacao -> anafora, nao e' obsoleto
+
+  const row = data as { estado: EstadoTokenRenovacao; grupo_id: string | null };
+
+  if (row.grupo_id === null) {
+    return !ESTADOS_TOKEN_NAO_TERMINAIS.includes(row.estado);
+  }
+
+  // Filho de lote: a autoridade e' o estado do LOTE, nao o do filho.
+  const { data: lote, error: erroLote } = await client
+    .from("renovacoes_lote")
+    .select("estado")
+    .eq("grupo_id", row.grupo_id)
+    .maybeSingle();
+  if (erroLote) throw erroLote;
+  if (!lote) return false;
+
+  return !ESTADOS_LOTE_NAO_TERMINAIS.includes((lote as { estado: EstadoRenovacaoLote }).estado);
+}
+
+// ---------------------------------------------------------------------
+// Peca 3 (2026-08-29) -- ciclo de vida garantido dos lotes presos.
+// Espelho lote das funcoes em tokens_renovacao.ts. Janela: expira_em.
+// ---------------------------------------------------------------------
+
+// CASO A -- lote 'aguardando_confirmacao' vencido (cliente nunca
+// clicou). Sem cobranca.
+export async function buscarLotesAguardandoExpirados(): Promise<RenovacaoLote[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .eq("estado", "aguardando_confirmacao")
+    .lt("expira_em", new Date().toISOString());
+  if (error) throw error;
+  return (data as RenovacaoLote[]) ?? [];
+}
+
+// CASOS B/C -- lote 'autorizada' COM cobranca vinculada, alem do
+// expira_em. Complemento de buscarLotesAutorizadosOrfaosAntigos (que
+// so' pega operacao_id IS NULL).
+export async function buscarLotesAutorizadosVinculadosExpirados(): Promise<RenovacaoLote[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .eq("estado", "autorizada")
+    .not("operacao_id", "is", null)
+    .lt("expira_em", new Date().toISOString());
+  if (error) throw error;
+  return (data as RenovacaoLote[]) ?? [];
+}
+
+// CASO C -- expira um lote 'autorizada' + filhos 'autorizada' via RPC
+// atomica expirar_lote_autorizado (migration
+// 20260829140000_expirar_lote_autorizado.sql). 'expirada' (janela
+// fechou sem pagamento) e' semanticamente distinto de 'falhou'
+// (tentamos e deu erro) -- por isso RPC propria, nao reuso de
+// marcar_lote_como_falha. CAS interno WHERE estado='autorizada':
+// null = o lote ja avancou -> chamador aborta o item. NAO toca a
+// cobranca (Caso D concilia).
+export async function expirarLoteAutorizado(operacaoId: string): Promise<RenovacaoLote | null> {
+  const client = getServiceClient();
+  const { data, error } = await client.rpc("expirar_lote_autorizado", { p_operacao_id: operacaoId });
+  if (error) throw error;
+  return (data as RenovacaoLote) ?? null;
+}
+
+// CASO D -- lotes ja TERMINAIS (expirada/falhou/cancelada) com
+// cobranca vinculada mas sem renovacao concluida no nivel do lote.
+// Rede de seguranca de dinheiro para lote. 'parcial'/'concluida' NAO
+// entram: essas transicoes (marcarEstadoFinalLote) ja preenchem
+// renovacao_concluida_em -> filtradas pelo IS NULL abaixo.
+export async function buscarLotesTerminaisComCobrancaSemRenovacao(): Promise<RenovacaoLote[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .in("estado", ["expirada", "falhou", "cancelada"])
+    .not("operacao_id", "is", null)
+    .is("renovacao_concluida_em", null);
+  if (error) throw error;
+  return (data as RenovacaoLote[]) ?? [];
+}
+
+// CASO D -- marca o ciclo do lote como ENCERRADO
+// (renovacao_concluida_em) para nao reprocessar. CAS
+// renovacao_concluida_em IS NULL -> idempotente. NAO altera 'estado'.
+export async function marcarLoteCicloRenovacaoEncerrado(grupoId: string): Promise<RenovacaoLote | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .update({ renovacao_concluida_em: new Date().toISOString() })
+    .eq("grupo_id", grupoId)
+    .is("renovacao_concluida_em", null)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return (data as RenovacaoLote) ?? null;
 }

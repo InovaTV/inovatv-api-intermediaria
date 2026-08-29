@@ -178,7 +178,11 @@ import { buscarTokenAtivoPorPublicId, criarTokenRenovacao } from "../_shared/tok
 // criacao do lote sao deterministicas; UniTV entra como tipo desde ja
 // (executor stub, sem chamada real -- Etapa 2).
 import { resolverPrecoLote } from "../_shared/precos_renovacao.ts";
-import { criarRenovacaoLote, existeLoteAtivoParaPublicId } from "../_shared/renovacoes_lote.ts";
+import {
+  criarRenovacaoLote,
+  existeLoteAtivoParaPublicId,
+  ultimaOperacaoRenovacaoEhTerminal,
+} from "../_shared/renovacoes_lote.ts";
 // Etapa 1.5 (Lacuna A, 2026-08-28) -- roteamento por tipo de acesso.
 // UniTV nunca segue o fluxo Sigma (nao cria token tipo='sigma', nao
 // cobra). Ate a Etapa 2, acesso UniTV -> tratamento explicito
@@ -908,23 +912,55 @@ Deno.serve(async (req: Request) => {
       ? `[CONHECIMENTO INSTITUCIONAL - ${conhecimentoResult.titulo}]\n${conhecimentoResult.conteudo}`
       : null;
 
+  // Gerenciamento de estado conversacional (2026-08-29, regra
+  // arquitetural aprovada: "contexto de sessao e' continuacao, nunca
+  // reabertura"). acesso_selecionado/intencao_atual so' valem como
+  // CONTINUACAO -- nunca contaminam um pedido novo.
+  //
+  // Peca 1 -- NOVA_INTENCAO_EXPLICITA: a mensagem ATUAL contem, ela
+  // mesma, um gatilho explicito de renovar (verbo/variacao morfologica
+  // direta, mesma REGEX_INTENCAO_RENOVACAO). E' um pedido novo; a
+  // selecao/intencao guardada NAO participa da decisao desta
+  // requisicao. Nao apaga do banco -- so' ignora aqui; a Peca 2 e as
+  // transicoes da Peca 3 fazem a limpeza real. Continuacoes ("1",
+  // "esse acesso", "sim", botao ACEITO/CANCELAR -- este nem passa por
+  // aqui) seguem normais.
+  const novaIntencaoRenovacaoExplicita = REGEX_INTENCAO_RENOVACAO.test(conteudo);
+  //
+  // Peca 2 -- validade READ-SIDE: acesso_selecionado so' e' honrado se
+  // for consistente com o estado AUTORITATIVO da operacao. Se a ultima
+  // operacao de renovacao (token individual OU lote) para
+  // (conversation_id, acesso_selecionado) esta' em estado TERMINAL, a
+  // selecao guardada pertence a um ciclo de renovacao que ja acabou ->
+  // ignora. Sem operacao nenhuma = anafora conversacional pura
+  // ("perguntou do NewOne, depois diz 'esse acesso'") -> honra.
+  // Nao-terminal = operacao viva -> honra. NENHUM write de sessao aqui.
+  const acessoSelecionadoObsoletoPorOperacaoTerminal =
+    conversa.acesso_selecionado !== null &&
+    (await ultimaOperacaoRenovacaoEhTerminal(
+      conversa.conversation_id,
+      conversa.acesso_selecionado,
+    ));
+
+  const ignorarSelecaoAnterior =
+    novaIntencaoRenovacaoExplicita || acessoSelecionadoObsoletoPorOperacaoTerminal;
+
   // Memoria de sessao (2026-08-23): resolve conversa.acesso_selecionado
   // (public_id guardado) contra o conjunto FRESCO de statusResults
   // desta chamada -- nunca confia no valor guardado sem reconferir. Se
-  // o public_id nao existir mais no conjunto atual (acesso sumiu/
-  // mudou), e' tratado como se nao houvesse selecao nenhuma -- sem
-  // erro, sem aviso ao cliente.
-  const acessoSelecionadoServidor = conversa.acesso_selecionado
-    ? (statusResults.find((s) => s.publicId === conversa.acesso_selecionado)?.cliente
-        ?.servidorNome ?? null)
-    : null;
-  // Memoria de sessao (extensao 2026-08-23): leitura direta, sem
-  // reconferencia adicional -- intencao_atual nao e' um ponteiro pra
-  // dado do Rocket (diferente de acesso_selecionado), so' um sinal de
-  // continuidade conversacional, ja coberto pelo mesmo TTL/invalidacao
-  // que zera esta e as outras 2 colunas juntas (Passo 0-B, e as 3 RPCs
-  // de atendimento humano).
-  const intencaoRenovacaoEstabelecida = conversa.intencao_atual === "renovacao";
+  // o public_id nao existir mais no conjunto atual, e' tratado como se
+  // nao houvesse selecao. A partir de 2026-08-29 tambem: null quando
+  // ignorarSelecaoAnterior (Peca 1/2).
+  const acessoSelecionadoServidor =
+    !ignorarSelecaoAnterior && conversa.acesso_selecionado
+      ? (statusResults.find((s) => s.publicId === conversa.acesso_selecionado)?.cliente
+          ?.servidorNome ?? null)
+      : null;
+  // Memoria de sessao (extensao 2026-08-23) + Peca 1/2 (2026-08-29):
+  // so' vale como continuidade quando a mensagem atual NAO e' uma nova
+  // intencao explicita e a selecao anterior nao esta' obsoleta.
+  const intencaoRenovacaoEstabelecida =
+    !ignorarSelecaoAnterior && conversa.intencao_atual === "renovacao";
   const contextoConversa = montarContextoConversa(
     acessoSelecionadoServidor,
     intencaoRenovacaoEstabelecida,
@@ -1026,7 +1062,7 @@ Deno.serve(async (req: Request) => {
     // 100% inalterado. NAO toca prompt do Gemini, maquina de estados,
     // cobranca, webhook, Sigma nem Validador.
     const clienteDemonstrouIntencaoRenovar =
-      REGEX_INTENCAO_RENOVACAO.test(conteudo) || conversa.intencao_atual === "renovacao";
+      REGEX_INTENCAO_RENOVACAO.test(conteudo) || intencaoRenovacaoEstabelecida;
     const haMultiplosAcessos =
       statusResults.filter((s) => s.outcome === "success" && !!s.cliente).length >= 2;
     const interceptarListaMultiplosAcessos =
@@ -1522,9 +1558,17 @@ Deno.serve(async (req: Request) => {
         // texto atual). Best-effort. Cobre tambem o caso C3
         // (interceptarListaMultiplosAcessos), que antes so' gravava
         // quando a palavra estava na mensagem atual.
-        await atualizarSessao(conversa.conversation_id, { intencaoAtual: "renovacao" }).catch(
-          () => {},
-        );
+        //
+        // Peca 2 (2026-08-29) -- UNICO write de sessao desta frente:
+        // apresentar a lista INVALIDA qualquer selecao anterior. A
+        // escolha antiga deixou de valer; a proxima mensagem "1"/"2"
+        // grava acesso_selecionado de novo, do zero. Sem isso, uma
+        // selecao de um ciclo anterior sobreviveria a reapresentacao da
+        // lista.
+        await atualizarSessao(conversa.conversation_id, {
+          intencaoAtual: "renovacao",
+          acessoSelecionado: null,
+        }).catch(() => {});
       }
       renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
     } else if (propostaRenovacaoComAcesso) {
