@@ -73,6 +73,20 @@ export function paraCentavos(valorBruto: string | number | null | undefined): nu
 export const MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO =
   "Certo! Vou preparar seu pagamento via Pix. Só um momento...";
 
+// Mensagem intermediaria "renovacao em andamento" (2026-08-29) --
+// enviada UMA vez pelo openpix-webhook, logo apos o pagamento ser
+// confirmado (reivindicarInicioRenovacao/...Lote com sucesso) e ANTES
+// do dispatch do GitHub Actions. Elimina o silencio percebido pelo
+// cliente durante o processamento assincrono (30s-2min). Vale igual
+// para Sigma e UniTV, individual e lote -- caminho unico, sem branch
+// por tipo. Best-effort: falha no envio nunca impede o dispatch.
+// NAO substitui a mensagem final de sucesso.
+export const MENSAGEM_RENOVACAO_EM_ANDAMENTO =
+  "🔄 Renovação em andamento...\n\n" +
+  "Seu pagamento foi confirmado e estamos processando a renovação dos seus acessos.\n\n" +
+  "⏳ Esse processo pode levar até 2 minutos.\n\n" +
+  "Por favor, aguarde e não envie novas mensagens. Você receberá a confirmação assim que tudo estiver concluído.";
+
 // Mensagem 2 -- so' enviada DEPOIS que a cobranca real existe (valor e
 // codigo Pix vem sempre de dado real: valorFormatado do Rocket,
 // codigoPix do provedor -- nunca inventados). Reforca que a renovacao

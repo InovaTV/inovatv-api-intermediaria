@@ -61,6 +61,9 @@ import {
 import { reivindicarInicioRenovacao } from "../_shared/tokens_renovacao.ts";
 import { reivindicarInicioRenovacaoLote } from "../_shared/renovacoes_lote.ts";
 import { dispararWorkflowRenovacaoSigma } from "../_shared/github_actions_dispatch.ts";
+import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
+import { MENSAGEM_RENOVACAO_EM_ANDAMENTO } from "../_shared/mensagens_fixas.ts";
 
 interface OpenPixWebhookPayload {
   event?: string;
@@ -156,6 +159,31 @@ async function iniciarRenovacaoSigma(
         JSON.stringify({ operacaoId, lote: !!grupoId }),
       );
       return;
+    }
+
+    // Mensagem intermediaria "renovacao em andamento" (2026-08-29).
+    // Enviada UMA vez -- so' se a reivindicacao acima teve sucesso (a
+    // reentrega de webhook cai no `!reivindicado` acima e nunca chega
+    // aqui). Caminho UNICO para individual e lote: `reivindicado` e'
+    // TokenRenovacao OU RenovacaoLote, os dois carregam telefone +
+    // conversation_id. Sem branch por tipo (Sigma/UniTV e' decidido
+    // dentro do workflow). BEST-EFFORT: uma falha aqui (WhatsApp ou
+    // historico) NUNCA pode impedir o dispatch abaixo.
+    try {
+      const envio = await enviarMensagemWhatsApp(reivindicado.telefone, MENSAGEM_RENOVACAO_EM_ANDAMENTO);
+      if (envio.outcome === "success") {
+        await inserirMensagem(
+          reivindicado.conversation_id,
+          "ia",
+          MENSAGEM_RENOVACAO_EM_ANDAMENTO,
+          null,
+        ).catch(() => {});
+      }
+    } catch (erro) {
+      console.log(
+        "[openpix-webhook] falha ao enviar a mensagem intermediaria 'renovacao em andamento' -- segue o dispatch normalmente",
+        JSON.stringify({ operacaoId, erro: String(erro) }),
+      );
     }
 
     const disparo = await dispararWorkflowRenovacaoSigma(operacaoId);
