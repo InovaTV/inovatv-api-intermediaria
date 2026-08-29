@@ -151,5 +151,110 @@ const TOKEN_UNITV = {
   ok(fNotif.notificacoes().length === 1 && fNotif.notificacoes()[0].opcoes?.avisarCliente === false, "C5: notificarTransferenciaHumana com avisarCliente:false");
 }
 
+// =====================================================================
+// GAP 3 -- resultados[] de tipos MISTOS (1 Sigma + 1 UniTV) chegando
+// a processarResultadoLote. Complementa C4/C5 (que eram 2xUniTV).
+// =====================================================================
+
+// helper: acha o bloco de um servidor dentro da mensagem consolidada
+function blocoDoServidor(texto, servidor) {
+  return texto.split("\n\n").find((b) => b.includes(`🖥️ ${servidor}`));
+}
+
+// =====================================================================
+// C6: LOTE MISTO, Sigma sucesso + UniTV sucesso -> lote_concluida,
+//     mensagem consolidada com os DOIS vencimentos, sem transferencia,
+//     sem nota de dessincronia.
+// =====================================================================
+{
+  resetar();
+  fLote.configurarLote({ grupo_id: "grp-6", conversation_id: "conv-misto-6", telefone: "5517000000006" });
+  fLote.configurarFilhos([{ id: "h1" }, { id: "h2" }]);
+  const resp = await handler(req({
+    operacao_id: "op-6", grupo_id: "grp-6",
+    resultados: [
+      { token_id: "h1", tipo: "sigma", servidor_nome: "BLAZE", cliente_nome: "A", resultado: "sucesso", vencimentoConfirmado: "2026-12-03T02:31:01-03:00" },
+      { token_id: "h2", tipo: "unitv", servidor_nome: "UNITV", cliente_nome: "B", resultado: "sucesso", vencimentoConfirmado: "2026-12-10T02:31:01-03:00" },
+    ],
+  }));
+  const body = await resp.json();
+  ok(body.outcome === "lote_concluida", "C6: misto ambos sucesso -> lote_concluida");
+  ok(fConv.acionamentos().length === 0, "C6: concluida -> NENHUMA transferencia");
+  ok(fNotif.notificacoes().length === 0, "C6: concluida -> notificarTransferenciaHumana nao chamado");
+  ok(fWa.mensagensEnviadas().length === 1, "C6: 1 mensagem consolidada ao cliente");
+  const texto6 = fWa.mensagensEnviadas()[0].texto;
+  const bSigma6 = blocoDoServidor(texto6, "BLAZE");
+  const bUnitv6 = blocoDoServidor(texto6, "UNITV");
+  ok(bSigma6 && /📅 Novo vencimento:/.test(bSigma6), "C6: bloco Sigma (BLAZE) mostra novo vencimento");
+  ok(bUnitv6 && /📅 Novo vencimento:/.test(bUnitv6), "C6: bloco UniTV (UNITV) mostra novo vencimento");
+  ok(!/⚠️ Um atendente/.test(texto6), "C6: nenhum bloco com aviso de 'um atendente vai concluir'");
+  ok(!fWa.templatesEnviados().some((t) => t.nome === "nova_transferencia_humana"), "C6: nenhum aviso ao Jose (sem falha, sem desync)");
+  ok(!fMsg.mensagens().some((m) => m.origem === "sistema" && /Rocket/.test(m.texto) && /NÃO sincronizou/.test(m.texto)), "C6: nenhuma nota de dessincronia");
+}
+
+// =====================================================================
+// C7: LOTE MISTO parcial -- o filho que FALHA e' o Sigma, o UniTV tem
+//     sucesso (o inverso de C5). -> lote_parcial, transferencia
+//     'renovacao_lote:parcial' com avisarCliente:false, bloco Sigma com
+//     aviso de atendente e bloco UniTV com vencimento.
+// =====================================================================
+{
+  resetar();
+  fLote.configurarLote({ grupo_id: "grp-7", conversation_id: "conv-misto-7", telefone: "5517000000007" });
+  fLote.configurarFilhos([{ id: "h1" }, { id: "h2" }]);
+  const resp = await handler(req({
+    operacao_id: "op-7", grupo_id: "grp-7",
+    resultados: [
+      { token_id: "h1", tipo: "sigma", servidor_nome: "BLAZE", cliente_nome: "A", resultado: "falha", detalhe: "vencimento nao mudou em nenhum dos dois sistemas apos o clique" },
+      { token_id: "h2", tipo: "unitv", servidor_nome: "UNITV", cliente_nome: "B", resultado: "sucesso", vencimentoConfirmado: "2026-12-10T02:31:01-03:00" },
+    ],
+  }));
+  const body = await resp.json();
+  ok(body.outcome === "lote_parcial", "C7: Sigma falha + UniTV sucesso -> lote_parcial");
+  const acion7 = fConv.acionamentos();
+  ok(acion7.length === 1 && acion7[0].motivo === "renovacao_lote:parcial", "C7: transferencia com motivo 'renovacao_lote:parcial' (nao unitv_pendente_integracao)");
+  ok(fNotif.notificacoes().length === 1 && fNotif.notificacoes()[0].opcoes?.avisarCliente === false, "C7: notificarTransferenciaHumana com avisarCliente:false");
+  const texto7 = fWa.mensagensEnviadas()[0]?.texto ?? "";
+  const bSigma7 = blocoDoServidor(texto7, "BLAZE");
+  const bUnitv7 = blocoDoServidor(texto7, "UNITV");
+  ok(bSigma7 && /⚠️ Um atendente/.test(bSigma7) && !/📅 Novo vencimento:/.test(bSigma7), "C7: bloco Sigma (falhou) -> aviso de atendente, sem vencimento");
+  ok(bUnitv7 && /📅 Novo vencimento:/.test(bUnitv7), "C7: bloco UniTV (sucesso) -> novo vencimento");
+  ok(!fWa.templatesEnviados().some((t) => t.nome === "nova_transferencia_humana"), "C7: sem rocketDesync -> nenhum aviso 'renovacao_unitv:rocket_desync'");
+  ok(!fMsg.mensagens().some((m) => m.origem === "sistema" && /NÃO sincronizou no Rocket/.test(m.texto)), "C7: sem nota de dessincronia");
+}
+
+// =====================================================================
+// C8: LOTE MISTO -- Sigma FALHA + UniTV SUCESSO com rocketDesync.
+//     Exercita os DOIS ramos juntos: transferencia por 'parcial' E
+//     avisarRocketDesync (nota de sistema + aviso ao Jose).
+// =====================================================================
+{
+  resetar();
+  fLote.configurarLote({ grupo_id: "grp-8", conversation_id: "conv-misto-8", telefone: "5517000000008" });
+  fLote.configurarFilhos([{ id: "h1" }, { id: "h2" }]);
+  const resp = await handler(req({
+    operacao_id: "op-8", grupo_id: "grp-8",
+    resultados: [
+      { token_id: "h1", tipo: "sigma", servidor_nome: "BLAZE", cliente_nome: "A", resultado: "falha", detalhe: "veredito 'falha'" },
+      { token_id: "h2", tipo: "unitv", servidor_nome: "UNITV", cliente_nome: "B", resultado: "sucesso", vencimentoConfirmado: "2026-12-10T02:31:01-03:00", rocketDesync: true },
+    ],
+  }));
+  const body = await resp.json();
+  ok(body.outcome === "lote_parcial", "C8: parcial (Sigma falha)");
+
+  // ramo 1: transferencia por parcial
+  const acion8 = fConv.acionamentos();
+  ok(acion8.length === 1 && acion8[0].motivo === "renovacao_lote:parcial", "C8: transferencia 'renovacao_lote:parcial'");
+  ok(fNotif.notificacoes().length === 1 && fNotif.notificacoes()[0].opcoes?.avisarCliente === false, "C8: notificarTransferenciaHumana avisarCliente:false");
+
+  // ramo 2: avisarRocketDesync (independente do estadoFinal)
+  ok(fMsg.mensagens().some((m) => m.origem === "sistema" && /NÃO sincronizou no Rocket/.test(m.texto)), "C8: nota de sistema da dessincronia (ramo rocketDesync)");
+  const avisos8 = fWa.templatesEnviados().filter((t) => t.nome === "nova_transferencia_humana");
+  ok(avisos8.length === 1 && avisos8[0].parametros[0] === "renovacao_unitv:rocket_desync", "C8: aviso ao Jose 'renovacao_unitv:rocket_desync' (exatamente 1, do avisarRocketDesync)");
+
+  // cliente continua recebendo APENAS a mensagem consolidada (1)
+  ok(fWa.mensagensEnviadas().length === 1, "C8: 1 unica mensagem ao cliente (a consolidada), nunca 2a por dessincronia");
+}
+
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);
