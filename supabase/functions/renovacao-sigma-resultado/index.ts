@@ -43,9 +43,32 @@ import { enviarTemplateWhatsApp, enviarMensagemWhatsApp } from "../_shared/whats
 import {
   NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
   IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
+  NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+  IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   montarTextoConfirmacaoPagamentoRenovacao,
   montarMensagemResultadoLote,
 } from "../_shared/mensagens_fixas.ts";
+
+// Etapa 2 (Renovacao UniTV, Bloco 4). Dessincronia: a renovacao UniTV
+// deu certo no painel de revenda mas o vencimento NAO sincronizou no
+// Rocket. A renovacao continua sendo SUCESSO (o cliente recebe a data
+// confirmada pelo painel). Isto e' so' um heads-up interno para o Jose
+// ajustar o vencimento no Rocket -- NUNCA aguardando_humano, NUNCA 2a
+// mensagem ao cliente.
+const MOTIVO_ROCKET_DESYNC = "renovacao_unitv:rocket_desync";
+
+async function avisarRocketDesync(conversationId: string, textoSistema: string): Promise<void> {
+  await inserirMensagem(conversationId, "sistema", textoSistema, null).catch(() => {});
+  const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
+  if (numeroJose) {
+    await enviarTemplateWhatsApp(
+      numeroJose,
+      NOME_TEMPLATE_NOVA_TRANSFERENCIA,
+      IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
+      [MOTIVO_ROCKET_DESYNC],
+    ).catch(() => {});
+  }
+}
 
 const RESULTADOS_VALIDOS: ResultadoRenovacaoSigma[] = [
   "sucesso",
@@ -69,6 +92,9 @@ interface ItemResultadoLote {
   resultado?: string;
   vencimentoConfirmado?: string;
   detalhe?: string;
+  // Etapa 2 (Bloco 4): filho UniTV renovou no painel mas o Rocket nao
+  // sincronizou -- o resultado continua "sucesso".
+  rocketDesync?: boolean;
 }
 
 function formatarDataBr(iso: string): string {
@@ -93,6 +119,9 @@ Deno.serve(async (req: Request) => {
     resultados?: ItemResultadoLote[];
     vencimentoConfirmado?: string;
     detalhe?: string;
+    // Etapa 2 (Bloco 4): individual UniTV -- renovou no painel mas o
+    // Rocket nao sincronizou. resultado continua "sucesso".
+    rocketDesync?: boolean;
   };
   try {
     body = await req.json();
@@ -175,6 +204,19 @@ Deno.serve(async (req: Request) => {
         null,
       ).catch(() => {});
     }
+
+    // Etapa 2 (Bloco 4): renovacao UniTV concluida no painel, Rocket
+    // NAO sincronizado. A mensagem de sucesso ao cliente (template
+    // acima) ja saiu com a data confirmada pelo painel; aqui so' o
+    // heads-up interno. Nunca aguardando_humano, nunca 2a mensagem ao
+    // cliente.
+    if (body.rocketDesync === true) {
+      await avisarRocketDesync(
+        atualizado.conversation_id,
+        "Renovação UniTV concluída no painel; vencimento NÃO sincronizado no Rocket -- requer ajuste manual do vencimento.",
+      );
+    }
+
     return jsonResponse({ outcome: "sucesso_processado", mensagemEnviada: envio.outcome === "success" });
   }
 
@@ -294,6 +336,18 @@ async function processarResultadoLote(body: {
     console.log(
       "[renovacao-sigma-resultado] falha ao enviar resultado do lote ao cliente (possivel janela 24h) -- so' logado",
       JSON.stringify({ grupoId, outcome: envio.outcome }),
+    );
+  }
+
+  // Etapa 2 (Bloco 4): algum filho UniTV renovou no painel mas o Rocket
+  // nao sincronizou -> heads-up interno UMA vez, independente de
+  // estadoFinal (um lote 100% sucesso com 1 filho dessincronizado e'
+  // 'concluida' e nao transfere, mas ainda precisa do aviso). Nunca
+  // aguardando_humano so' por dessincronia, nunca 2a mensagem ao cliente.
+  if (itens.some((it) => it.rocketDesync === true)) {
+    await avisarRocketDesync(
+      lote.conversation_id,
+      "Renovação em lote: um ou mais acessos UniTV renovaram no painel mas o vencimento NÃO sincronizou no Rocket -- requer ajuste manual.",
     );
   }
 

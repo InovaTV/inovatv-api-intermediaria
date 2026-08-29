@@ -32,10 +32,16 @@ const {
 } = await import("./fake_whatsapp_client.mjs");
 const { resetarValorCliente, chamadasConsultarValor } =
   await import("./fake_rocket_valor_cliente.mjs");
-const { resetarTokensRenovacao, chamadasCriarToken } = await import("./fake_tokens_renovacao.mjs");
+const { resetarTokensRenovacao, chamadasCriarToken, argsCriarToken } = await import("./fake_tokens_renovacao.mjs");
 const { resetarRenovacoesLote, chamadasCriarLote, definirLoteAtivoParaPublicId } =
   await import("./fake_renovacoes_lote.mjs");
 const { configurarTokenExistente } = await import("./fake_tokens_renovacao.mjs");
+const {
+  resetarUnitvContaClient,
+  definirResolucaoContaUnitv,
+  snsResolverContaUnitv,
+} = await import("./fake_unitv_conta_client.mjs");
+const { definirProximoResultadoValorCliente } = await import("./fake_rocket_valor_cliente.mjs");
 
 const TOKEN_INTERNO = "orchestrator-token-de-teste";
 process.env.ORCHESTRATOR_INTERNAL_TOKEN = TOKEN_INTERNO;
@@ -76,6 +82,7 @@ function resetarTudo() {
   resetarValorCliente();
   resetarTokensRenovacao();
   resetarRenovacoesLote();
+  resetarUnitvContaClient();
 }
 
 function req(corpo) {
@@ -142,14 +149,14 @@ function configurarSigmaMaisUnitv() {
     linkState: "linked",
     publicId: PUBLIC_ID_A,
     syncedAt: new Date().toISOString(),
-    cliente: { nome: "Meu Uso Testes", vencimento: "2026-09-13T23:59:00-03:00", planoNome: "Mensal", servidorNome: "BLAZE", telas: 1, valor: "35.00" },
+    cliente: { nome: "Meu Uso Testes", usuario: "828667229", vencimento: "2026-09-13T23:59:00-03:00", planoNome: "Mensal", servidorNome: "BLAZE", telas: 1, valor: "35.00" },
   });
   configurarStatus(PUBLIC_ID_B, {
     outcome: "success",
     linkState: "linked",
     publicId: PUBLIC_ID_B,
     syncedAt: new Date().toISOString(),
-    cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+    cliente: { nome: "José Antonio Dos Santos", usuario: "gcnv6v", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
   });
 }
 
@@ -164,11 +171,11 @@ function configurarDoisUnitv() {
   });
   configurarStatus(PUBLIC_ID_A, {
     outcome: "success", linkState: "linked", publicId: PUBLIC_ID_A, syncedAt: new Date().toISOString(),
-    cliente: { nome: "Karla Filha", vencimento: "2026-09-21T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+    cliente: { nome: "Karla Filha", usuario: "3tnjsc", vencimento: "2026-09-21T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
   });
   configurarStatus(PUBLIC_ID_B, {
     outcome: "success", linkState: "linked", publicId: PUBLIC_ID_B, syncedAt: new Date().toISOString(),
-    cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+    cliente: { nome: "José Antonio Dos Santos", usuario: "gcnv6v", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
   });
 }
 
@@ -842,13 +849,22 @@ async function testeR() {
 const { MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA, MENSAGEM_RENOVACAO_LOTE_COM_UNITV } =
   await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
 
-// Teste S: seleciona por NÚMERO um acesso UniTV -> NUNCA cria token
-// tipo='sigma', NUNCA consulta valor no Rocket, NUNCA gera confirmacao
-// interativa. Mensagem fixa "UniTV nao integrada" + transferencia
-// humana (motivo proprio) + aviso ao Jose.
+// Etapa 2 (Bloco 4) -- roteamento UniTV VIRADO: UniTV resolvida segue
+// o fluxo normal de renovacao (token tipo='unitv' + ACEITO/CANCELAR);
+// as mensagens fixas de UniTV so' aparecem como FALLBACK quando a
+// resolucao da conta (sn -> id do painel) falha. A resolucao acontece
+// via renovacao-unitv-conta (fake_unitv_conta_client).
+
+// Teste S: seleciona por NUMERO um acesso UniTV, resolucao OK -> cria
+// token tipo='unitv' (public_id + unitv_sn + unitv_id) + confirmacao
+// interativa. NENHUMA transferencia, NENHUMA mensagem fixa de UniTV.
 async function testeS() {
   resetarTudo();
-  configurarSigmaMaisUnitv(); // 1=BLAZE sigma, 2=UNITV
+  configurarSigmaMaisUnitv(); // 1=BLAZE sigma, 2=UNITV (usuario "gcnv6v")
+  definirProximoResultadoValorCliente({
+    outcome: "success", nome: "José Antonio Dos Santos", servidorNome: "UNITV",
+    planoNome: "Mensal", valor: "35.00", vencimento: "2026-11-03T23:59:00-03:00", usuario: "gcnv6v",
+  });
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
 
@@ -856,37 +872,86 @@ async function testeS() {
   const body = await resp.json();
 
   ok(resp.status === 200, "Teste S: HTTP 200");
-  ok(chamadasCriarToken() === 0, "Teste S: NENHUM token de renovacao criado para o acesso UniTV");
-  ok(chamadasConsultarValor() === 0, "Teste S: NENHUMA consulta de valor no Rocket (sem preparar cobranca)");
-  ok(getMensagensInterativasEnviadas().length === 0, "Teste S: NENHUMA confirmacao interativa (sem ACEITO/PIX)");
+  ok(snsResolverContaUnitv().includes("gcnv6v"), "Teste S: resolveu a conta UniTV pelo sn (== usuario) 'gcnv6v'");
+  ok(chamadasCriarToken() === 1, "Teste S: 1 token de renovacao criado (UniTV resolvida segue o fluxo)");
+  const arg = argsCriarToken()[0] ?? {};
+  ok(arg.tipo === "unitv", "Teste S: token criado com tipo='unitv'");
+  ok(arg.unitvSn === "gcnv6v" && arg.unitvId === 3433363, "Teste S: token carrega unitv_sn + unitv_id resolvidos");
+  ok(arg.publicId === PUBLIC_ID_B, "Teste S: token mantem public_id (id do cliente no Rocket)");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste S: confirmacao interativa ACEITO/CANCELAR enviada");
   ok(chamadasCriarLote().length === 0, "Teste S: nao cria lote");
+  ok(acionamentosRegistrados().length === 0, "Teste S: NENHUMA transferencia humana (UniTV resolvida)");
   ok(
-    !getMensagensEnviadas().some((m) => m.texto.includes("buscar os dados")),
-    "Teste S: nem a mensagem 'buscando dados' -- barra antes de tudo",
+    !getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
+    "Teste S: mensagem fixa de 'UniTV nao integrada' NUNCA aparece quando resolve",
   );
+  ok(body?.renovacao?.acessoResolvido?.servidorNome === "UNITV", "Teste S: diagnostico -- acesso selecionado era UniTV");
+}
+
+// Teste S2: acesso UniTV, resolucao da conta FALHA (nao_encontrado) ->
+// NENHUM token/cobranca; mensagem fixa de fallback + transferencia com
+// motivo especifico + aviso ao Jose.
+async function testeS2() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  definirResolucaoContaUnitv({ outcome: "nao_encontrado" });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
+  await resp.json();
+
+  ok(chamadasCriarToken() === 0, "Teste S2: resolucao falhou -> NENHUM token criado");
+  ok(chamadasConsultarValor() === 0, "Teste S2: NENHUMA consulta de valor no Rocket");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste S2: NENHUMA confirmacao interativa");
   const acion = acionamentosRegistrados();
   ok(
-    acion.length === 1 && acion[0].motivo === "renovacao:unitv_nao_integrada",
-    "Teste S: transferencia humana acionada com motivo 'renovacao:unitv_nao_integrada'",
+    acion.length === 1 && acion[0].motivo === "renovacao:unitv_conta_nao_encontrado",
+    "Teste S2: transferencia com motivo 'renovacao:unitv_conta_nao_encontrado'",
   );
   ok(
     getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
-    "Teste S: cliente recebe exatamente a mensagem fixa de UniTV nao integrada",
+    "Teste S2: cliente recebe a mensagem fixa de fallback (UX aprovada preservada)",
   );
   ok(
-    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:unitv_nao_integrada"),
-    "Teste S: aviso ao Jose (template) com o motivo UniTV",
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:unitv_conta_nao_encontrado"),
+    "Teste S2: aviso ao Jose com o motivo especifico",
   );
-  // O diagnostico identifica corretamente que o acesso selecionado era UniTV
-  // (foi roteado para o tratamento UniTV, nao para cobranca).
+}
+
+// Teste S3: acesso UniTV sem `usuario` em lugar nenhum (/status e
+// /match) -> fallback com motivo 'renovacao:unitv_sem_usuario', sem
+// nem chamar o resolvedor.
+async function testeS3() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  configurarMatch({
+    outcome: "multiple_matches",
+    candidates: [
+      { publicId: PUBLIC_ID_A, nome: "Meu Uso Testes", usuario: "828667229" },
+      { publicId: PUBLIC_ID_B, nome: "José Antonio Dos Santos", usuario: null },
+    ],
+  });
+  configurarStatus(PUBLIC_ID_B, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_B, syncedAt: new Date().toISOString(),
+    cliente: { nome: "José Antonio Dos Santos", usuario: null, vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
+  await resp.json();
+
+  ok(snsResolverContaUnitv().length === 0, "Teste S3: sem usuario -> resolvedor nunca e' chamado");
+  ok(chamadasCriarToken() === 0, "Teste S3: nenhum token criado");
+  const acion = acionamentosRegistrados();
   ok(
-    body?.renovacao?.acessoResolvido?.servidorNome === "UNITV",
-    "Teste S: diagnostico -- o acesso selecionado era UniTV (roteado ao tratamento UniTV)",
+    acion.length === 1 && acion[0].motivo === "renovacao:unitv_sem_usuario",
+    "Teste S3: transferencia com motivo 'renovacao:unitv_sem_usuario'",
   );
-  // E a sessao NAO gravou acesso_selecionado (nao houve textoEnviado de cobranca).
   ok(
-    !atualizacoesSessaoRegistradas().some((a) => a.dados?.acessoSelecionado),
-    "Teste S: sessao nao grava acesso_selecionado para um acesso UniTV",
+    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
+    "Teste S3: mensagem fixa de fallback",
   );
 }
 
@@ -903,6 +968,8 @@ async function testeT() {
 
   ok(acionamentosRegistrados().length === 0, "Teste T: acesso Sigma -> nenhuma transferencia");
   ok(chamadasCriarToken() === 1, "Teste T: acesso Sigma -> token de renovacao criado normalmente");
+  ok((argsCriarToken()[0] ?? {}).tipo === "sigma", "Teste T: token Sigma nasce tipo='sigma'");
+  ok(snsResolverContaUnitv().length === 0, "Teste T: acesso Sigma -> resolvedor UniTV nunca chamado");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste T: confirmacao interativa ACEITO/CANCELAR do acesso Sigma");
   ok(body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A, "Teste T: acesso resolvido = o Sigma (posicao 1)");
   ok(
@@ -911,8 +978,9 @@ async function testeT() {
   );
 }
 
-// Teste U: "0" com Sigma + UniTV -> NENHUM lote criado, nenhuma
-// cobranca. Mensagem fixa "lote com UniTV" + transferencia.
+// Teste U: "0" com Sigma + UniTV, TODAS as contas UniTV resolvem ->
+// lote MISTO criado (preco = soma real, filhos tipo-aware com
+// unitv_sn/unitv_id nos filhos UniTV, public_id em todos).
 async function testeU() {
   resetarTudo();
   configurarSigmaMaisUnitv();
@@ -922,28 +990,55 @@ async function testeU() {
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   const body = await resp.json();
 
-  ok(chamadasCriarLote().length === 0, "Teste U: '0' com UniTV no lote -> NENHUM lote criado");
-  ok(getMensagensInterativasEnviadas().length === 0, "Teste U: nenhuma confirmacao interativa de lote");
-  ok(chamadasCriarToken() === 0, "Teste U: nenhum token individual criado");
-  ok(chamadasConsultarValor() === 0, "Teste U: nenhuma consulta de valor");
+  ok(snsResolverContaUnitv().includes("gcnv6v"), "Teste U: resolveu a conta do filho UniTV");
+  ok(chamadasCriarLote().length === 1, "Teste U: lote misto criado (todas as contas UniTV resolveram)");
+  const c = chamadasCriarLote()[0] ?? {};
+  ok(Array.isArray(c.filhos) && c.filhos.length === 2, "Teste U: 2 filhos");
+  ok(c.filhos[0].tipo === "sigma" && c.filhos[1].tipo === "unitv", "Teste U: tipos derivados do servidor (BLAZE->sigma, UNITV->unitv)");
+  ok(c.filhos.every((f) => f.publicId), "Teste U: TODOS os filhos carregam public_id (inclusive UniTV)");
+  ok(c.filhos[0].unitvSn === null && c.filhos[0].unitvId === null, "Teste U: filho Sigma nao tem unitv_sn/unitv_id");
+  ok(c.filhos[1].unitvSn === "gcnv6v" && c.filhos[1].unitvId === 3433363, "Teste U: filho UniTV carrega unitv_sn + unitv_id resolvidos");
+  ok(c.valorTotalCentavos === 7000, "Teste U: total = soma dos valores reais (35,00 + 35,00 = R$ 70,00)");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste U: confirmacao interativa do lote enviada");
+  ok(acionamentosRegistrados().length === 0, "Teste U: nenhuma transferencia (lote criado)");
+  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV), "Teste U: mensagem fixa de lote+UniTV NUNCA aparece quando resolve");
+}
+
+// Teste U2: "0" com Sigma + UniTV, a conta UniTV NAO resolve
+// (indisponivel) -> NENHUM lote, NENHUMA cobranca; mensagem fixa de
+// fallback + transferencia com motivo especifico.
+async function testeU2() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  definirResolucaoContaUnitv({ outcome: "indisponivel" });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  const body = await resp.json();
+
+  ok(chamadasCriarLote().length === 0, "Teste U2: resolucao UniTV falhou -> NENHUM lote criado");
+  ok(chamadasCriarToken() === 0, "Teste U2: nenhum token individual criado");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste U2: nenhuma confirmacao interativa");
   const acion = acionamentosRegistrados();
   ok(
-    acion.length === 1 && acion[0].motivo === "renovacao:lote_com_unitv_nao_integrado",
-    "Teste U: transferencia com motivo 'renovacao:lote_com_unitv_nao_integrado'",
+    acion.length === 1 && acion[0].motivo === "renovacao:lote_unitv_conta_indisponivel",
+    "Teste U2: transferencia com motivo 'renovacao:lote_unitv_conta_indisponivel'",
   );
   ok(
     getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
-    "Teste U: cliente recebe a mensagem fixa de 'lote com UniTV'",
+    "Teste U2: cliente recebe a mensagem fixa de 'lote com UniTV' (fallback)",
   );
   ok(
-    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:lote_com_unitv_nao_integrado"),
-    "Teste U: aviso ao Jose (template) com o motivo do lote+UniTV",
+    getTemplatesEnviados().some((t) => (t.parametros ?? [])[0] === "renovacao:lote_unitv_conta_indisponivel"),
+    "Teste U2: aviso ao Jose com o motivo especifico",
   );
-  ok(!/promo|desconto/i.test(getMensagensEnviadas().map((m) => m.texto).join(" ")), "Teste U: nunca cita promocao/desconto");
-  ok(body?.renovacao?.acessoResolvido === null, "Teste U: diagnostico acessoResolvido=null");
+  ok(!/promo|desconto/i.test(getMensagensEnviadas().map((m) => m.texto).join(" ")), "Teste U2: nunca cita promocao/desconto");
+  ok(body?.renovacao?.acessoResolvido === null, "Teste U2: diagnostico acessoResolvido=null");
 }
 
-// Teste V: "0" com DOIS acessos UniTV -> mesmo tratamento (nenhum lote).
+// Teste V: "0" com DOIS acessos UniTV, ambos resolvem -> lote 2xUniTV
+// criado (2 filhos tipo='unitv', cada um com seu unitv_sn/unitv_id).
 async function testeV() {
   resetarTudo();
   configurarDoisUnitv();
@@ -953,40 +1048,66 @@ async function testeV() {
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
 
-  ok(chamadasCriarLote().length === 0, "Teste V: 2 UniTV + '0' -> nenhum lote");
-  ok(getMensagensInterativasEnviadas().length === 0, "Teste V: nenhuma confirmacao interativa");
+  ok(chamadasCriarLote().length === 1, "Teste V: 2 UniTV resolvidas + '0' -> lote criado");
+  const c = chamadasCriarLote()[0] ?? {};
+  ok(c.filhos.length === 2 && c.filhos.every((f) => f.tipo === "unitv"), "Teste V: 2 filhos, ambos tipo='unitv'");
+  ok(c.filhos.every((f) => f.publicId && f.unitvSn && f.unitvId), "Teste V: cada filho UniTV com public_id + unitv_sn + unitv_id");
+  ok(c.filhos.find((f) => f.unitvSn === "3tnjsc") && c.filhos.find((f) => f.unitvSn === "gcnv6v"), "Teste V: os dois sn corretos nos filhos");
+  ok(c.valorTotalCentavos === 7000, "Teste V: total = soma real (35 + 35)");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste V: confirmacao interativa do lote enviada");
+  ok(acionamentosRegistrados().length === 0, "Teste V: nenhuma transferencia");
+}
+
+// Teste V2: "0" com 2 UniTV, uma delas resolve 'ambiguo' -> nenhum lote
+// + fallback.
+async function testeV2() {
+  resetarTudo();
+  configurarDoisUnitv();
+  definirResolucaoContaUnitv({ outcome: "ambiguo" });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
+  await resp.json();
+
+  ok(chamadasCriarLote().length === 0, "Teste V2: resolucao ambigua -> nenhum lote");
+  ok(getMensagensInterativasEnviadas().length === 0, "Teste V2: nenhuma confirmacao interativa");
   ok(
-    acionamentosRegistrados().some((a) => a.motivo === "renovacao:lote_com_unitv_nao_integrado"),
-    "Teste V: transferencia por lote+UniTV",
+    acionamentosRegistrados().some((a) => a.motivo === "renovacao:lote_unitv_conta_ambiguo"),
+    "Teste V2: transferencia com motivo 'renovacao:lote_unitv_conta_ambiguo'",
   );
   ok(
     getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_LOTE_COM_UNITV),
-    "Teste V: mensagem fixa de lote com UniTV",
+    "Teste V2: mensagem fixa de lote com UniTV (fallback)",
   );
 }
 
-// Teste W: seleção NUMÉRICA de um acesso quando ambos são UniTV.
+// Teste W: 2 UniTV, seleciona 1 por NUMERO, resolve OK -> token
+// tipo='unitv' + confirmacao interativa (mesmo caminho do individual).
+// Ordem deterministica (servidorNome -> nome -> publicId): ambos UNITV,
+// "José..." < "Karla..." -> posicao 1 = PUBLIC_ID_B (usuario "gcnv6v").
 async function testeW() {
   resetarTudo();
   configurarDoisUnitv();
+  definirProximoResultadoValorCliente({
+    outcome: "success", nome: "José Antonio Dos Santos", servidorNome: "UNITV",
+    planoNome: "Mensal", valor: "35.00", vencimento: "2026-11-03T23:59:00-03:00", usuario: "gcnv6v",
+  });
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
   await resp.json();
 
-  ok(chamadasCriarToken() === 0, "Teste W: 2 UniTV, seleciona 1 -> nenhum token tipo='sigma'");
-  ok(chamadasConsultarValor() === 0, "Teste W: nenhuma consulta de valor");
-  ok(getMensagensInterativasEnviadas().length === 0, "Teste W: nenhuma confirmacao interativa");
-  ok(
-    acionamentosRegistrados().some((a) => a.motivo === "renovacao:unitv_nao_integrada"),
-    "Teste W: transferencia com motivo UniTV nao integrada",
-  );
-  ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA),
-    "Teste W: mensagem fixa de UniTV nao integrada",
-  );
+  ok(snsResolverContaUnitv().includes("gcnv6v"), "Teste W: resolveu a conta do acesso da posicao 1 (sn 'gcnv6v')");
+  ok(chamadasCriarToken() === 1, "Teste W: token criado (UniTV resolvida)");
+  const arg = argsCriarToken()[0] ?? {};
+  ok(arg.tipo === "unitv" && arg.unitvSn === "gcnv6v" && arg.unitvId === 3433363, "Teste W: token tipo='unitv' com sn/id do acesso 1");
+  ok(getMensagensInterativasEnviadas().length === 1, "Teste W: confirmacao interativa enviada");
+  ok(acionamentosRegistrados().length === 0, "Teste W: nenhuma transferencia");
+  ok(!getMensagensEnviadas().some((m) => m.texto === MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA), "Teste W: sem mensagem fixa de UniTV");
 }
+
 
 // Teste X (regressao): 2 acessos SIGMA + "0" -> o lote continua sendo
 // criado, agora com o tipo DERIVADO do servidor (nao mais hardcoded).
@@ -1093,9 +1214,13 @@ await testeP();
 await testeQ();
 await testeR();
 await testeS();
+await testeS2();
+await testeS3();
 await testeT();
 await testeU();
+await testeU2();
 await testeV();
+await testeV2();
 await testeW();
 await testeX();
 await testeY();

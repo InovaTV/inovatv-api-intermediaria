@@ -20,6 +20,8 @@ const MAPA = {
   // (supabase_client). precos_renovacao.ts NAO e' fakeado -- e' funcao
   // pura, sem deps, e a regra comercial real e' o que a suite prova.
   "_shared/renovacoes_lote.ts": "fake_renovacoes_lote.mjs",
+  // Etapa 2 (Bloco 4): resolucao da conta UniTV (sn -> id do painel).
+  "_shared/unitv_conta_client.ts": "fake_unitv_conta_client.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {

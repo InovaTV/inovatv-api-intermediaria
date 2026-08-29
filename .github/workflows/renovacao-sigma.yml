@@ -56,4 +56,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RENOVACAO_SIGMA_CALLBACK_TOKEN: ${{ secrets.RENOVACAO_SIGMA_CALLBACK_TOKEN }}
+          # Etapa 2 (Renovacao UniTV, Bloco 4). Usados SO' por
+          # renovarUmAcessoUniTV (scripts/lib/unitv-renovar.mjs) quando o
+          # token/filho e' tipo='unitv'. Um run so'-Sigma nao depende
+          # deles (a lib retorna resultado_ambiguo se faltarem). GitHub
+          # mascara valores de secret nos logs automaticamente; a lib
+          # nunca loga o dealer_token.
+          UNITV_DEALER_TOKEN: ${{ secrets.UNITV_DEALER_TOKEN }}
+          UNITV_DEALER_NAME: ${{ secrets.UNITV_DEALER_NAME }}
         run: node scripts/renovacao-sigma-workflow.mjs

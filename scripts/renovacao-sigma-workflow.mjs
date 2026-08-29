@@ -21,14 +21,22 @@
 //
 // Renovacao em lote (Etapa 1, 2026-08-29): se o OPERACAO_ID
 // corresponder a um renovacoes_lote (e nao a um tokens_renovacao
-// avulso), o script processa os N acessos filhos em sequencia, cada um
-// com o MESMO mecanismo Sigma de sempre (renovarUmAcessoSigma), e
-// reporta um unico callback com resultados[]. Filhos tipo 'unitv'
-// nao executam nada ainda -- reportam 'unitv_pendente' (stub Etapa 2).
+// avulso), o script processa os N acessos filhos em sequencia e
+// reporta um unico callback com resultados[]. Filho 'sigma' ->
+// renovarUmAcessoSigma; filho 'unitv' -> renovarUmAcessoUniTVComSync
+// (executor congelado + sync do vencimento no Rocket) -- Etapa 2,
+// Bloco 4. 'unitv_pendente' segue existindo so' como fallback
+// defensivo em renovacao-sigma-resultado, o workflow nao o emite mais.
 
 import { chromium } from "playwright";
 
 import { resolverIdInternoDoDom } from "./lib/resolver-id-interno-dom.mjs";
+// Etapa 2 (Renovacao UniTV, Bloco 4). Executor do painel de revenda,
+// CONGELADO -- este workflow so' o chama, nunca altera sua mecanica
+// interna. Retorna o MESMO shape de renovarUmAcessoSigma
+// ({ resultado, vencimentoConfirmado?, detalhe? }). Nunca repete
+// /api/account/renew (a lib garante 1 unica chamada).
+import { renovarUmAcessoUniTV } from "./lib/unitv-renovar.mjs";
 
 const OPERACAO_ID = process.env.OPERACAO_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -171,6 +179,49 @@ async function lerContextoSigma(idClienteInterno) {
   } catch {
     return { outcome: "unavailable", etapa: "excecao-fetch" };
   }
+}
+
+// Etapa 2 (Bloco 4). Depois de uma renovacao UniTV bem-sucedida no
+// painel, espelha o novo vencimento (ja confirmado pelo painel) para o
+// Rocket, via renovacao-rocket-vencimento. NUNCA re-renova. Uma falha
+// aqui e' DESSINCRONIA de cadastro (rocketDesync), nunca falha de
+// renovacao -- o chamador nao transforma isso em resultado != "sucesso".
+async function sincronizarVencimentoRocket(publicId, vencimentoAlvo) {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-rocket-vencimento`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
+      body: JSON.stringify({ publicId, vencimentoAlvo }),
+    });
+    const body = await resp.json().catch(() => null);
+    if (body && typeof body === "object" && typeof body.outcome === "string") return body;
+    return { outcome: "rocket_desync", etapa: "resposta-invalida" };
+  } catch (e) {
+    return { outcome: "rocket_desync", etapa: "excecao-fetch", detalhe: e?.message ?? String(e) };
+  }
+}
+
+// Renova UM acesso UniTV (Etapa 2, Bloco 4). So' orquestra: chama o
+// executor congelado, e -- SO' em sucesso -- espelha o vencimento no
+// Rocket. Retorna um item de resultado pronto (mesma forma dos itens
+// Sigma de processarLote), com rocketDesync=true quando a renovacao
+// deu certo mas o Rocket nao sincronizou.
+async function renovarUmAcessoUniTVComSync({ sn, id, publicId, servidorNome, clienteNome, tokenId }) {
+  const r = await renovarUmAcessoUniTV({ sn, id });
+  const item = {
+    token_id: tokenId,
+    tipo: "unitv",
+    servidor_nome: servidorNome,
+    cliente_nome: clienteNome,
+    resultado: r.resultado,
+    vencimentoConfirmado: r.vencimentoConfirmado,
+    detalhe: r.detalhe,
+  };
+  if (r.resultado === "sucesso") {
+    const sync = await sincronizarVencimentoRocket(publicId, r.vencimentoConfirmado);
+    if (sync.outcome !== "sincronizado") item.rocketDesync = true;
+  }
+  return item;
 }
 
 // Renova UM acesso Sigma. Extraido do antigo corpo de main() sem
@@ -353,9 +404,9 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
   }
 }
 
-// Renovacao em lote (Etapa 1): processa os N filhos em sequencia e
-// reporta um unico callback com resultados[]. Filhos 'unitv' nao
-// executam nada ainda (stub Etapa 2).
+// Renovacao em lote: processa os N filhos em sequencia e reporta um
+// unico callback com resultados[]. Filho 'sigma' -> renovarUmAcessoSigma;
+// filho 'unitv' -> renovarUmAcessoUniTVComSync (Etapa 2, Bloco 4).
 async function processarLote(lote, sessionid, csrftoken) {
   const filhos = await lerFilhosDoLote(lote.grupo_id);
   if (filhos.length === 0) {
@@ -366,15 +417,20 @@ async function processarLote(lote, sessionid, csrftoken) {
   const resultados = [];
   for (const filho of filhos) {
     if (filho.tipo === "unitv") {
-      console.log("[renovacao-sigma-workflow] filho UniTV -- execucao pendente (Etapa 2), reportando unitv_pendente");
-      resultados.push({
-        token_id: filho.id,
-        tipo: "unitv",
-        servidor_nome: filho.servidor_nome,
-        cliente_nome: filho.cliente_nome,
-        resultado: "unitv_pendente",
-        detalhe: "integracao UniTV ainda nao implementada (Etapa 2)",
-      });
+      // Etapa 2 (Bloco 4): executa a renovacao UniTV real (painel de
+      // revenda) + sincroniza o vencimento no Rocket. Nao depende da
+      // sessao do Rocket. rocketDesync (renovou no painel, Rocket nao
+      // sincronizou) vai no item -- o resultado continua "sucesso".
+      resultados.push(
+        await renovarUmAcessoUniTVComSync({
+          sn: filho.unitv_sn,
+          id: filho.unitv_id,
+          publicId: filho.public_id,
+          servidorNome: filho.servidor_nome,
+          clienteNome: filho.cliente_nome,
+          tokenId: filho.id,
+        }),
+      );
       continue;
     }
 
@@ -402,10 +458,39 @@ async function processarLote(lote, sessionid, csrftoken) {
 async function main() {
   requireEnv();
 
+  // A "capa" (renovacoes_lote) carrega o operacao_id; senao e' um token
+  // avulso.
+  const lote = await lerLotePorOperacaoId(OPERACAO_ID);
+  const token = lote ? null : await lerTokenRenovacao(OPERACAO_ID);
+
+  // --- Individual UniTV (Etapa 2, Bloco 4): NAO depende da sessao do
+  // Rocket -- usa o dealer_token do painel de revenda. Tratado ANTES da
+  // checagem de sessao. Sucesso -> sincroniza o vencimento no Rocket
+  // (rocketDesync se falhar, mas o resultado continua "sucesso").
+  if (token && token.tipo === "unitv") {
+    const item = await renovarUmAcessoUniTVComSync({
+      sn: token.unitv_sn,
+      id: token.unitv_id,
+      publicId: token.public_id,
+      servidorNome: token.servidor_nome,
+      clienteNome: token.cliente_nome,
+      tokenId: token.id,
+    });
+    const extra = {};
+    if (item.detalhe) extra.detalhe = item.detalhe;
+    if (item.resultado === "sucesso") {
+      if (item.vencimentoConfirmado) extra.vencimentoConfirmado = item.vencimentoConfirmado;
+      if (item.rocketDesync) extra.rocketDesync = true;
+    }
+    await reportarResultado(item.resultado, extra);
+    return;
+  }
+
   const { sessionid, csrftoken } = await lerSessaoRocket();
   if (!sessionid || !csrftoken) {
-    // Sem sessao: um unico modo de falha, vale pros dois fluxos.
-    const lote = await lerLotePorOperacaoId(OPERACAO_ID);
+    // Sem sessao: um unico modo de falha, vale pros fluxos que dependem
+    // dela (Sigma individual e lote -- inclusive filhos UniTV de um
+    // lote, tratamento conservador).
     if (lote) {
       const filhos = await lerFilhosDoLote(lote.grupo_id);
       await reportarResultadoLote(
@@ -425,16 +510,12 @@ async function main() {
     return;
   }
 
-  // Renovacao em lote (Etapa 1): a "capa" e' quem carrega o operacao_id.
-  const lote = await lerLotePorOperacaoId(OPERACAO_ID);
   if (lote) {
     await processarLote(lote, sessionid, csrftoken);
     return;
   }
 
-  // --- Fluxo individual (byte a byte o de antes, so' com a sequencia
-  // Sigma extraida pra renovarUmAcessoSigma).
-  const token = await lerTokenRenovacao(OPERACAO_ID);
+  // --- Fluxo individual Sigma (byte a byte o de antes).
   if (!token) {
     await reportarResultado("resultado_ambiguo", { detalhe: "tokens_renovacao nao encontrado pra este operacao_id" });
     return;

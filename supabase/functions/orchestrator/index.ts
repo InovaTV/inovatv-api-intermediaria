@@ -184,6 +184,10 @@ import { criarRenovacaoLote, existeLoteAtivoParaPublicId } from "../_shared/reno
 // cobra). Ate a Etapa 2, acesso UniTV -> tratamento explicito
 // "UniTV ainda nao integrada" + transferencia humana, sem cobranca.
 import { classificarTipoAcesso } from "../_shared/tipo_acesso.ts";
+// Etapa 2 (Renovacao UniTV, Bloco 4) -- resolve a conta UniTV
+// (sn -> id do painel de revenda) via Edge Function isolada, ANTES de
+// criar token/cobranca. O Orquestrador nunca fala com o painel direto.
+import { chamarResolverContaUnitv } from "../_shared/unitv_conta_client.ts";
 
 // Memoria de sessao (Camada 3, 2026-08-23 -- ver
 // docs/propor_renovacao/ACHADO_SELECAO_ACESSO_NAO_PERSISTE.md, secao
@@ -452,19 +456,41 @@ async function processarCobrancaRenovacao(
     return { envioResultado: { enviado: false }, textoEnviado: null };
   }
 
-  // 0-A) Roteamento por TIPO de acesso (Etapa 1.5, Lacuna A, 2026-08-28).
-  // Feito ANTES de qualquer coisa (guard de lote, consulta ao Rocket,
-  // criacao de token, "buscando dados..."). Se o acesso for UniTV, o
-  // fluxo Sigma nunca e' seguido: nao cria tokens_renovacao tipo='sigma',
-  // nao consulta valor, nao cria cobranca. Envia a mensagem fixa de
-  // "UniTV ainda nao integrada" e aciona atendimento humano (mesmo
-  // mecanismo generico -- transferirPorFalha, com texto proprio). A
-  // execucao real da UniTV e' Etapa 2.
+  // 0-A) Roteamento por TIPO de acesso. Feito ANTES de qualquer coisa
+  // (guard de lote, consulta ao Rocket, criacao de token, "buscando
+  // dados...").
+  //
+  // UniTV (Etapa 2, Bloco 4): resolve a conta no painel de revenda
+  // (sn -> id) via renovacao-unitv-conta. SO' se resolver para
+  // EXATAMENTE 1 conta o fluxo segue e o token nasce tipo='unitv'
+  // (com public_id + unitv_sn + unitv_id). Qualquer falha de resolucao
+  // -- usuario ausente, conta nao encontrada/ambigua, painel
+  // indisponivel -- NAO cria token/cobranca: envia a mensagem fixa de
+  // fallback + atendimento humano (mesmo transferirPorFalha de sempre,
+  // so' o motivo e' mais especifico). A UX aprovada e' preservada: a
+  // mensagem fixa continua sendo EXCLUSIVAMENTE fallback -- UniTV
+  // resolvida segue o fluxo normal de renovacao.
+  let tokenTipo: "sigma" | "unitv" = "sigma";
+  let tokenUnitvSn: string | null = null;
+  let tokenUnitvId: number | null = null;
   if (classificarTipoAcesso(acessoResolvido.cliente?.servidorNome) === "unitv") {
-    return await transferirPorFalha(
-      "renovacao:unitv_nao_integrada",
-      MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
-    );
+    const sn = acessoResolvido.cliente?.usuario ?? usuarioResolvido;
+    if (!sn) {
+      return await transferirPorFalha(
+        "renovacao:unitv_sem_usuario",
+        MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+      );
+    }
+    const resolucao = await chamarResolverContaUnitv(sn);
+    if (resolucao.outcome !== "resolvido") {
+      return await transferirPorFalha(
+        `renovacao:unitv_conta_${resolucao.outcome}`,
+        MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
+      );
+    }
+    tokenTipo = "unitv";
+    tokenUnitvSn = sn;
+    tokenUnitvId = resolucao.id;
   }
 
   // 0) Renovacao em lote (Etapa 1, 2026-08-29): se este acesso ja faz
@@ -573,6 +599,11 @@ async function processarCobrancaRenovacao(
       planoNome: dadosResultado.planoNome,
       valorEsperadoCentavos: valorCentavos,
       vencimentoAtual: dadosResultado.vencimento,
+      // Etapa 2 (Bloco 4): tipoToken/unitvSn/unitvId ja resolvidos no
+      // passo 0-A. Caminho Sigma: tipoToken='sigma', os dois null.
+      tipo: tokenTipo,
+      unitvSn: tokenUnitvSn,
+      unitvId: tokenUnitvId,
     });
   } catch (erro) {
     console.log(
@@ -1156,32 +1187,54 @@ Deno.serve(async (req: Request) => {
       // (ordenarAcessosMultiplos) -- o lote ve exatamente os mesmos
       // acessos, na mesma ordem, que o cliente viu numerados.
       const acessosLote = ordenarAcessosMultiplos(statusResults);
-      // Etapa 1.5 (Lacuna A, 2026-08-28): classifica CADA acesso do lote
-      // pelo servidor -- nunca hardcoda 'sigma'. Enquanto a UniTV nao
-      // esta integrada (Etapa 2), um lote que inclua QUALQUER acesso
-      // UniTV nao pode ser criado (nao ha' preco BRL, nao ha' executor,
-      // e o CHECK do banco exige unitv_sn/unitv_id que so' a Etapa 2
-      // fornece). Nesse caso: nenhum lote, nenhuma cobranca -- mensagem
-      // fixa + atendimento humano. Os acessos Sigma continuam
-      // renovaveis um a um pelo numero.
+      // Etapa 1.5 (Lacuna A): classifica CADA acesso do lote pelo
+      // servidor -- nunca hardcoda 'sigma'.
       const tiposLote = acessosLote.map((s) => classificarTipoAcesso(s.cliente.servidorNome));
       const loteTemUnitv = tiposLote.includes("unitv");
 
+      // Etapa 2 (Bloco 4): resolve a conta de CADA filho UniTV no painel
+      // de revenda (sn -> id) ANTES de criar qualquer lote/cobranca.
+      // Qualquer falha -- usuario ausente, conta nao encontrada/ambigua,
+      // painel indisponivel -- aborta: NENHUM lote, NENHUMA cobranca ->
+      // fallback (a mesma mensagem fixa + transferencia + aviso ao Jose
+      // de sempre, so' o motivo muda). Se TODOS resolverem, o lote
+      // misto / 2xUniTV segue o fluxo normal: preco = soma real, gate
+      // N=2, criarRenovacaoLote.
+      const resolucoesUnitv = new Map<string, { sn: string; id: number }>();
+      let falhaResolucaoUnitv: string | null = null;
       if (loteTemUnitv) {
+        for (let i = 0; i < acessosLote.length; i++) {
+          if (tiposLote[i] !== "unitv") continue;
+          const sn = acessosLote[i].cliente.usuario;
+          if (!sn) {
+            falhaResolucaoUnitv = "unitv_sem_usuario";
+            break;
+          }
+          const resolucao = await chamarResolverContaUnitv(sn);
+          if (resolucao.outcome !== "resolvido") {
+            falhaResolucaoUnitv = `unitv_conta_${resolucao.outcome}`;
+            break;
+          }
+          resolucoesUnitv.set(acessosLote[i].publicId as string, { sn, id: resolucao.id });
+        }
+      }
+
+      if (falhaResolucaoUnitv) {
+        const motivoLoteUnitv = `renovacao:lote_${falhaResolucaoUnitv}`;
         let acionada = false;
         try {
           const r = await acionarTransferenciaHumana(
             conversa.conversation_id,
-            "renovacao:lote_com_unitv_nao_integrado",
+            motivoLoteUnitv,
             conteudo,
-            "(cliente pediu renovar todos -- ha' acesso UniTV no lote)",
+            "(cliente pediu renovar todos -- resolucao de acesso UniTV falhou)",
           );
           acionada = r.outcome === "acionada";
         } catch {
           // best-effort
         }
         transferenciaResultado = acionada
-          ? { acionada: true, motivo: "renovacao:lote_com_unitv_nao_integrado" }
+          ? { acionada: true, motivo: motivoLoteUnitv }
           : { acionada: false, motivo: "ja_transferida_ou_falha" };
         if (acionada) {
           const env = await enviarMensagemWhatsApp(telefone, MENSAGEM_RENOVACAO_LOTE_COM_UNITV);
@@ -1200,7 +1253,7 @@ Deno.serve(async (req: Request) => {
               numeroJose,
               NOME_TEMPLATE_NOVA_TRANSFERENCIA,
               IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
-              ["renovacao:lote_com_unitv_nao_integrado"],
+              [motivoLoteUnitv],
             );
             avisoJoseResultado = { enviado: aviso.outcome === "success" };
           }
@@ -1242,18 +1295,18 @@ Deno.serve(async (req: Request) => {
           renovacaoDiagnostico = { tipo: "propor_renovacao", acessoResolvido: null };
         } else {
           const filhos = acessosLote.map((s, i) => ({
-            // tipo derivado do servidor -- nao hardcoda 'sigma'. Neste
-            // ramo todos sao 'sigma' (loteTemUnitv ja barrou o resto).
+            // tipo derivado do servidor -- nao hardcoda 'sigma'.
             tipo: tiposLote[i],
             // public_id mantido tambem para filho UniTV (id do cliente
             // no Rocket -- necessario pro sync de vencimento e pro
-            // indice "1 ativa por acesso"). No-op hoje: o guard
-            // loteTemUnitv ainda impede lote com UniTV. A resolucao de
-            // unitv_sn/unitv_id por filho + a remocao do guard entram
-            // no Bloco 4 (junto da fiacao do executor).
+            // indice "1 ativa por acesso").
             publicId: s.publicId,
-            unitvSn: null,
-            unitvId: null,
+            // Etapa 2 (Bloco 4): filho UniTV carrega o sn/id ja
+            // resolvido acima (resolucoesUnitv); filho Sigma continua
+            // null. Neste ramo todos os UniTV ja resolveram (senao
+            // falhaResolucaoUnitv teria abortado antes).
+            unitvSn: tiposLote[i] === "unitv" ? (resolucoesUnitv.get(s.publicId as string)?.sn ?? null) : null,
+            unitvId: tiposLote[i] === "unitv" ? (resolucoesUnitv.get(s.publicId as string)?.id ?? null) : null,
             clienteNome: s.cliente.nome ?? "não informado",
             servidorNome: s.cliente.servidorNome ?? "não informado",
             planoNome: s.cliente.planoNome ?? "não informado",
