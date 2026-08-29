@@ -595,6 +595,59 @@ chutar pacote. Isto NÃO é bug de código. É config/dados no Rocket:
   `docs/renovacao_automatica/SESSAO_ROCKET_MONITORAMENTO.md`). Um
   Sigma saudável retorna `{id, server, package, expires_at, status:"ACTIVE"}`.
 
+### 4.6 `UNITV_DEALER_TOKEN` invalidado — diagnosticado e CORRIGIDO (2026-08-29)
+
+**Sintoma:** lote com acesso UniTV `gcnv6v` (José Antonio, publicId
+`01a049f6-…`) caiu em `renovacao:lote_unitv_conta_indisponivel` — 2
+reproduções reais (`12:22` e `18:03` UTC) via botão "0" (renovar tudo).
+Lista de acessos veio **correta** (ChannelTV + UniTV); não era
+`unitv_sem_usuario`.
+
+**Investigação read-only (sem alterar código):**
+- Sonda `renovacao-unitv-conta` `sn="gcnv6v"` → **HTTP 200, ~1,1 s,
+  `outcome:"indisponivel"`** → descarta hop interno Orq→EF e timeout;
+  é rejeição **rápida** na camada painel (`callUnitvApi` →
+  `panel-web.revenda.site/api/account` → `returnCode != 0` ou corpo
+  não-JSON). O `returnCode`/`errorMessage` literal **não é logado** por
+  nenhum ponto da cadeia (`unitv_conta.ts` só lê `returnCode` e
+  descarta; zero `console.*`), e a CLI não expõe Edge Logs — dado
+  irrecuperável por leitura.
+- `gcnv6v` resolveu **OK às 02:12 UTC** (`id=3433363`, renovação
+  concluída) com o token setado ~01:22 UTC; `3tnjsc` resolveu até
+  03:27 UTC. Falha sustentada de ~12:22 em diante — 3 tentativas +
+  sonda ao longo de ~6,5 h.
+- **Captura passiva** na sessão logada do painel (`inovatvstream2`):
+  interceptor read-only de `fetch`/XHR + 1 busca "Consultar" por
+  `gcnv6v` (leitura, sem renovar). Corpo do `POST /api/account`
+  descriptografado com a chave/IV AES do bundle deles → `dealer_token`
+  de **32 chars** (não-JWT), `dealer_name = "inovatvstream2"`. A busca
+  retornou **1 linha** (`gcnv6v` / José Antonio / venc `04/12/2026
+  02:31:01` local = bate com a renovação das 02:12) → `returnCode:0`,
+  token da sessão **válido agora**.
+- **`sha256(token capturado)` ≠ `sha256(secret Supabase)`** (`ad542cf70e…`
+  vs `1927c0bb…`) → o secret guardava um `dealer_token` **obsoleto**;
+  o painel emite outro, válido.
+
+**Correção operacional (sem deploy de código):**
+- `UNITV_DEALER_TOKEN` atualizado no **Supabase** (`supabase secrets
+  set`, digest agora `ad542cf70ece8562…`) **e no GitHub Actions**
+  (`gh secret set`, `updated_at 2026-08-29T18:47:00Z`).
+- `UNITV_DEALER_NAME` **intocado** (`inovatvstream2`, digest
+  `b0cf3695…`).
+- Valor do token nunca registrado — ponte via arquivo gitignored
+  temporário (`scripts/.credentials/`, apagado após uso).
+- **Verificação read-only pós-fix:** `renovacao-unitv-conta`
+  `sn="gcnv6v"` → **HTTP 200, ~1,2 s, `{"outcome":"resolvido","id":3433363}`**.
+  Hipótese confirmada: era credencial de dealer invalidada.
+
+**Natureza / recorrência:** o `dealer_token` do painel de revenda
+**não vem de tela de API key** — é capturado passivamente de uma
+sessão logada e **pode ser invalidado** (rotação de senha do painel,
+TTL de sessão). Se `renovacao-unitv-conta` voltar a dar `indisponivel`
+com resposta rápida (200, ~1 s), repetir esta recaptura passiva +
+`secrets set` (Supabase + GitHub). **Sem** teste de renovação real
+nesta correção — nenhum ACEITO, cobrança ou `/api/account/renew`.
+
 ---
 
 ## 5. Outros itens abertos
