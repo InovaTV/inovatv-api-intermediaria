@@ -648,6 +648,78 @@ com resposta rápida (200, ~1 s), repetir esta recaptura passiva +
 `secrets set` (Supabase + GitHub). **Sem** teste de renovação real
 nesta correção — nenhum ACEITO, cobrança ou `/api/account/renew`.
 
+### 4.6.1 Análise read-only da dependência do token — CLASSIFICAÇÃO B (2026-08-29)
+
+**Problema não está encerrado.** Substituímos o token, mas o *porquê*
+da invalidação exigia análise. Feita 2ª captura passiva read-only na
+sessão logada (`getDealerInfo` + `/api/account` + headers descriptografados;
+nenhuma renovação, nenhum cadastro tocado):
+
+- **O `dealer_token` É o token de sessão único do painel.** Valor de
+  **32 chars hex** (formato MD5), e **idêntico** em três lugares da
+  mesma requisição: header `Authorization`, header `token` **e** campo
+  `dealer_token` do corpo. `m5..m7` = SAME. Não é JWT (0 pontos, sem
+  payload `exp`).
+- **Origem = login.** `getDealerInfo` **consome** o token (manda no
+  corpo), não o emite — sua resposta (`dealerInfo`) só tem
+  perfil/status (`user_name: inovatvstream2`, `customer: UniTV`,
+  `status_title: Normal`, `package_objs`), **sem** campo de token nem
+  de expiração. Só um **login novo** (usuário+senha) emite um token
+  válido.
+- **Sem refresh.** O painel não expõe `/api/refresh`, `/api/token`,
+  nem tela de API key. Token curto-de-sessão, não credencial de longa
+  duração.
+- **2 invalidações observadas:** (a) 2026-08-16, troca de senha do
+  painel (ação deliberada — encaixa em C); (b) **2026-08-29, o token
+  capturado ~01:22 UTC funcionou às 02:12 e morreu entre 03:27 e
+  12:22 UTC sem nenhuma ação nossa** (TTL de sessão / idle timeout /
+  sessão única evictada por login em outro lugar / sweep do servidor).
+  TTL exato **não medido**.
+
+**Classificação: B (com componente C).** O token **expira/é rotacionado
+de tempos em tempos** (horas-a-semanas, não medido) e **não há
+mecanismo de refresh** — e qualquer troca de senha futura do painel
+também o mata (componente C: parear troca de senha com recaptura).
+
+**Detecção automática hoje (Q4): parcial e reativa.**
+`renovacao-unitv-conta` mapeia token rejeitado → `outcome:"indisponivel"`
+→ Orquestrador → `renovacao:*unitv_conta_indisponivel` → **transferência
+humana + aviso ao José**. Mas: só dispara quando um cliente tenta
+renovar UniTV (sem health check proativo); é indistinguível em código
+de outage/rate-limit/rede (o `returnCode`/`errorMessage` literal é lido
+1× e descartado, zero log); e num lote já pago o cliente fica no meio
+do fluxo (Peça 3/watchdog reconciliam a cobrança, renovação ainda
+precisa de conclusão manual).
+
+**Opções para Q5 (nenhuma implementada — decisão de etapa própria):**
+- **(i) Login automático no runner** — o job do GitHub Actions (já roda
+  Playwright pro Sigma) loga em `panel-web.revenda.site` com secrets
+  `UNITV_DEALER_LOGIN`/`UNITV_DEALER_SENHA`, captura o token fresco e
+  usa/grava no secret. Remove o passo manual; adiciona secret de
+  **senha** + dependência de automação de login (captcha/mudança de
+  painel = nova falha).
+- **(ii) Pré-flight de saúde + auto-refresh** — antes de cada renovação
+  (ou agendado), `getDealerInfo` read-only com o token atual; se
+  `returnCode != 0`, dispara (i) e retenta. "Morte silenciosa" vira
+  "auto-cura com 1 retry".
+- **(iii) Monitor sem auto-fix** — job agendado faz `getDealerInfo`
+  read-only; em falha, **avisa o José** ("recapturar `UNITV_DEALER_TOKEN`")
+  sem corrigir sozinho. Recaptura segue manual, mas **proativa** em vez
+  de descoberta por falha de cliente.
+
+**Critério de aprovação (do usuário) — NÃO atendido ainda:** a renovação
+automática UniTV não pode depender de credencial que morre
+silenciosamente sem estratégia definida. Estado atual = reativo
+(descobre quando um cliente falha) + recaptura manual. Antes de
+considerar a renovação UniTV **plenamente aprovada**, decidir entre
+(i)/(ii)/(iii) — ou, no mínimo, (iii) + SOP de recaptura documentado.
+**Pendência aberta, não bloqueia o que já está funcionando com o token
+novo.**
+
+**Ainda em aberto (read-only, sem renovação):** medir o TTL real —
+capturar token, `getDealerInfo` a cada N min até falhar; distingue
+idle-timeout de sessão-única-evictada de sweep. Não feito.
+
 ---
 
 ## 5. Outros itens abertos
