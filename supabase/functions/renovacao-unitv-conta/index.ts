@@ -24,6 +24,11 @@
 
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { resolverContaUnitv } from "../_shared/unitv_conta.ts";
+import { diagnosticarTokenUnitv } from "../_shared/unitv_token_diag.ts";
+
+// Runtime da plataforma (Deno Deploy / Supabase Edge) -- mesma
+// declaracao usada em webhook/index.ts e openpix-webhook/index.ts.
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 // `sn`/`usuario` observados no cadastro sao alfanumericos curtos
 // (ex.: "gcnv6v", "828667229") -- limite generoso, so' pra barrar
@@ -69,6 +74,28 @@ Deno.serve(async (req: Request) => {
   if (r.reason === "ambiguo") {
     return jsonResponse({ outcome: "ambiguo" });
   }
+
+  // Fase 1 da autocura do UNITV_DEALER_TOKEN (2026-08-29, inovatv_central/
+  // CLAUDE.md): SO' quando o resultado e' 'unavailable' (token rejeitado
+  // OU painel fora) dispara um diagnostico FORA DA BANDA -- read-only,
+  // sem login, sem tocar secret, sem alterar renovacao.
+  // 'credenciais_ausentes'/'sn_invalido' seguem SEPARADOS (nao ha' o que
+  // sondar). A resposta abaixo (e o tempo dela) NAO muda: o diagnostico
+  // roda depois do return via EdgeRuntime.waitUntil e uma excecao dele
+  // jamais propaga.
+  if (r.reason === "unavailable") {
+    try {
+      EdgeRuntime.waitUntil(
+        diagnosticarTokenUnitv({
+          motivoOrigem: "renovacao-unitv-conta:indisponivel",
+          origemErro: { returnCode: r.returnCode, httpStatus: r.httpStatus, painelMsg: r.painelMsg },
+        }).catch((e) => console.log("[unitv-token-diag] falha ao agendar diagnostico", String(e))),
+      );
+    } catch (e) {
+      console.log("[unitv-token-diag] EdgeRuntime.waitUntil indisponivel", String(e));
+    }
+  }
+
   // unavailable / credenciais_ausentes / sn_invalido (nao deveria chegar)
   return jsonResponse({ outcome: "indisponivel" });
 });

@@ -72,7 +72,22 @@ export async function unitvDecrypt(hex: string): Promise<string> {
 }
 
 type CallOk = { ok: true; data: unknown };
-type CallErr = { ok: false; reason: "unavailable" };
+// Enriquecido (Fase 1 autocura UNITV_DEALER_TOKEN, 2026-08-29): `reason`
+// continua sendo o unico campo que o restante do codigo usa pra decidir
+// -- `renovacao-unitv-conta` so' distingue nao_encontrado/ambiguo/
+// indisponivel, e `resolverContaUnitv` so' propaga "unavailable". Os
+// campos extras (`detalhe`/`returnCode`/`httpStatus`/`painelMsg`) sao
+// SO' pra observabilidade do diagnostico -- antes, o returnCode/HTTP da
+// chamada que falhava era lido 1x e descartado. Nao alteram nenhum
+// caminho de decisao.
+type CallErr = {
+  ok: false;
+  reason: "unavailable";
+  detalhe: "excecao" | "corpo_ilegivel" | "corpo_nao_json" | "return_code" | "data_indecifravel";
+  returnCode?: number;
+  httpStatus?: number;
+  painelMsg?: string;
+};
 
 async function callUnitvApi(path: string, payloadObj: unknown, fetchImpl: typeof fetch): Promise<CallOk | CallErr> {
   let resp: Response;
@@ -84,30 +99,39 @@ async function callUnitvApi(path: string, payloadObj: unknown, fetchImpl: typeof
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
   } catch {
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "unavailable", detalhe: "excecao" };
   }
 
   let text: string;
   try {
     text = await resp.text();
   } catch {
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "unavailable", detalhe: "corpo_ilegivel", httpStatus: resp.status };
   }
 
-  let env: { returnCode?: number; data?: string };
+  let env: { returnCode?: number; errorMessage?: string; data?: string };
   try {
     env = JSON.parse(text);
   } catch {
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "unavailable", detalhe: "corpo_nao_json", httpStatus: resp.status };
   }
-  if (env.returnCode !== 0) return { ok: false, reason: "unavailable" };
+  if (env.returnCode !== 0) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      detalhe: "return_code",
+      returnCode: typeof env.returnCode === "number" ? env.returnCode : undefined,
+      httpStatus: resp.status,
+      painelMsg: typeof env.errorMessage === "string" ? env.errorMessage : undefined,
+    };
+  }
 
   let data: unknown = null;
   if (env.data) {
     try {
       data = JSON.parse(await unitvDecrypt(env.data));
     } catch {
-      return { ok: false, reason: "unavailable" };
+      return { ok: false, reason: "unavailable", detalhe: "data_indecifravel", httpStatus: resp.status };
     }
   }
   return { ok: true, data };
@@ -115,7 +139,17 @@ async function callUnitvApi(path: string, payloadObj: unknown, fetchImpl: typeof
 
 export type ResolucaoContaUnitv =
   | { ok: true; id: number; sn: string; expireTimeRaw: string | null; customer: string | null; packageName: string | null }
-  | { ok: false; reason: "sn_invalido" | "credenciais_ausentes" | "nao_encontrado" | "ambiguo" | "customer_inesperado" | "unavailable" };
+  | { ok: false; reason: "sn_invalido" | "credenciais_ausentes" | "nao_encontrado" | "ambiguo" | "customer_inesperado" }
+  // "unavailable" carrega detalhe opcional SO' pra observabilidade
+  // (Fase 1 autocura). Nenhum consumidor ramifica por esses campos.
+  | {
+    ok: false;
+    reason: "unavailable";
+    detalhe?: "excecao" | "corpo_ilegivel" | "corpo_nao_json" | "return_code" | "data_indecifravel";
+    returnCode?: number;
+    httpStatus?: number;
+    painelMsg?: string;
+  };
 
 // Resolve a conta UniTV pelo `sn`. NUNCA escolhe por posicao: exige
 // exatamente 1 correspondencia EXATA de `sn` na lista.
@@ -139,7 +173,16 @@ export async function resolverContaUnitv(
     pageSize: 10,
     keyword: sn,
   }, fetchImpl);
-  if (!r.ok) return { ok: false, reason: "unavailable" };
+  if (!r.ok) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      detalhe: r.detalhe,
+      returnCode: r.returnCode,
+      httpStatus: r.httpStatus,
+      painelMsg: r.painelMsg,
+    };
+  }
 
   const lista = Array.isArray((r.data as { list?: unknown[] })?.list) ? (r.data as { list: Record<string, unknown>[] }).list : [];
   const exatos = lista.filter((a) => a && a.sn === sn);

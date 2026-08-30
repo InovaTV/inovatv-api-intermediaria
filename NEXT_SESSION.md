@@ -365,6 +365,41 @@ o fluxo da Renovação Automática.
 
 > **Estudar e projetar a autocura automática do `UNITV_DEALER_TOKEN`.**
 
+### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
+
+Read-only, sem login, sem tocar secret, sem alterar renovação. Detalhe:
+`supabase/functions/_shared/unitv_token_diag.ts` +
+`supabase/migrations/20260829150000_unitv_token_diagnostico.sql` +
+`inovatv_central/CLAUDE.md` (checkpoint 2026-08-29/30).
+
+- Migration `20260829150000_unitv_token_diagnostico.sql` **aplicada** via
+  `supabase db query --linked` (tabela `unitv_token_diagnostico`,
+  append-only, RLS on, **0 policies**, 14 colunas + 5 CHECKs + 2
+  índices; snapshot antes/depois confirmou **nenhuma tabela existente
+  alterada**). **NÃO registrada no `schema_migrations`** (mesmo caso da
+  `20260829140000`) — consistente com o fluxo manual deste repo.
+- `renovacao-unitv-conta` **v2 → v3** (`--no-verify-jwt`, `verify_jwt=false`,
+  `ACTIVE`); bundle inclui `_shared/unitv_token_diag.ts` (confirmado na
+  saída do deploy) + `_shared/unitv_conta.ts` enriquecido
+  (`returnCode`/`httpStatus`/`painelMsg` no `unavailable`, contrato
+  público inalterado). Smoke pós-deploy: `POST` sem token → `401`.
+- **`UNITV_DEALER_TOKEN` / `UNITV_DEALER_NAME` NÃO alterados.**
+- **25/25 suítes verdes** (nova suíte `unitv_token_diag`, ~65 asserts,
+  com teste explícito de não-vazamento).
+- **PENDÊNCIA — usuário:** o project secret **`UNITV_DIAG_ANCHOR_SN`
+  ainda NÃO está configurado**. O valor (um `sn` de conta UniTV
+  controlada) não pode passar por chat/log/doc → o próprio usuário
+  precisa setar (`supabase secrets set UNITV_DIAG_ANCHOR_SN=<sn>` OU
+  dashboard). Até lá o diagnóstico degrada para `ancora_status='ausente'`
+  (fallback previsto/testado) — não quebra nada.
+- **Código deployado ainda NÃO commitado/enviado** (checkpoint próprio,
+  regra 0-B). Arquivos: `_shared/unitv_token_diag.ts` (novo),
+  `_shared/unitv_conta.ts` (M), `renovacao-unitv-conta/index.ts` (M),
+  migration (novo), `scripts/testes/unitv_token_diag/` (novo),
+  `scripts/testes/renovacao_unitv_conta/` (M + fake novo).
+
+### Próximas fases (2/3/4) — NÃO iniciadas
+
 **Primeira investigação da próxima sessão (nesta ordem, NÃO começar
 agora):**
 
@@ -452,7 +487,7 @@ renovacao-sigma-contexto    v9   jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — C
 renovacao-sigma-resultado   v12  jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — MENSAGEM_RENOVACAO_INSTABILIDADE)
 renovacao-sigma-watchdog    v12  jwt=OFF   código = a87a1df (CAMADA 3 — reconciliação antecipada)
 renovacao-sigma-cliente     v5   jwt=OFF   código = HEAD
-renovacao-unitv-conta       v2   jwt=OFF   código = 74aca2c (Bloco 3/4); lê UNITV_DEALER_TOKEN novo (digest ad542cf70e…)
+renovacao-unitv-conta       v3   jwt=OFF   código = HEAD + Fase 1 autocura (agenda diagnosticarTokenUnitv em waitUntil quando reason==unavailable); sha ea9d3082… (2026-08-30 00:16 UTC)
 renovacao-rocket-vencimento v2   jwt=OFF   código = 74aca2c (Bloco 1)
 renovacao-confirmar         v11  jwt=OFF   código = HEAD (botões ACEITO/CANCELAR)
 confirmacao-renovacao       v10  jwt=OFF   código = HEAD (fallback dos links antigos)
