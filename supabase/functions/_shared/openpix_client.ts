@@ -20,12 +20,13 @@
 // (GET /charge/{correlationID}), nunca por transactionID -- mais
 // simples que o modelo de duas camadas (order/charge) do PagBank.
 //
-// Base URL: so' Sandbox foi validada nesta etapa (POC real,
-// 2026-08-24). Producao (api.woovi.com) exige conta/credencial
-// separada -- trocar OPENPIX_BASE_URL quando essa migracao acontecer,
-// decisao futura, fora de escopo do Bloco 1.
+// Base URL: so' Sandbox foi validada em POC real (2026-08-24).
+// Producao (api.woovi.com) exige conta/credencial separada. A URL vem
+// de OPENPIX_BASE_URL (secret); sem o secret, mantem o Sandbox como
+// default -- zero mudanca de comportamento ate o secret de producao
+// ser configurado.
 
-const SANDBOX_BASE_URL = "https://api.woovi-sandbox.com";
+const OPENPIX_BASE_URL = Deno.env.get("OPENPIX_BASE_URL") ?? "https://api.woovi-sandbox.com";
 const TIMEOUT_MS = 15000;
 
 function authHeader(): Record<string, string> | null {
@@ -56,7 +57,7 @@ export async function criarCobrancaOpenPix(
   if (!headers) return { outcome: "unavailable" };
 
   try {
-    const resp = await fetch(`${SANDBOX_BASE_URL}/api/v1/charge`, {
+    const resp = await fetch(`${OPENPIX_BASE_URL}/api/v1/charge`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -130,7 +131,7 @@ export async function consultarCobrancaOpenPix(
 
   try {
     const resp = await fetch(
-      `${SANDBOX_BASE_URL}/api/v1/charge/${encodeURIComponent(operacaoId)}`,
+      `${OPENPIX_BASE_URL}/api/v1/charge/${encodeURIComponent(operacaoId)}`,
       { headers, signal: AbortSignal.timeout(TIMEOUT_MS) },
     );
 
