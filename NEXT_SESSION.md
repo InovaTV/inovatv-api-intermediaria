@@ -363,7 +363,68 @@ o fluxo da Renovação Automática.
 
 ## PONTO EXATO DA RETOMADA (próxima sessão, outra máquina)
 
-> **Estudar e projetar a autocura automática do `UNITV_DEALER_TOKEN`.**
+> **No OUTRO computador: recuperar o `UNITV_DEALER_TOKEN` válido pela
+> sessão logada do painel UniTV (captura passiva, procedimento oficial
+> de recaptura) e fazer o BOOTSTRAP no Vault — nada mais precisa ser
+> refeito. Depois: validação read-only `gcnv6v`. Só então a autocura
+> (Fases 3/4).**
+>
+> **Comando do bootstrap** (SQL Editor do Supabase, valor colado na
+> hora, NUNCA em arquivo/chat/log):
+> ```sql
+> select unitv_dealer_token_definir('<TOKEN VÁLIDO ATUAL>', 'bootstrap', 'jose');
+> ```
+> Depois, verificação read-only: `select count(*) from vault.secrets
+> where name='unitv_dealer_token';` (=1) e `select origem, atualizado_por
+> from unitv_dealer_token_estado;` (`bootstrap`/`jose`), sem revelar o
+> valor. E a chamada `gcnv6v` (precisa do `RENOVACAO_SIGMA_CALLBACK_TOKEN`
+> como `X-Internal-Token`): esperar `{"outcome":"resolvido","id":3433363}`.
+
+### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
+
+Detalhe: `supabase/functions/_shared/unitv_dealer_token.ts` +
+`supabase/migrations/20260830120000_unitv_dealer_token_vault.sql` +
+commit `5a89e6b` + `inovatv_central/CLAUDE.md` (checkpoint 2026-08-30).
+
+- **Fase 2A commitada** — `inovatv-api-intermediaria` `5a89e6b`
+  ("Autocura UNITV_DEALER_TOKEN - Fase 2A ..."), pushed. `unitv-renovar.mjs`
+  intocado (`git diff` vazio).
+- **Migration `20260830120000_unitv_dealer_token_vault.sql` APLICADA** via
+  `supabase db query --linked`. Verificado read-only:
+  `unitv_dealer_token_estado` existe, RLS on, **0 policies**; RPCs
+  `unitv_dealer_token_ler`/`_definir` existem, `SECURITY DEFINER`, só
+  `service_role` executa (`anon`/`authenticated` = false); `vault.secrets`
+  **sem** `unitv_dealer_token` no momento da aplicação. **NÃO registrada
+  no `schema_migrations`** (fluxo manual do repo).
+- **`renovacao-unitv-conta` em produção com o código da Fase 2A** —
+  **v3 → v5** (v3→v4 foi redeploy de plataforma; o deploy da Fase 2A =
+  v4→v5), `ACTIVE`, `verify_jwt=false`, `ezbr_sha256` `5ef156ff…`. Bundle
+  inclui `_shared/unitv_dealer_token.ts` (confirmado na saída do deploy).
+  **Nenhuma outra função deployada** (siblings +1 versão com sha256 e
+  `updated_at` idênticos = rotação de chave JWT da plataforma).
+- **Vault ainda SEM `unitv_dealer_token`** — o sistema opera pelo
+  **FALLBACK**: `obterDealerToken()` → RPC devolve NULL → lê o Edge
+  secret `UNITV_DEALER_TOKEN` (digest `ad542cf70ece8562…`, `updated_at`
+  2026-08-29T18:46:58Z, **INALTERADO**). Comportamento operacional atual
+  **preservado** — nada foi perdido.
+- **`UNITV_DEALER_TOKEN` / `UNITV_DEALER_NAME` INTACTOS.** Nenhum secret
+  alterado. Nenhum rollback (a Fase 2A fica exatamente como está).
+- **26/26 suítes verdes** (nova suíte `unitv_dealer_token`: Vault vence
+  secret / Vault vazio→fallback / indisponível→fallback / cache 30s /
+  token nunca em log).
+- **PENDENTE — bootstrap do token no Vault.** Motivo: o valor atual do
+  `UNITV_DEALER_TOKEN` não está disponível (não salvo; a CLI/Management
+  API/GitHub nunca revelam valores de secret). Só é recuperável por
+  captura na sessão logada do painel UniTV → fica para o outro
+  computador. Até lá, o fallback do Edge secret cobre tudo.
+- **PENDENTE — validação read-only do caminho Vault/fallback em
+  produção.** Depende do `RENOVACAO_SIGMA_CALLBACK_TOKEN` (interno, não
+  acessível pela CLI) para a chamada `gcnv6v` autenticada. Coberto por
+  testes unitários (`unitv_dealer_token` #2/#7); falta só a prova
+  empírica em produção.
+- **NÃO FAZER:** rollback, bootstrap sem o token válido, alterar
+  `UNITV_DEALER_TOKEN`, redeploy de outra função, tocar
+  `unitv-renovar.mjs`, workaround para obter o `RENOVACAO_SIGMA_CALLBACK_TOKEN`.
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 
@@ -487,7 +548,7 @@ renovacao-sigma-contexto    v9   jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — C
 renovacao-sigma-resultado   v12  jwt=OFF   código = 3b0e01d (ITERAÇÃO 1 — MENSAGEM_RENOVACAO_INSTABILIDADE)
 renovacao-sigma-watchdog    v12  jwt=OFF   código = a87a1df (CAMADA 3 — reconciliação antecipada)
 renovacao-sigma-cliente     v5   jwt=OFF   código = HEAD
-renovacao-unitv-conta       v3   jwt=OFF   código = HEAD + Fase 1 autocura (agenda diagnosticarTokenUnitv em waitUntil quando reason==unavailable); sha ea9d3082… (2026-08-30 00:16 UTC)
+renovacao-unitv-conta       v5   jwt=OFF   código = HEAD (5a89e6b) + Fase 1 (diag) + Fase 2A (obterDealerToken: Vault->fallback). Vault vazio -> usa o Edge secret UNITV_DEALER_TOKEN. sha 5ef156ff… (2026-08-30 01:28 UTC)
 renovacao-rocket-vencimento v2   jwt=OFF   código = 74aca2c (Bloco 1)
 renovacao-confirmar         v11  jwt=OFF   código = HEAD (botões ACEITO/CANCELAR)
 confirmacao-renovacao       v10  jwt=OFF   código = HEAD (fallback dos links antigos)
