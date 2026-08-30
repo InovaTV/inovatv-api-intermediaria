@@ -390,14 +390,40 @@ o fluxo da Renovação Automática.
 > `em_andamento`) + auto-fecho de órfão — todos verdes; 26/26 suítes TS
 > verdes. Detalhe: "### F1 — CONTROLES DA AUTOCURA APLICADOS" abaixo.
 >
-> **PRÓXIMA ETAPA: F2 — EF `autocura-unitv-monitor`** (detector proativo
-> + regra de confirmação dupla A.3 + sweep de órfão + agendamento de
-> calibração; cron `*/15`; secret `AUTOCURA_UNITV_MONITOR_TOKEN`) **+ EF
-> `autocura-unitv-resultado` (esqueleto)**. Escopo: `AUTOCURA_UNITV_DEALER_TOKEN.md`
-> §6.A.2/§6.A.3 + §13 (linha F2). **NÃO iniciar F2 sem aprovação
-> explícita.** Nenhum workflow/OCR/secret de login ainda (isso é F3/F4).
-> Sequência oficial: F0 doc → **F1 ✅** → F2 monitor → F3 observação/OCR
-> → F4 login supervisionado → F5 ativação — não pular etapas.
+> **F2 CONCLUÍDA E APLICADA EM PRODUÇÃO (2026-08-30)** — EF
+> `autocura-unitv-monitor` (v1, `--no-verify-jwt`) + cron
+> `autocura-unitv-monitor` `*/15` + migration
+> `20260830180000_autocura_unitv_monitor.sql` (1 tabela singleton
+> `autocura_unitv_monitor_estado` + 1 RPC `autocura_unitv_monitor_adquirir_lock`
+> — aquisição ATÔMICA do lock, sem SELECT→UPDATE). Secrets internos
+> novos: `AUTOCURA_UNITV_MONITOR_TOKEN` (Edge) + `autocura_unitv_monitor_token`
+> (Vault) — valor próprio (`openssl rand -hex 32`), **não são token de
+> login**, não reaproveitados. Fotografia antes/depois: **a01–a08/a10/a11
+> IDÊNTICOS**, a09 = exatamente 1 cron novo; Vault `unitv_dealer_token` /
+> `UNITV_DEALER_TOKEN` / `UNITV_DEALER_NAME` **inalterados**. Smoke sem
+> X-Internal-Token → **401**. 30/30 suítes verdes (incl. teste de
+> **concorrência real** do lock: 2 ticks → exatamente 1 adquire → 1
+> executa o diagnóstico). **1º tick real já rodou (12:15 UTC): consultou
+> o painel (3 probes OK), gravou `unitv_token_diagnostico` `token_vivo`,
+> `total_ticks=1`, lock liberado — nenhum alerta.** `autocura_unitv_config`
+> segue `healer_ativo=false / modo_observacao=true / return_codes_que_disparam=NULL`;
+> `autocura_unitv_ciclos` vazia. Detalhe: "### F2 — MONITOR PROATIVO
+> APLICADO" abaixo.
+>
+> **F2 é SOMENTE OBSERVAÇÃO.** O monitor pode: consultar o painel,
+> registrar diagnóstico, confirmar `token_morto` (dupla confirmação),
+> alertar o José, atualizar seu próprio estado (`autocura_unitv_monitor_estado`).
+> NÃO pode: login, CAPTCHA de login, POST de login, alterar Vault /
+> `UNITV_DEALER_TOKEN`, `/api/account/renew`, criar cobrança, disparar
+> workflow, criar ciclo de healer.
+>
+> **PRÓXIMA ETAPA: F3 — workflow + runner + OCR de CAPTCHA em modo
+> observação (ZERO POST de login, ≥7 dias) + EF `autocura-unitv-resultado`
+> + RPC `autocura_unitv_expirar_orfaos()` (adiada da F2).** Escopo:
+> `AUTOCURA_UNITV_DEALER_TOKEN.md` §5 + §13 (linha F3). **NÃO iniciar F3
+> sem aprovação explícita.** Sequência oficial: F0 doc → **F1 ✅** →
+> **F2 ✅** → F3 observação/OCR → F4 login supervisionado → F5 ativação —
+> não pular etapas.
 
 ### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
 
@@ -606,18 +632,83 @@ Este bloco só registra o marco.
   login criado. Nenhuma alteração no fluxo de renovação, no Vault ou no
   token UniTV.
 
-### F2 — PRÓXIMA ETAPA (não iniciada)
+### F2 — MONITOR PROATIVO APLICADO EM PRODUÇÃO (2026-08-30)
 
-EF `autocura-unitv-monitor` (cron `*/15`): roda
-`diagnosticarTokenUnitv` proativo, aplica a **regra de confirmação dupla
-A.3** (2 batidas `token_morto` mesmo `returnCode`, ≥ `confirmacao_gap_min`,
-`returnCode ∈ allowlist`), chama `autocura_unitv_pode_disparar` +
-`autocura_unitv_registrar_inicio`, faz o **sweep de órfão**, e (em
-`modo_observacao`) agenda a **calibração** do OCR. + EF
-`autocura-unitv-resultado` (esqueleto do callback). Secret novo
-`AUTOCURA_UNITV_MONITOR_TOKEN` (par no Vault). **Sem workflow, OCR ou
-secret de login (F3/F4).** Escopo: `AUTOCURA_UNITV_DEALER_TOKEN.md`
-§6.A.2/§6.A.3 + §13. **Não iniciar sem aprovação explícita.**
+**Dono do detalhe de arquitetura:** `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md`.
+Arquivos: `supabase/migrations/20260830180000_autocura_unitv_monitor.sql`,
+`supabase/functions/autocura-unitv-monitor/index.ts` (wrapper fino),
+`supabase/functions/_shared/autocura_monitor.ts` (lógica),
+`supabase/functions/_shared/unitv_token_diag.ts` (retorno aditivo
+`ResultadoDiagnostico`, zero mudança de comportamento).
+
+- **Migration aplicada** via `supabase db query --linked -f`: 1 tabela
+  singleton `autocura_unitv_monitor_estado` (RLS on, 0 policies, 1 linha
+  `id=1` inerte) + 1 RPC `autocura_unitv_monitor_adquirir_lock()`
+  (`SECURITY DEFINER`, só `service_role`) + 1 `cron.schedule`
+  `autocura-unitv-monitor` `*/15` (padrão de `renovacao-sigma-watchdog`,
+  X-Internal-Token lido do Vault). **Sem `ALTER` de objeto existente,
+  sem trigger.** `autocura_unitv_expirar_orfaos()` continua adiada para
+  F3 (em F2 nada cria ciclos → sem órfãos reais). NÃO registrada em
+  `schema_migrations` (fluxo manual).
+- **Lock anti-sobreposição — AQUISIÇÃO ATÔMICA** (correção obrigatória
+  da revisão): a RPC faz um único `UPDATE ... WHERE id=1 AND
+  (tick_em_andamento_desde IS NULL OR < now()-10min) RETURNING *` →
+  1 linha = ganhou (+ contadores/dedupe no retorno, EF **não faz
+  SELECT**); 0 linhas = outro tick detém o lock. Liberação **condicional**
+  (`.eq("tick_em_andamento_desde", <valor adquirido>)`) — não "rouba" o
+  lock de um sucessor que assumiu por staleness. Staleness de 10 min
+  vive **só** na RPC.
+- **Secrets internos novos** (não são token de login, valor próprio
+  `openssl rand -hex 32`, não reaproveitados): `AUTOCURA_UNITV_MONITOR_TOKEN`
+  (Edge, digest `014ab78d…`) + `autocura_unitv_monitor_token` (Vault,
+  criado 12:09:50 UTC).
+- **Fotografia read-only antes/depois** (11 consultas): a01–a08, a10, a11
+  **IDÊNTICAS**; a09 (`cron.job`) = exatamente **1 linha nova**
+  (`jobid`, `jobname='autocura-unitv-monitor'`, `*/15`, `active=true`).
+  Vault `unitv_dealer_token` (`updated_at 09:51:23`) e Edge secrets
+  `UNITV_DEALER_TOKEN` (`ad542cf70e…`) / `UNITV_DEALER_NAME` (`b0cf3695…`)
+  **inalterados**.
+- **Deploy só de `autocura-unitv-monitor`** (`--no-verify-jwt`, **v1**,
+  `ACTIVE`). `orchestrator` v60, `renovacao-unitv-conta` v6
+  (`ezbr_sha256 5ef156ff…` inalterado — não redeployada apesar do diff
+  aditivo em `unitv_token_diag.ts`), `renovacao-sigma-watchdog` v14 etc.
+  **nenhuma outra função tocada.**
+- **Smoke:** `POST /functions/v1/autocura-unitv-monitor` sem
+  `X-Internal-Token` → **401** `{"outcome":"error","message":"Nao autorizado"}`;
+  com token errado → **401**.
+- **30/30 suítes verdes** — 26 pré-existentes + 4 novas
+  (`autocura_monitor_confirmacao` [dupla confirmação: batida-1 mais
+  recente, token_vivo posterior invalida a sequência, janela 24h, mesmo
+  `probe_return_code`], `autocura_monitor_alerta` [1 alerta por código +
+  dedupe 12h; token_vivo zera o dedupe; falha de envio não grava dedupe],
+  `autocura_monitor_guard_lock` [kill_switch/pausado; **concorrência real
+  do lock: 2 ticks → exatamente 1 adquire → 1 executa o diagnóstico**;
+  lock liberado no `finally`], `autocura_monitor_nao_age` [varredura
+  estática: não login/CAPTCHA/`/renew`/cobrança/workflow/dispatch/
+  `pode_disparar`/`registrar_*`/Vault; único `.update()` é em
+  `autocura_unitv_monitor_estado`; aquisição via RPC atômica, sem SELECT]).
+  Transpile-check (esbuild) dos 3 arquivos TS: OK.
+- **1º tick real (cron 12:15:00 UTC, `succeeded`):** consultou o painel
+  (3 probes read-only, `probe_ok=3`), gravou 1 linha `unitv_token_diagnostico`
+  `motivo_origem='monitor-proativo'`, `veredito='token_vivo'`,
+  `alertado_jose=false`; `autocura_unitv_monitor_estado` → `total_ticks=1`,
+  `ultimo_veredito='token_vivo'`, lock adquirido e **liberado**
+  atomicamente. Nenhum alerta (token vivo). Comportamento observação-only
+  comprovado em produção.
+- **F1 intocada:** `autocura_unitv_config` `healer_ativo=false`,
+  `modo_observacao=true`, `return_codes_que_disparam=NULL`,
+  `kill_switch=false`, `pausado_ate=NULL`; `autocura_unitv_ciclos` **vazia**.
+
+**F2 é SOMENTE OBSERVAÇÃO** (pode: consultar painel / registrar
+diagnóstico / confirmar `token_morto` / alertar / atualizar seu próprio
+estado — não pode: login / CAPTCHA de login / POST de login / alterar
+Vault / alterar `UNITV_DEALER_TOKEN` / `/api/account/renew` / criar
+cobrança / disparar workflow / criar ciclo de healer).
+
+**Próxima etapa: F3** (workflow + runner + OCR de CAPTCHA em modo
+observação, ZERO POST de login, ≥7 dias; EF `autocura-unitv-resultado`;
+RPC `autocura_unitv_expirar_orfaos()`). **Não iniciar sem aprovação
+explícita.**
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 

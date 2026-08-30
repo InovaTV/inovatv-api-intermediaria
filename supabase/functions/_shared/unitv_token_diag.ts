@@ -63,6 +63,18 @@ export type VeredictoDiagnostico =
   | "indeterminado_outage"
   | "indeterminado";
 
+// Retorno ADITIVO (F2 da autocura, 2026-08-30) -- o monitor proativo
+// (autocura-unitv-monitor) precisa do veredito/codigo desta execucao de
+// forma sincrona para aplicar a dupla confirmacao. Chamadores antigos
+// (renovacao-unitv-conta via EdgeRuntime.waitUntil(...).catch(...))
+// ignoram o retorno -> ZERO mudanca de comportamento. `null` = a
+// propria rotina de diagnostico lancou (nao propaga -- ver catch final).
+export interface ResultadoDiagnostico {
+  veredito: VeredictoDiagnostico;
+  probe_return_code: number | null;
+  ancora_status: "ok" | "nao_resolveu" | "ausente";
+}
+
 export interface OrigemErroDiagnostico {
   returnCode?: number;
   httpStatus?: number;
@@ -196,7 +208,7 @@ export function higienizarMsgPainel(msg: unknown, ancoraSn?: string): string | n
   return s;
 }
 
-export async function diagnosticarTokenUnitv(opts: DiagnosticoOpts): Promise<void> {
+export async function diagnosticarTokenUnitv(opts: DiagnosticoOpts): Promise<ResultadoDiagnostico | null> {
   try {
     const fetchImpl = opts.fetchImpl ?? fetch;
     const agora = opts.agora ?? (() => Date.now());
@@ -347,9 +359,14 @@ export async function diagnosticarTokenUnitv(opts: DiagnosticoOpts): Promise<voi
       "[unitv-token-diag] diagnostico concluido",
       JSON.stringify({ evento: "diagnostico_token", ...linhaSemMsg, painel_msg_status: painelMsgStatus }),
     );
+
+    // Retorno aditivo (F2) -- nao altera nada acima. Chamadores antigos
+    // ignoram.
+    return { veredito, probe_return_code: probeReturnCode, ancora_status: ancoraStatus };
   } catch (e) {
     // Ultima linha de defesa -- este diagnostico NUNCA propaga excecao
     // pro chamador (renovacao-unitv-conta ja respondeu).
     console.log("[unitv-token-diag] excecao no diagnostico", String(e));
+    return null;
   }
 }
