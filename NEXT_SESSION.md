@@ -90,6 +90,44 @@ evento `OPENPIX:CHARGE_COMPLETED`), `OPENPIX_APPID` e
 - **Suíte completa `.mjs`: 37/37 verde.**
 - **Nenhuma cobrança, pagamento, ACEITO ou renovação real.**
 
+### Bloco 3.1 — deploy incompleto detectado e CORRIGIDO (2026-08-30 ~19:11 UTC)
+
+Um ACEITE de teste (Sigma/ChannelTV, 18:58 UTC) resultou em
+`renovacao:falha_criar_cobranca_apos_aceite` — **sem cobrança fantasma,
+sem pagamento pendente** (`cobrancas_pix` sem linha nova; `tokens_renovacao`
+terminal `renovacao_falhou`; conversa em `aguardando_humano`).
+
+**Causa:** a EF do ACEITE por botão, **`renovacao-confirmar`**, importa
+`openpix_client.ts` **transitivamente** (via `_shared/renovacao_confirmacao.ts`)
+e **não estava na lista de deploy do Bloco 3** (a reconciliação só listou
+os importadores diretos em `index.ts`). Ficou rodando código pré-Bloco-1
+com `SANDBOX_BASE_URL` hardcoded → chamou `api.woovi-sandbox.com` com o
+`OPENPIX_APPID` **de produção** → Sandbox rejeitou a credencial →
+`outcome:"unavailable"`. A produção (`api.woovi.com`) **nunca foi
+contatada**.
+
+**Correção:** `supabase functions deploy renovacao-confirmar
+--no-verify-jwt`. Verificado:
+- `renovacao-confirmar` **v17 → v18**, `ACTIVE`, `verify_jwt=false`,
+  `ezbr_sha256` `a375bdb28dd6…` → `1e8e54a1335a…`.
+- Bundle contém `_shared/openpix_client.ts` (linha no output do deploy);
+  working tree == `1a66a8f` (`git diff --quiet 1a66a8f` OK), `OPENPIX_BASE_URL`
+  nas linhas 29/60/134.
+- Snapshot de `functions list` antes/depois: **30 funções, 29 idênticas,
+  só `renovacao-confirmar` mudou.**
+- Suíte `.mjs` **37/37**.
+- **Nenhum secret/migration/config alterado** (git limpo nos 3 repos; os
+  `SUPABASE_*` com `updated_at` recente são rotação automática da
+  plataforma no deploy, não ação nossa; os `OPENPIX_*` seguem de 18:49–50Z).
+- **Nenhum novo ACEITE / cobrança / renovação.**
+
+**Auditoria completa dos importadores de `openpix_client.ts` (direto +
+transitivo):** `openpix-webhook`, `confirmacao-renovacao`,
+`renovacao-sigma-watchdog` (diretos, deployados no Bloco 3) +
+`renovacao-confirmar` (transitivo via `_shared/renovacao_confirmacao.ts`,
+deployado agora). `_shared/reconciliacao_renovacao.ts` → só o watchdog.
+**Nenhuma outra EF ficou stale.**
+
 ### Falta — Bloco 4 (gate próprio, NÃO autorizado ainda)
 
 1 pagamento real controlado (José paga, valor pequeno):
