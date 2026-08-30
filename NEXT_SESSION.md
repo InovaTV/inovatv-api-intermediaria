@@ -376,16 +376,28 @@ o fluxo da Renovação Automática.
 > **F0 doc → F1 controles → F2 monitor → F3 observação/OCR → F4 login
 > supervisionado → F5 ativação — não pular etapas.**
 >
-> **PRÓXIMA ETAPA: revisar/implementar SOMENTE F1** — as 2 tabelas
-> (`autocura_unitv_ciclos`, `autocura_unitv_config`) + 3 RPCs de controle
-> (`autocura_unitv_pode_disparar` / `_registrar_inicio` / `_registrar_fim`),
-> com `autocura_unitv_config` nascendo `healer_ativo=false`,
-> `modo_observacao=true`, `return_codes_que_disparam=null` (allowlist
-> obrigatória). **Tudo INERTE** — nenhuma EF, workflow, OCR ou secret de
-> login nesta etapa; nada consome as tabelas ainda. Escopo completo de F1:
-> `AUTOCURA_UNITV_DEALER_TOKEN.md` §8.1 + §13 (linha F1). Migrations
-> aplicadas manualmente via SQL Editor, mostrando o SQL e a preservação
-> antes de aplicar (regra permanente do repo).
+> **F1 CONCLUÍDA E APLICADA EM PRODUÇÃO (2026-08-30)** — migration
+> `20260830160000_autocura_unitv_controles.sql` (2 tabelas + 3 índices +
+> 3 RPCs + 1 insert singleton, **só CREATE**). Estado inerte confirmado:
+> `healer_ativo=false`, `modo_observacao=true`, `return_codes_que_disparam=NULL`,
+> `kill_switch=false`, `pausado_ate=NULL`; `autocura_unitv_ciclos` vazia;
+> RLS on / 0 policies nas 2 tabelas; RPCs só `service_role`; índice único
+> parcial `autocura_unitv_ciclos_um_em_andamento_idx` presente.
+> Fotografia read-only antes/depois: **11/11 objetos pré-existentes
+> IDÊNTICOS**; Vault/`unitv_dealer_token`/secrets **inalterados**. 3
+> suítes SQL F1 + teste de concorrência real do `registrar_inicio`
+> (1 vence / 1 `bloqueado (ciclo_em_andamento)` / exatamente 1
+> `em_andamento`) + auto-fecho de órfão — todos verdes; 26/26 suítes TS
+> verdes. Detalhe: "### F1 — CONTROLES DA AUTOCURA APLICADOS" abaixo.
+>
+> **PRÓXIMA ETAPA: F2 — EF `autocura-unitv-monitor`** (detector proativo
+> + regra de confirmação dupla A.3 + sweep de órfão + agendamento de
+> calibração; cron `*/15`; secret `AUTOCURA_UNITV_MONITOR_TOKEN`) **+ EF
+> `autocura-unitv-resultado` (esqueleto)**. Escopo: `AUTOCURA_UNITV_DEALER_TOKEN.md`
+> §6.A.2/§6.A.3 + §13 (linha F2). **NÃO iniciar F2 sem aprovação
+> explícita.** Nenhum workflow/OCR/secret de login ainda (isso é F3/F4).
+> Sequência oficial: F0 doc → **F1 ✅** → F2 monitor → F3 observação/OCR
+> → F4 login supervisionado → F5 ativação — não pular etapas.
 
 ### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
 
@@ -517,9 +529,95 @@ bloco não duplica o doc — só registra o marco e o próximo passo.
   observação/OCR (≥7 dias, zero `POST`) → **F4** login supervisionado
   (`healer_ativo` ainda `false`) → **F5** ativação (`modo_observacao=false`
   + `healer_ativo=true` juntos, numa revisão).
-- **Nada implementado.** Nenhuma migration, RPC, EF, workflow, OCR ou
-  secret de login criado. Próxima etapa = revisar/implementar **só F1**
-  (ver "PONTO EXATO DA RETOMADA" acima e o doc §8.1/§13).
+- Próxima etapa = **F2** (ver abaixo).
+
+### F1 — CONTROLES DA AUTOCURA APLICADOS EM PRODUÇÃO (2026-08-30)
+
+**Dono do detalhe de arquitetura:** `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md`
+(§7/§8/§10). Migration:
+`supabase/migrations/20260830160000_autocura_unitv_controles.sql`.
+Este bloco só registra o marco.
+
+- **Migration APLICADA** via `supabase db query --linked -f`. **Só
+  CREATE + 1 INSERT** — 2 tabelas (`autocura_unitv_config` singleton,
+  `autocura_unitv_ciclos` append-only), 3 índices (2 comuns +
+  `autocura_unitv_ciclos_um_em_andamento_idx` **UNIQUE parcial** onde
+  `estado='em_andamento'`), 3 RPCs (`autocura_unitv_pode_disparar`
+  `STABLE`, `autocura_unitv_registrar_inicio`,
+  `autocura_unitv_registrar_fim`). **NÃO registrada no
+  `schema_migrations`** (fluxo manual do repo).
+- **Fotografia read-only antes/depois** (11 consultas: colunas,
+  constraints, índices, funções, grants de rotina, RLS de tabelas,
+  policies, triggers, `cron.job`, contagens de
+  `tokens_renovacao`/`renovacoes_lote`/`cobrancas_pix`/`unitv_dealer_token_estado`/`unitv_token_diagnostico`,
+  `vault.secrets` `unitv_dealer_token`) → **11/11 IDÊNTICAS**. Nenhum
+  objeto pré-existente alterado. Vault/secrets/token UniTV **inalterados**
+  (re-conferido também pós-testes).
+- **Estado inerte confirmado (bloco B):** RLS on + **0 policies** nas 2
+  tabelas; as 3 RPCs `SECURITY DEFINER`, `has_function_privilege` =
+  `anon:false / authenticated:false / service_role:true`;
+  `autocura_unitv_config` = 1 linha `id=1` com `healer_ativo=false`,
+  `modo_observacao=true`, `return_codes_que_disparam=NULL`,
+  `kill_switch=false`, `pausado_ate=NULL` + defaults
+  120/4/2/6/2/12/3/10/20/24/0.920/0.150, `atualizado_por=NULL`;
+  `autocura_unitv_ciclos` **vazia**; CHECKs de invariante presentes
+  (`_allowlist_obrigatoria`, `_healer_fora_observacao`, `_singleton`,
+  `_terminal_coerente`, `_calibracao_sem_login`, `_observacao_sem_login`).
+- **3 suítes SQL F1 (rodadas contra produção pós-apply, com reset do
+  estado inerte ao fim) — todas verdes:**
+  - `suite1_pode_disparar` — todos os motivos alcançáveis:
+    `healer_inativo`, `kill_switch`, `pausado` (futuro e `infinity`),
+    `ciclo_em_andamento`, `cooldown` (ativo e liberado após 121min),
+    `cap_calibracao_diario`, `hard_stop_falhas` (+ quebra da streak por
+    `sucesso`), `cap_ciclos_diario`, `cap_post_diario`, e o guard
+    financeiro I3 (`renovacao_unitv_em_voo` vs `ok` conforme
+    `tokens_renovacao` real — 0 em voo no momento). *(`allowlist_vazia` e
+    `modo_observacao` são inalcançáveis na prática pelos CHECKs
+    `_allowlist_obrigatoria`/`_healer_fora_observacao` — permanecem como
+    defesa em profundidade; testá-los exigiria dropar os CHECKs, o que
+    não foi feito.)*
+  - `suite2_registrar` — `registrar_inicio` (uuid + snapshot
+    `modo_observacao`); 2º `registrar_inicio` bloqueado; `registrar_fim`
+    grava métricas + `ended_at`; 2º `registrar_fim` → `P0001 nao esta
+    em_andamento`; **auto-fecho de órfão** (`em_andamento` com
+    `iniciado_em = now()-21min` → `concluido/indeterminado/orfao` no
+    próximo `registrar_inicio`); `registrar_inicio` bloqueado por guard →
+    `P0001 bloqueado (kill_switch)`; **hard-stop** engata após 3
+    `disparo`/`falhou` (`pausado_ate='infinity'`,
+    `atualizado_por='autocura:hard_stop'`); `calibracao`/`falhou` **não**
+    engata hard-stop.
+  - `suite3_config_invariantes` — CHECKs: `id=2` rejeitado;
+    `healer_ativo=true` com allowlist `NULL`/`{}` rejeitado;
+    `healer_ativo=true`+`modo_observacao=true` rejeitado; estado-alvo F5
+    (`modo_observacao=false`+`healer_ativo=true`+allowlist `{5}`) aceito;
+    `terminal_coerente`/`calibracao_sem_login`/`observacao_sem_login`
+    rejeitam inserts inválidos.
+- **Teste de concorrência real do `registrar_inicio`** (2× em paralelo
+  via `xargs -P2`, tabela vazia): exatamente **1 vence** (uuid) + **1
+  falha** (`P0001 registrar_inicio: bloqueado (ciclo_em_andamento)`) +
+  **exatamente 1 linha `em_andamento`** no banco. O índice único parcial
+  + o re-check interno de `pode_disparar` garantem o ciclo único sob
+  transações concorrentes.
+- **26/26 suítes TS existentes verdes** (a migration não toca nenhum
+  caminho TS).
+- **Estado final:** `autocura_unitv_ciclos` vazia, `autocura_unitv_config`
+  restaurada aos defaults F1 exatos. Nada consome estas estruturas ainda
+  (a EF `autocura-unitv-monitor` é F2). Nenhuma EF/workflow/OCR/secret de
+  login criado. Nenhuma alteração no fluxo de renovação, no Vault ou no
+  token UniTV.
+
+### F2 — PRÓXIMA ETAPA (não iniciada)
+
+EF `autocura-unitv-monitor` (cron `*/15`): roda
+`diagnosticarTokenUnitv` proativo, aplica a **regra de confirmação dupla
+A.3** (2 batidas `token_morto` mesmo `returnCode`, ≥ `confirmacao_gap_min`,
+`returnCode ∈ allowlist`), chama `autocura_unitv_pode_disparar` +
+`autocura_unitv_registrar_inicio`, faz o **sweep de órfão**, e (em
+`modo_observacao`) agenda a **calibração** do OCR. + EF
+`autocura-unitv-resultado` (esqueleto do callback). Secret novo
+`AUTOCURA_UNITV_MONITOR_TOKEN` (par no Vault). **Sem workflow, OCR ou
+secret de login (F3/F4).** Escopo: `AUTOCURA_UNITV_DEALER_TOKEN.md`
+§6.A.2/§6.A.3 + §13. **Não iniciar sem aprovação explícita.**
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 
