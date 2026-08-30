@@ -363,17 +363,29 @@ o fluxo da Renovação Automática.
 
 ## PONTO EXATO DA RETOMADA (próxima sessão)
 
-> **Bootstrap do Vault + validação read-only `gcnv6v` CONCLUÍDOS com
-> sucesso em 2026-08-30 (ver "### BOOTSTRAP FASE 2A CONCLUÍDO + VALIDAÇÃO
-> gcnv6v" abaixo). Fase 2A está EM PRODUÇÃO com o Vault como fonte viva.**
+> **Fase 2A EM PRODUÇÃO com o Vault como fonte viva** (bootstrap +
+> validação `gcnv6v` concluídos 2026-08-30 — ver "### BOOTSTRAP FASE 2A
+> CONCLUÍDO" abaixo).
 >
-> **Próxima etapa de projeto: Fases 3/4 — desenho e implementação da
-> autocura automática do `UNITV_DEALER_TOKEN`** (login/CAPTCHA/rotação no
-> runner ou pré-flight de saúde), **mantendo a recaptura manual apenas
-> como fallback de emergência**. Contexto já levantado: §0.3 (U1
-> concluído — CAPTCHA = 4 dígitos; U3/U4 inconclusivos), §4.6.1
-> (comparação A×B, opções i/ii/iii). **Não iniciada — aguardando
-> revisão do usuário antes de começar.**
+> **F0 CONCLUÍDA (2026-08-30):** documento oficial de arquitetura da
+> autocura (Fases 3/4) aprovado (José + GPT) e commitado —
+> `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md` (commit
+> `6c0360b`). Invariantes I1–I7 (allowlist obrigatória de `returnCode`;
+> modo observação como 1ª etapa; guard financeiro; autocura escreve só o
+> Vault; falha → encerra + alerta + fallback manual). Roadmap oficial
+> **F0 doc → F1 controles → F2 monitor → F3 observação/OCR → F4 login
+> supervisionado → F5 ativação — não pular etapas.**
+>
+> **PRÓXIMA ETAPA: revisar/implementar SOMENTE F1** — as 2 tabelas
+> (`autocura_unitv_ciclos`, `autocura_unitv_config`) + 3 RPCs de controle
+> (`autocura_unitv_pode_disparar` / `_registrar_inicio` / `_registrar_fim`),
+> com `autocura_unitv_config` nascendo `healer_ativo=false`,
+> `modo_observacao=true`, `return_codes_que_disparam=null` (allowlist
+> obrigatória). **Tudo INERTE** — nenhuma EF, workflow, OCR ou secret de
+> login nesta etapa; nada consome as tabelas ainda. Escopo completo de F1:
+> `AUTOCURA_UNITV_DEALER_TOKEN.md` §8.1 + §13 (linha F1). Migrations
+> aplicadas manualmente via SQL Editor, mostrando o SQL e a preservação
+> antes de aplicar (regra permanente do repo).
 
 ### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
 
@@ -477,6 +489,37 @@ fonte viva agora**.
   Vault; Vault semeado e não-vazio; função v5 empacota
   `_shared/unitv_dealer_token.ts`; isolate frio faz a 1ª leitura pelo
   Vault) — sem nenhum sinal de falha do fallback.
+
+### F0 — DOCUMENTO OFICIAL DE ARQUITETURA DA AUTOCURA (Fases 3/4) — APROVADO E COMMITADO (2026-08-30)
+
+**Dono único:** `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md`
+(commit `6c0360b`). Aprovado por José + GPT como documento oficial. Este
+bloco não duplica o doc — só registra o marco e o próximo passo.
+
+- **Escopo:** detector (reusa `unitv_token_diagnostico`) + confirmação
+  dupla anti-falso-positivo + healer (GitHub Actions Playwright, workflow
+  separado, OCR de CAPTCHA por template matching) + segurança
+  (kill-switch, cooldown, caps, hard-stop, um ciclo por vez) + gravação
+  validada só no Vault + observabilidade.
+- **Invariantes I1–I7** (não-negociáveis): **I1** allowlist obrigatória
+  de `returnCode` de token morto — `healer_ativo=false` até haver um
+  código real observado passivamente em produção, revisado e autorizado;
+  **I2** modo observação é a 1ª etapa obrigatória (monitor/detector/OCR/
+  métricas sim; `POST` de login nunca); **I3** guard financeiro (não
+  inicia com renovação UniTV em `aguardando_confirmacao`/`autorizada`/
+  `renovacao_em_andamento`; nenhum caminho para `/api/account/renew`);
+  **I4** autocura escreve só o Vault, `UNITV_DEALER_TOKEN` intocado;
+  **I5** falha → encerra ciclo + alerta + fallback manual, nunca
+  reexecuta renovação; **I6** nunca loga token/senha/CAPTCHA resolvido;
+  **I7** limites rígidos + cooldown + kill-switch.
+- **Roadmap oficial (não pular etapas):** **F0** doc ✅ → **F1**
+  controles (tabelas + RPCs, tudo inerte) → **F2** monitor → **F3**
+  observação/OCR (≥7 dias, zero `POST`) → **F4** login supervisionado
+  (`healer_ativo` ainda `false`) → **F5** ativação (`modo_observacao=false`
+  + `healer_ativo=true` juntos, numa revisão).
+- **Nada implementado.** Nenhuma migration, RPC, EF, workflow, OCR ou
+  secret de login criado. Próxima etapa = revisar/implementar **só F1**
+  (ver "PONTO EXATO DA RETOMADA" acima e o doc §8.1/§13).
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 
