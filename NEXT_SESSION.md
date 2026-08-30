@@ -417,13 +417,47 @@ o fluxo da Renovação Automática.
 > `UNITV_DEALER_TOKEN`, `/api/account/renew`, criar cobrança, disparar
 > workflow, criar ciclo de healer.
 >
-> **PRÓXIMA ETAPA: F3 — workflow + runner + OCR de CAPTCHA em modo
-> observação (ZERO POST de login, ≥7 dias) + EF `autocura-unitv-resultado`
-> + RPC `autocura_unitv_expirar_orfaos()` (adiada da F2).** Escopo:
-> `AUTOCURA_UNITV_DEALER_TOKEN.md` §5 + §13 (linha F3). **NÃO iniciar F3
-> sem aprovação explícita.** Sequência oficial: F0 doc → **F1 ✅** →
-> **F2 ✅** → F3 observação/OCR → F4 login supervisionado → F5 ativação —
-> não pular etapas.
+> **F3-A CONCLUÍDA E APLICADA EM PRODUÇÃO (2026-08-30) — MODO OBSERVAÇÃO,
+> zero possibilidade estrutural de POST de login.** Migration
+> `20260830200000_autocura_unitv_ocr.sql` (tabela `autocura_unitv_ocr_metricas`
+> + RPC `autocura_unitv_expirar_orfaos()` + cron `autocura-unitv-ocr-agendador`
+> `0 3 * * *`; **só CREATE**). EFs `autocura-unitv-ocr-agendador` (v1) e
+> `autocura-unitv-resultado` (v1), `--no-verify-jwt`. Workflow
+> `.github/workflows/autocura-unitv-ocr.yml` (**não é healer** — env
+> **sem** `UNITV_DEALER_LOGIN`/`SENHA`). Runner `scripts/autocura-unitv-ocr.mjs`
+> + pipeline `scripts/lib/unitv-captcha-ocr.mjs` + templates sintéticos
+> `scripts/lib/captcha-templates/digitos.json`. `_shared/unitv_token_diag.ts`
+> **não tocado nesta etapa** (só o retorno aditivo de F2). Secrets
+> internos novos (não são login, `openssl rand -hex 32`): Edge
+> `AUTOCURA_UNITV_OCR_AGENDADOR_TOKEN` + `AUTOCURA_UNITV_OCR_CALLBACK_TOKEN`,
+> Vault `autocura_unitv_ocr_agendador_token`, GitHub Actions
+> `AUTOCURA_UNITV_OCR_CALLBACK_TOKEN`. Fotografia antes/depois:
+> **a01–a08/a10/a11 IDÊNTICAS**, a09 = exatamente 1 cron novo;
+> `UNITV_DEALER_TOKEN`/`UNITV_DEALER_NAME`/Vault `unitv_dealer_token`
+> **inalterados**. Smoke sem X-Internal-Token → **401** (nas 2 EFs).
+> **34/34 suítes TS + `autocura_expirar_orfaos` (SQL) verdes.** F1/F2
+> intocadas: `autocura_unitv_config` `healer_ativo=false`/`modo_observacao=true`/
+> `return_codes_que_disparam=NULL`; `autocura_unitv_ciclos` vazia;
+> `autocura_unitv_ocr_metricas` vazia; 2 crons de autocura ativos
+> (`autocura-unitv-monitor` `*/15` + `autocura-unitv-ocr-agendador` `0 3 * * *`).
+> Detalhe: "### F3-A — OBSERVAÇÃO/OCR APLICADO" abaixo.
+>
+> **Critério de saída da F3-A (só depois disso é F4):** mínimo **14 dias
+> corridos E mínimo 10 execuções completas** de calibração + os critérios
+> objetivos do doc §F3-A.12 (segmentação ≥ 0,99; gate_ok ≥ 0,95;
+> `score_top1_p50` ≥ 0,97 / `_min` ≥ 0,85; `margem_p10` ≥ 0,10;
+> formato_invalido ≤ 0,01; `Σ login_posts = 0`; `runner_sha` estável ≥ 7
+> dias; revisão José + GPT de `autocura_unitv_ocr_metricas`). Esses
+> números são **evidência de confiabilidade/consistência do solver, NÃO
+> prova de acurácia** — a acurácia real só na F4 (login supervisionado).
+>
+> **PRÓXIMA ETAPA: F3-B (design) + F4.** F3-B (preparação do login —
+> componentes/contratos/estados/guards/falhas, **sem código, sem
+> execução**) já está especificada no doc §F3-B. **NÃO implementar F3-B
+> em código, não criar login/workflow de healer/secrets de login, não
+> fazer POST de login, não iniciar F4 — só com aprovação explícita e só
+> depois do critério de saída da F3-A.** Sequência: F0 → F1 ✅ → F2 ✅ →
+> **F3-A ✅** → F3-B/F4 → F5.
 
 ### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
 
@@ -705,10 +739,86 @@ estado — não pode: login / CAPTCHA de login / POST de login / alterar
 Vault / alterar `UNITV_DEALER_TOKEN` / `/api/account/renew` / criar
 cobrança / disparar workflow / criar ciclo de healer).
 
-**Próxima etapa: F3** (workflow + runner + OCR de CAPTCHA em modo
-observação, ZERO POST de login, ≥7 dias; EF `autocura-unitv-resultado`;
-RPC `autocura_unitv_expirar_orfaos()`). **Não iniciar sem aprovação
-explícita.**
+### F3-A — OBSERVAÇÃO/OCR APLICADO EM PRODUÇÃO (2026-08-30)
+
+**Dono do detalhe de arquitetura:** `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md` §F3-A.
+Arquivos: `supabase/migrations/20260830200000_autocura_unitv_ocr.sql`,
+`supabase/functions/autocura-unitv-ocr-agendador/index.ts` +
+`_shared/autocura_ocr_agendador.ts` + `_shared/autocura_ocr_dispatch.ts`,
+`supabase/functions/autocura-unitv-resultado/index.ts` +
+`_shared/autocura_resultado.ts`, `.github/workflows/autocura-unitv-ocr.yml`,
+`scripts/autocura-unitv-ocr.mjs`, `scripts/lib/unitv-captcha-ocr.mjs`,
+`scripts/lib/captcha-templates/digitos.json` (+ `gerar-templates-sinteticos.mjs`).
+
+- **Objetivo:** provar o solver de CAPTCHA **por métricas**, sem login,
+  sem saber se o dígito lido está certo. Roda ≥ 14 dias / ≥ 10 execuções.
+- **Migration:** tabela `autocura_unitv_ocr_metricas` (RLS on, 0 policies,
+  só AGREGADOS — nunca imagem/predição/valor) + RPC
+  `autocura_unitv_expirar_orfaos()` (`SECURITY DEFINER`, só `service_role`;
+  adiada da F2, necessária agora que F3-A cria ciclos) + cron
+  `autocura-unitv-ocr-agendador` `0 3 * * *`. **Só CREATE.**
+- **Agendador** (EF + cron 03:00 UTC): `expirar_orfaos` → idade da última
+  calibração ≥ `calibracao_intervalo_h` → `pode_disparar('calibracao')`
+  (guards F1) → `registrar_inicio('calibracao','agendado')` → dispatch
+  `autocura-unitv-ocr.yml`. **Nunca `'disparo'`.** É o 1º componente que
+  chama `registrar_inicio` — só para calibração.
+- **Runner** (GH Actions Playwright): abre a página de login, coleta 20
+  CAPTCHAs pelo `POST /api/dealer-core/security/get-info` (**pré-auth**),
+  roda o pipeline OCR, agrega, chama `autocura-unitv-resultado`. **Sem
+  `UNITV_DEALER_LOGIN`/`SENHA` no env** → impossível logar. Loga só
+  bucket + flags; descarta `predicao` e bytes do PNG.
+- **Callback** (EF): `registrar_fim(ciclo_id,'calibracao',…)` + `INSERT`
+  em `autocura_unitv_ocr_metricas` (allowlist de 16 colunas) + alerta ao
+  José se `estilo_alterado` (dedupe 24h).
+- **Pipeline** (`unitv-captcha-ocr.mjs`): binariza → segmenta em 4 →
+  NCC vs templates → `score_top1`/`margem` → bucket `alta/media/baixa` →
+  validação de formato (`^[0-9]{4}$`, 240×80, fundo em [0,80;0,985],
+  0 strike-rows) → detecção de "obviamente inválido" (segmentos ≠ 4,
+  score < 0,50, margem ≤ 0,03, borda, all-same+margem-baixa). Templates
+  sintéticos (font 5×7) — refináveis com amostras reais durante a
+  observação (muda `runner_sha`, reinicia o relógio de "7 dias estável").
+- **Secrets internos novos** (não são login, `openssl rand -hex 32`, não
+  reaproveitados): Edge `AUTOCURA_UNITV_OCR_AGENDADOR_TOKEN` +
+  `AUTOCURA_UNITV_OCR_CALLBACK_TOKEN`; Vault
+  `autocura_unitv_ocr_agendador_token` (criado 12:48:48 UTC); GitHub
+  Actions `AUTOCURA_UNITV_OCR_CALLBACK_TOKEN` (12:48:50 UTC).
+- **Fotografia read-only antes/depois:** a01–a08, a10, a11 **IDÊNTICAS**;
+  a09 (`cron.job`) = exatamente **1 linha nova** (`jobid 4`,
+  `autocura-unitv-ocr-agendador`, `0 3 * * *`). `UNITV_DEALER_TOKEN`
+  (`ad542cf70e…`) / `UNITV_DEALER_NAME` (`b0cf3695…`) / Vault
+  `unitv_dealer_token` (`updated_at 09:51:23`) **inalterados**.
+- **Deploy só das 2 EFs de F3-A** (`autocura-unitv-ocr-agendador` v1,
+  `autocura-unitv-resultado` v1, `--no-verify-jwt`). Nenhuma outra
+  função tocada. `renovacao-unitv-conta` `ezbr_sha256 5ef156ff…`
+  inalterado.
+- **Smoke:** POST sem `X-Internal-Token` → **401** nas 2 EFs (e token
+  errado → 401).
+- **34/34 suítes TS** (30 + `autocura_ocr_pipeline` / `_agendador` /
+  `_resultado` / `_nao_age`) + **`autocura_expirar_orfaos` (SQL, contra
+  produção com limpeza) PASS**. Transpile-check (esbuild) das 5 TS de
+  F3-A: OK.
+- **Estado pós-aplicação:** `autocura_unitv_config` `healer_ativo=false`,
+  `modo_observacao=true`, `return_codes_que_disparam=NULL`;
+  `autocura_unitv_ciclos` **vazia**; `autocura_unitv_ocr_metricas`
+  **vazia**; 2 crons de autocura ativos. A 1ª execução de calibração real
+  ocorre às **03:00 UTC** (próximo tick do cron).
+- **F3-A NÃO pode:** login / CAPTCHA de login / POST de login / alterar
+  Vault / alterar `UNITV_DEALER_TOKEN` / alterar secret /
+  `/api/account/renew` / cobrança / disparar o workflow do healer /
+  `registrar_inicio('disparo')` / criar ciclo de healer / tocar a F2. O
+  CHECK `autocura_unitv_ciclos_observacao_sem_login` (F1) torna
+  **estruturalmente impossível** um ciclo de F3-A registrar `login_posts > 0`.
+
+**Critério de saída da F3-A (mínimo 14 dias corridos E mínimo 10
+execuções completas):** doc §F3-A.12. Os números de `gate_ok`/`score`/
+`margem` são **evidência de confiabilidade/consistência do solver, NÃO
+prova de acurácia** — a acurácia real só na F4 (login supervisionado).
+
+**Próxima etapa: F3-B (design, já no doc §F3-B) + F4.** **Não implementar
+F3-B em código, não criar secrets de login, não criar o workflow do
+healer, não fazer POST de login, não iniciar F4** — só com aprovação
+explícita e só depois do critério de saída da F3-A. Sequência: F0 → F1 ✅
+→ F2 ✅ → **F3-A ✅** → F3-B/F4 → F5.
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 

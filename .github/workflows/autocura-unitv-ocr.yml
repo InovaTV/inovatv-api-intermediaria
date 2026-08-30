@@ -1,0 +1,51 @@
+# F3-A da autocura do UNITV_DEALER_TOKEN (2026-08-30) -- CALIBRACAO DE
+# OCR, modo observacao. NAO e' o workflow do healer (esse e' F4).
+#
+# Disparado SO' por workflow_dispatch, pela EF autocura-unitv-ocr-agendador
+# (cron 03:00 UTC). Recebe so' ciclo_id (nenhum dado sensivel).
+#
+# O env DELIBERADAMENTE NAO tem UNITV_DEALER_LOGIN nem UNITV_DEALER_SENHA
+# -> o runner nao tem como logar. Zero possibilidade estrutural de POST
+# de login.
+name: Autocura UNITV - OCR (modo observacao)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ciclo_id:
+        description: "UUID de um ciclo tipo='calibracao' ja registrado no Supabase"
+        required: true
+        type: string
+
+concurrency:
+  # mesmo grupo que o healer futuro usara -> nunca 2 execucoes juntas
+  group: autocura-unitv
+  cancel-in-progress: false
+
+jobs:
+  calibrar-ocr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencias
+        run: npm install playwright@1.47.0 pngjs@7.0.0
+
+      - name: Instalar Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Calibracao de OCR (somente observacao)
+        env:
+          CICLO_ID: ${{ github.event.inputs.ciclo_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTOCURA_UNITV_OCR_CALLBACK_TOKEN: ${{ secrets.AUTOCURA_UNITV_OCR_CALLBACK_TOKEN }}
+          # SEM UNITV_DEALER_LOGIN / UNITV_DEALER_SENHA -- por desenho.
+        run: node scripts/autocura-unitv-ocr.mjs
