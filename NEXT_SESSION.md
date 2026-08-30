@@ -1,6 +1,13 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
-> **Atualizado: 2026-08-30 (tarde) — Autocura F4 código+testes + F5
+> **Atualizado: 2026-08-30 (noite) — OpenPix Sandbox → PRODUÇÃO,
+> Blocos 1–3 CONCLUÍDOS. Falta só o Bloco 4 (teste real com pagamento,
+> gate próprio). Também nesta sessão: token UniTV do dealer restaurado
+> por recaptura manual (`recaptura_manual`/`jose`, Vault, `token_vivo`
+> confirmado). Ver "SESSÃO 2026-08-30 (noite)" logo abaixo.** Antes
+> disso, mesma data (tarde):
+
+> **Autocura F4 código+testes + F5
 > mecanismo preparado + reconciliação da Renovação. 1ª execução real
 > F4.M FEITA: parou em `captcha_sem_confianca` (OCR sem calibração) —
 > disciplina de segurança confirmada (0 POST, Vault intocado). Episódio
@@ -14,6 +21,85 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-08-30 (noite) — Token UniTV restaurado + OpenPix Sandbox → PRODUÇÃO (Blocos 1–3)
+
+> F4/F5 da autocura **congeladas** (`healer_ativo=false`,
+> `modo_observacao=true`, allowlist `NULL`). F3-A **intacta**
+> (`autocura-unitv-monitor` `*/15` + `autocura-unitv-ocr-agendador`
+> `0 3 * * *` ativos). Arquitetura de renovação já validada **não
+> reaberta**.
+
+### Token UniTV do dealer — RESTAURADO
+
+Após o rc=300 (causa indeterminada, ver SESSÃO da tarde), o `dealer_token`
+do painel foi **recapturado manualmente** (José, via snippet de console
+que decifra o corpo AES de `POST /api/account` — o token de 32 hex NÃO
+está em header, está no campo `dealer_token` do corpo cifrado) e gravado
+no **Vault** via `unitv_dealer_token_definir('<token>','recaptura_manual','jose')`.
+- `unitv_dealer_token_estado`: `origem='recaptura_manual'`,
+  `atualizado_por='jose'`, `atualizado_em=2026-08-30 16:59:42 UTC`.
+- Edge secret `UNITV_DEALER_TOKEN` **NÃO tocado**.
+- Validado: `unitv_token_diagnostico` → **`token_vivo`, `probe_ok=3`,
+  `ancora_status=ok`** em 2 leituras (cron 17:00:43 + disparo manual
+  17:02:16 UTC). Renovação UniTV voltou a funcionar.
+- Confirmado o formato: **`dealer_token` continua `^[0-9a-f]{32}$`** — o
+  painel NÃO mudou o formato. Os headers `Token`/`Authorization` (34
+  chars) são credencial de sessão, SEPARADA do `dealer_token`.
+
+### OpenPix — Bloco 1 (código) — `1a66a8f`
+
+`_shared/openpix_client.ts`: `const SANDBOX_BASE_URL` → `const OPENPIX_BASE_URL
+= Deno.env.get("OPENPIX_BASE_URL") ?? "https://api.woovi-sandbox.com"` +
+os 2 usos renomeados + comentário. **Zero mudança de comportamento sem o
+secret.** Nenhuma lógica financeira alterada (confirmado por diff:
+3 hunks, só a origem da base URL). Suíte 37/37.
+
+### OpenPix — Bloco 2 (Woovi, José) — CONCLUÍDO
+
+Conta Woovi **produção** criada, webhook cadastrado
+(`https://nduxsuxkopuvhwugdkqi.supabase.co/functions/v1/openpix-webhook`,
+evento `OPENPIX:CHARGE_COMPLETED`), `OPENPIX_APPID` e
+`OPENPIX_WEBHOOK_PUBLIC_KEY` de produção disponíveis.
+
+### OpenPix — Bloco 3 (secrets + deploy) — CONCLUÍDO (2026-08-30 ~18:50 UTC)
+
+**⚠️ Sandbox DESLIGADO a partir daqui — secrets sobrescritos.**
+
+- **Secrets aplicados** (via `supabase secrets set` / `--env-file` de
+  arquivo gitignored `scripts/.credentials/_openpix_prod.env`, apagado
+  com `shred` logo após; valores nunca exibidos):
+  - `OPENPIX_BASE_URL` = `https://api.woovi.com` (novo)
+  - `OPENPIX_APPID` — digest `789437aab328…` → **`1ecc1f9dd4b8…`** (mudou)
+  - `OPENPIX_WEBHOOK_PUBLIC_KEY` — digest `5213d70de0d7…` → **`6b6961ad2bfc…`** (mudou)
+- **Deploy** (`--no-verify-jwt`, todos `ACTIVE`, `verify_jwt=false`):
+  `openpix-webhook` **v19**, `confirmacao-renovacao` **v17**,
+  `renovacao-sigma-watchdog` **v19**, `orchestrator` **v65**. (Saltos de
+  +3 nas versões = redeploys de plataforma concomitantes; o código
+  deployado é o `main` HEAD `1a66a8f`.)
+  - `openpix-webhook`/`confirmacao-renovacao`/`watchdog` trazem o novo
+    `openpix_client.ts` + `7f6cdc0`/`e3bee32` (openpix-webhook).
+  - `orchestrator` traz `aa9895d` (`mensagemFalhaResolucaoUnitv` — texto
+    de transferência mais preciso; motivo interno inalterado).
+- **Smoke `openpix-webhook`:** sem assinatura → **401** · assinatura
+  inválida → **401** (⇒ RSA valida contra a PEM de produção e falha em
+  lixo, como esperado) · `GET` → **405**.
+- **Cron `renovacao-sigma-watchdog` `*/5`** — ativo.
+- **Suíte completa `.mjs`: 37/37 verde.**
+- **Nenhuma cobrança, pagamento, ACEITO ou renovação real.**
+
+### Falta — Bloco 4 (gate próprio, NÃO autorizado ainda)
+
+1 pagamento real controlado (José paga, valor pequeno):
+proposta → ACEITO → cobrança (produção) → PIX pago → webhook (assinatura
+válida) → renovação → sync Rocket → mensagem final. Provar cada elo.
+**Sem repetir cobrança/renovação em caso de dúvida.** Fora do teste:
+número oficial `17996242415` (gate separado). Pendências registradas
+para depois: ChannelTV (config Rocket, José) · registro/notificação do
+pagamento UniTV no Rocket · latência da mensagem final · mensagem final
+não gravada em `mensagens_conversa` (verificar pós go-live).
 
 ---
 
