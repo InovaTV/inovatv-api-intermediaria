@@ -361,24 +361,19 @@ o fluxo da Renovação Automática.
 
 ---
 
-## PONTO EXATO DA RETOMADA (próxima sessão, outra máquina)
+## PONTO EXATO DA RETOMADA (próxima sessão)
 
-> **No OUTRO computador: recuperar o `UNITV_DEALER_TOKEN` válido pela
-> sessão logada do painel UniTV (captura passiva, procedimento oficial
-> de recaptura) e fazer o BOOTSTRAP no Vault — nada mais precisa ser
-> refeito. Depois: validação read-only `gcnv6v`. Só então a autocura
-> (Fases 3/4).**
+> **Bootstrap do Vault + validação read-only `gcnv6v` CONCLUÍDOS com
+> sucesso em 2026-08-30 (ver "### BOOTSTRAP FASE 2A CONCLUÍDO + VALIDAÇÃO
+> gcnv6v" abaixo). Fase 2A está EM PRODUÇÃO com o Vault como fonte viva.**
 >
-> **Comando do bootstrap** (SQL Editor do Supabase, valor colado na
-> hora, NUNCA em arquivo/chat/log):
-> ```sql
-> select unitv_dealer_token_definir('<TOKEN VÁLIDO ATUAL>', 'bootstrap', 'jose');
-> ```
-> Depois, verificação read-only: `select count(*) from vault.secrets
-> where name='unitv_dealer_token';` (=1) e `select origem, atualizado_por
-> from unitv_dealer_token_estado;` (`bootstrap`/`jose`), sem revelar o
-> valor. E a chamada `gcnv6v` (precisa do `RENOVACAO_SIGMA_CALLBACK_TOKEN`
-> como `X-Internal-Token`): esperar `{"outcome":"resolvido","id":3433363}`.
+> **Próxima etapa de projeto: Fases 3/4 — desenho e implementação da
+> autocura automática do `UNITV_DEALER_TOKEN`** (login/CAPTCHA/rotação no
+> runner ou pré-flight de saúde), **mantendo a recaptura manual apenas
+> como fallback de emergência**. Contexto já levantado: §0.3 (U1
+> concluído — CAPTCHA = 4 dígitos; U3/U4 inconclusivos), §4.6.1
+> (comparação A×B, opções i/ii/iii). **Não iniciada — aguardando
+> revisão do usuário antes de começar.**
 
 ### FASE 2A (fonte viva no Vault, secret = fallback) — EM PRODUÇÃO usando FALLBACK; BOOTSTRAP PENDENTE (2026-08-30)
 
@@ -425,6 +420,63 @@ commit `5a89e6b` + `inovatv_central/CLAUDE.md` (checkpoint 2026-08-30).
 - **NÃO FAZER:** rollback, bootstrap sem o token válido, alterar
   `UNITV_DEALER_TOKEN`, redeploy de outra função, tocar
   `unitv-renovar.mjs`, workaround para obter o `RENOVACAO_SIGMA_CALLBACK_TOKEN`.
+
+### BOOTSTRAP FASE 2A CONCLUÍDO + VALIDAÇÃO gcnv6v — SUCESSO (2026-08-30)
+
+As duas pendências da Fase 2A (bootstrap do Vault + validação read-only
+`gcnv6v` em produção) foram **fechadas com sucesso** nesta data, na
+outra máquina. Fase 2A deixa de operar por fallback — **o Vault é a
+fonte viva agora**.
+
+- **Recaptura passiva do `UNITV_DEALER_TOKEN`** — feita na sessão logada
+  do painel (`inovatvstream2`, `panel-web.revenda.site`), sem login
+  automatizado: interceptor read-only de `fetch`/XHR observando só os
+  headers `token`/`Authorization` + 1 navegação de leitura ("Detalhes
+  dos Créditos"). Header capturado = **32 hex minúsculo** → clipboard →
+  arquivo gitignored temporário. Valor nunca no chat/log/Git/doc. Página
+  recarregada ao final para remover a instrumentação. Sem logout, sem
+  renovação, sem cobrança.
+- **Bootstrap** — `select public.unitv_dealer_token_definir(<token>,
+  'bootstrap', 'jose')` via `supabase db query --linked -f <sql temp
+  gitignored>`, saída redirecionada para arquivo (nunca exibida),
+  `exit_code=0`. `_unitv_tok.txt` + temporários apagados imediatamente;
+  clipboard limpo.
+- **Verificação read-only pós-bootstrap:**
+  - `vault.secrets`: **1** linha `unitv_dealer_token`,
+    `created_at == updated_at == 2026-08-30 09:51:23.94558+00` (criação
+    nova, 1ª vez — não foi update). Valor nunca consultado.
+  - `unitv_dealer_token_estado`: `id=1`, `origem='bootstrap'`,
+    `atualizado_por='jose'`, `atualizado_em` = mesmo carimbo do secret.
+  - Edge secrets **`UNITV_DEALER_TOKEN`** (digest `ad542cf70ece8562…`,
+    `updated_at` 2026-08-29T18:46:58Z) e **`UNITV_DEALER_NAME`** (digest
+    `b0cf3695…`, `updated_at` 2026-08-29T01:24:04Z) — **INTACTOS**,
+    idênticos ao registrado antes. Nenhum `secrets set`.
+  - **26/26 suítes verdes** (`npx tsx scripts/testes/*/teste.mjs`).
+- **Validação read-only `gcnv6v` em produção** — cadeia
+  `renovacao-unitv-conta` **v5** (`verify_jwt=false`) →
+  `obterDealerToken()` → `resolverContaUnitv("gcnv6v")`. Auth via
+  `X-Internal-Token` = `RENOVACAO_SIGMA_CALLBACK_TOKEN` (arquivo local
+  `scripts/.credentials/renovacao_sigma_callback_token.txt`, sha256
+  `151d8368…` = idêntico ao secret de produção). Corpo `{"sn":"gcnv6v"}`.
+  - **Sonda 1** (isolate frio): HTTP **200**,
+    `{"outcome":"resolvido","id":3433363,"sn":"gcnv6v"}`, 2,03 s.
+  - **Sonda 2** (isolate quente): HTTP **200**, mesma resposta, 0,89 s.
+  - `unitv_token_diagnostico`: **0 linhas antes e depois** → o branch
+    `unavailable` (token rejeitado / painel fora) **não disparou**.
+  - **Nenhuma renovação / `/api/account/renew` / cobrança / ACEITO
+    executado.**
+- **LIMITAÇÃO registrada (não forçar prova adicional):** a chamada
+  read-only comprova que **o token disponível ao consumidor em produção
+  é válido** e resolve a conta. **Não comprova de forma independente se
+  veio do Vault ou do fallback** do Edge secret — ambos têm o mesmo
+  valor (Fase 2A não rotaciona), a resposta é idêntica nos dois
+  caminhos, e o único diferenciador (`console.log "[unitv-dealer-token]
+  vault indisponível/vazio -> fallback"`) só existe nos Edge Logs, que a
+  CLI 2.116 não expõe (`supabase functions` só tem `download`). O
+  resultado é **consistente com o caminho do Vault** (código prefere
+  Vault; Vault semeado e não-vazio; função v5 empacota
+  `_shared/unitv_dealer_token.ts`; isolate frio faz a 1ª leitura pelo
+  Vault) — sem nenhum sinal de falha do fallback.
 
 ### FASE 1 (diagnóstico + observabilidade) — EM PRODUÇÃO (2026-08-30)
 
