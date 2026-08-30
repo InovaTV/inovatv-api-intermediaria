@@ -1,9 +1,12 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
 > **Atualizado: 2026-08-30 (noite) — OpenPix Sandbox → PRODUÇÃO,
-> Blocos 1–3 CONCLUÍDOS. Falta só o Bloco 4 (teste real com pagamento,
-> gate próprio). Também nesta sessão: token UniTV do dealer restaurado
-> por recaptura manual (`recaptura_manual`/`jose`, Vault, `token_vivo`
+> Blocos 1–4 CONCLUÍDOS. 2 pagamentos reais em produção: Teste 1
+> recuperado pela Camada 3 do watchdog (webhook 401 por chave pública
+> errada no Bloco 3); chave corrigida → Teste 2 pelo caminho normal do
+> webhook, sem watchdog. Fluxo financeiro de produção validado ponta a
+> ponta. Também nesta sessão: token UniTV do dealer restaurado por
+> recaptura manual (`recaptura_manual`/`jose`, Vault, `token_vivo`
 > confirmado). Ver "SESSÃO 2026-08-30 (noite)" logo abaixo.** Antes
 > disso, mesma data (tarde):
 
@@ -128,16 +131,116 @@ transitivo):** `openpix-webhook`, `confirmacao-renovacao`,
 deployado agora). `_shared/reconciliacao_renovacao.ts` → só o watchdog.
 **Nenhuma outra EF ficou stale.**
 
-### Falta — Bloco 4 (gate próprio, NÃO autorizado ainda)
+### Bloco 3.2 — chave pública do webhook estava ERRADA no Bloco 3; CORRIGIDA (2026-08-30 19:59–20:01 UTC)
 
-1 pagamento real controlado (José paga, valor pequeno):
-proposta → ACEITO → cobrança (produção) → PIX pago → webhook (assinatura
-válida) → renovação → sync Rocket → mensagem final. Provar cada elo.
-**Sem repetir cobrança/renovação em caso de dúvida.** Fora do teste:
-número oficial `17996242415` (gate separado). Pendências registradas
-para depois: ChannelTV (config Rocket, José) · registro/notificação do
-pagamento UniTV no Rocket · latência da mensagem final · mensagem final
-não gravada em `mensagens_conversa` (verificar pós go-live).
+O `_openpix_prod.env` aplicado por mim no Bloco 3 continha um valor
+**errado** de `OPENPIX_WEBHOOK_PUBLIC_KEY` (digest `6b6961ad2bfc…`) —
+provável mangle de PEM na montagem do arquivo. Consequência: `openpix-webhook`
+rejeitava **todo webhook real** da Woovi com **401** (`crypto.subtle.verify`
+= `false` contra a chave errada).
+
+**Fato confirmado pelo usuário:** a chave pública de assinatura de
+webhook exibida pela Woovi é **a mesma em Sandbox e Produção**. A chave
+correta é a que já estava configurada **antes** do Bloco 3 (digest
+`5213d70de0d74ef7fa68637b450f9d919d9897911f78266e66b36960f4bf2bd2`,
+`updated 2026-08-24`), validada no POC de 24/08 contra 2 webhooks reais.
+
+- **Correção (usuário, manual, 19:59:11 UTC):** repôs
+  `OPENPIX_WEBHOOK_PUBLIC_KEY` com o PEM completo da Woovi (digest volta a
+  `5213d70…`).
+- **Redeploy `openpix-webhook` v20 → v21** (`--no-verify-jwt`, `ACTIVE`,
+  `verify_jwt=false`, `ezbr_sha256` inalterado `7133a9ac2695…` — só o
+  contador de versão; nenhuma outra função mudou; smoke 401/401/405).
+- **Investigação read-only do código de validação
+  (`_shared/openpix_webhook_signature.ts` + `openpix-webhook/index.ts`):
+  CÓDIGO CORRETO, sem bug.** Header `x-webhook-signature`; algoritmo
+  `RSASSA-PKCS1-v1_5` + SHA-256; assinatura em base64 (`atob`); PEM SPKI
+  (`importKey("spki", …)`, remove marcadores + todo whitespace); **corpo
+  BRUTO** (`await req.text()` antes de qualquer `JSON.parse`, sem
+  reserialização, sem `.trim()`); round-trip UTF-8 lossless. Os 401 do
+  Teste 1 foram **100% causados pelo valor errado do secret** — não há
+  bug nem pendência de código/entrega. **Incidente histórico, corrigido
+  e validado pelo Teste 2** (webhook real da Woovi Produção aceito e
+  processado pelo caminho normal).
+
+### Bloco 4 — CONCLUÍDO (2 testes reais em PRODUÇÃO, dinheiro real)
+
+**Fluxo financeiro de produção validado ponta a ponta:** proposta →
+ACEITO → cobrança (`api.woovi.com`) → PIX pago → webhook → processamento
+→ renovação Sigma → sync Rocket → mensagem final. O caminho normal (sem
+watchdog) foi comprovado no Teste 2.
+
+**Teste 1 — `cd24be6d-92d9-4a5f-895c-c6b999b3b0ce`** (ChannelTV/Sigma,
+R$ 35,00), ACEITE ~19:23 UTC:
+- Cobrança de produção criada OK (`POST api.woovi.com/api/v1/charge` →
+  sucesso ⇒ AppID de produção tem escopo de criar cobrança).
+- **Webhook `OPENPIX:CHARGE_COMPLETED` NÃO foi processado** — chegou ao
+  endpoint mas recebeu **401** (chave errada do Bloco 3, ver Bloco 3.2).
+- **Recuperado pela Camada 3 do `renovacao-sigma-watchdog`** no tick
+  `*/5` das 19:30:02 UTC: reconsulta `GET /charge/{correlationID}` →
+  `COMPLETED` + valor exato → `marcarCobrancaComoPaga` → claim → dispatch.
+  Nota de sistema gravada: *"Watchdog: pagamento confirmado na Woovi antes
+  da janela de 2h (webhook nao chegou) -- renovacao recuperada e
+  disparada."* Renovação concluída 19:31:02; vencimento `2026-09-30` →
+  `2026-10-30`; mensagem final gravada. **Recuperação em ~6 min.**
+- Reenvio manual da entrega falha pelo dashboard Woovi (método A):
+  processamento **no-op / idempotente** confirmado por leitura —
+  `cobrancas_pix`, `tokens_renovacao`, `conversas_estado`,
+  `mensagens_conversa`, GH Actions: **nada mudou**.
+- **O 401 original deste teste é incidente histórico** (chave errada do
+  Bloco 3), não uma pendência aberta — o Teste 2, com a chave corrigida,
+  recebeu e processou o webhook real da Woovi normalmente.
+
+**Teste 2 — `29065bfb-c583-409c-9379-28387ba46a73`** (ChannelTV/Sigma,
+R$ 5,00 — `valor` do cadastro Rocket), ACEITE 20:37:03 UTC, **APÓS a
+correção da chave**:
+- **Conclusão objetiva: A) caminho normal pelo webhook, SEM watchdog.**
+- Timeline: cobrança criada **20:37:04.671** → `marcarCobrancaComoPaga`
+  **20:38:07.254** (~62,6 s após a criação) → claim/`renovacao_iniciada_em`
+  **20:38:07.340** → mensagem "🔄 Renovação em andamento" **20:38:08.021**
+  (**só existe no caminho webhook**) → workflow GH Actions `33334196282`
+  **20:38:09Z** → conclusão **20:39:14Z** → `renovacao_concluida`
+  **20:39:08.359** → "Resultado da renovação Sigma: sucesso" **20:39:09.456**
+  → mensagem final **20:39:10.690**. Vencimento `2026-10-30` →
+  **`2026-11-30`**. Total ~2 min 6 s.
+- **Watchdog NÃO participou:** `cron.job_run_details` do
+  `renovacao-sigma-watchdog` — tick **20:35:00** (cobrança ainda não
+  existia) e tick **20:40:00** (tudo já terminal); **nenhum tick entre
+  20:37:04 e 20:38:07**. Camada 3 exige a cobrança com ≥ 5 min; foi paga
+  em ~62 s. **Ausência** da nota de sistema "Watchdog: …".
+- **Sem duplicidade:** após 20:30 UTC — 1 cobrança · 1 token · 0 lotes ·
+  1 GH Actions run · 1 workflow · 1 renovação.
+
+### Papel efetivo do `renovacao-sigma-watchdog` (comprovado em produção com dinheiro real)
+
+- **Caminho feliz (webhook OK):** o watchdog **não participa** — o
+  `openpix-webhook` marca `pago`, faz o claim atômico e dispara o
+  workflow no `EdgeRuntime.waitUntil`, tudo em ~1 min do pagamento
+  (Teste 2).
+- **Webhook ausente/rejeitado/atrasado:** o watchdog é a **rede de
+  segurança** — Camada 3 reconcilia `autorizada` + cobrança vinculada,
+  dentro da janela de 2h e ≥ 5 min, **só** se `GET /charge` = `COMPLETED`
+  + valor exato; recupera `pago` + dispara o workflow (Teste 1,
+  recuperação em ~6 min). Nunca perde um pagamento `COMPLETED` na Woovi.
+
+### Pendências reais restantes (renovação automática)
+
+1. **Número oficial `17996242415`** — migração para a Cloud API é gate
+   próprio, separado; os testes hoje foram todos no número de teste.
+2. **Registro/notificação do pagamento UniTV no Rocket** — decisão
+   anterior, tratamento posterior.
+3. **Melhorias de UX/latência** a decidir depois (ex.: latência da
+   mensagem final, transversal ao pipeline de resultado).
+
+**Fora da lista de pendências (fechados):**
+- Entrega/assinatura do webhook da Woovi Produção — **OK**. O único 401
+  (Teste 1) foi incidente histórico causado pela chave pública errada do
+  Bloco 3, corrigido às 19:59 e **validado pelo Teste 2** (webhook real
+  aceito e processado pelo caminho normal). Não há pendência de
+  código/config/entrega.
+- ChannelTV config Rocket — resolvido (renovou 2× hoje).
+- Mensagem final não gravada em `mensagens_conversa` (§5.5) — não se
+  reproduziu; **foi gravada** nos dois testes.
 
 ---
 
