@@ -146,6 +146,41 @@ async function lerSessaoRocket() {
   return { sessionid: linha?.sessionid ?? null, csrftoken: linha?.csrftoken ?? null };
 }
 
+// Fase 2A (2026-08-30): o dealer token do painel de revenda UniTV vem
+// do Vault (fonte viva, RPC unitv_dealer_token_ler via service_role --
+// mesma mecanica de lerSessaoRocket, NENHUMA credencial nova), com
+// fallback para process.env.UNITV_DEALER_TOKEN (ainda injetado pelo
+// .yml). NAO rotaciona nada nesta fase: Vault == secret. O valor NUNCA
+// e' logado. scripts/lib/unitv-renovar.mjs permanece intocado -- o
+// token e' injetado por quem o chama.
+async function lerDealerTokenVault() {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/unitv_dealer_token_ler`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    if (!resp.ok) return null;
+    const t = await resp.json();
+    return typeof t === "string" && t.trim() !== "" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+let _dealerTokenCache; // resolvido uma vez por execucao do runner
+async function obterDealerTokenRunner() {
+  if (_dealerTokenCache !== undefined) return _dealerTokenCache;
+  const doVault = await lerDealerTokenVault();
+  if (!doVault) console.log("[unitv-dealer-token] runner: vault indisponivel/vazio -> fallback do env");
+  _dealerTokenCache = doVault ?? process.env.UNITV_DEALER_TOKEN ?? "";
+  return _dealerTokenCache;
+}
+
 // Le o cliente via funcao interna (renovacao-sigma-cliente), nao mais
 // direto no Rocket -- a chamada direta do runner do GitHub Actions
 // era bloqueada pela borda/Cloudflare (investigado e caracterizado em
@@ -222,7 +257,12 @@ async function sincronizarVencimentoRocket(publicId, vencimentoAlvo) {
 // Sigma de processarLote), com rocketDesync=true quando a renovacao
 // deu certo mas o Rocket nao sincronizou.
 async function renovarUmAcessoUniTVComSync({ sn, id, publicId, servidorNome, clienteNome, tokenId }) {
-  const r = await renovarUmAcessoUniTV({ sn, id });
+  // Fase 2A: injeta o token resolvido (Vault -> fallback env). O
+  // executor congelado recebe o valor pronto -- seu default
+  // process.env.UNITV_DEALER_TOKEN nunca e' exercido, mas o valor
+  // entregue e' identico ao que ele leria (nao ha rotacao nesta fase).
+  const dealerToken = await obterDealerTokenRunner();
+  const r = await renovarUmAcessoUniTV({ sn, id, dealerToken });
   const item = {
     token_id: tokenId,
     tipo: "unitv",

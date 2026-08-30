@@ -93,6 +93,9 @@ globalThis.fetch = async (url, opts = {}) => {
   if (urlStr.includes("/rest/v1/rpc/rocket_sessao_ler")) {
     return new Response(JSON.stringify({ sessionid: "sess-fake", csrftoken: "csrf-fake" }), { status: 200 });
   }
+  if (urlStr.includes("/rest/v1/rpc/unitv_dealer_token_ler")) {
+    return new Response(JSON.stringify("tkn-vault-runner"), { status: 200 }); // Fase 2A (cenarios Sigma nem consultam)
+  }
   if (urlStr.endsWith("/functions/v1/renovacao-sigma-cliente")) {
     return new Response(JSON.stringify(configCliente.body), {
       status: configCliente.status,

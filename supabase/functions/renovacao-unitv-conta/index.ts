@@ -25,6 +25,7 @@
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { resolverContaUnitv } from "../_shared/unitv_conta.ts";
 import { diagnosticarTokenUnitv } from "../_shared/unitv_token_diag.ts";
+import { obterDealerToken } from "../_shared/unitv_dealer_token.ts";
 
 // Runtime da plataforma (Deno Deploy / Supabase Edge) -- mesma
 // declaracao usada em webhook/index.ts e openpix-webhook/index.ts.
@@ -58,7 +59,12 @@ Deno.serve(async (req: Request) => {
     return errorResponse("Campo obrigatorio: sn (string nao vazia)");
   }
 
-  const r = await resolverContaUnitv(sn);
+  // Fase 2A (2026-08-30): o dealer token vem do Vault (fonte viva) com
+  // fallback para o Edge secret UNITV_DEALER_TOKEN. resolverContaUnitv
+  // mantem seu proprio `?? Deno.env.get(...)` como 3a rede residual,
+  // mas na pratica sempre recebe o valor ja resolvido aqui.
+  const dealerToken = await obterDealerToken();
+  const r = await resolverContaUnitv(sn, { dealerToken });
 
   if (r.ok) {
     return jsonResponse({ outcome: "resolvido", id: r.id, sn: r.sn });

@@ -41,6 +41,7 @@
 
 import { resolverContaUnitv } from "./unitv_conta.ts";
 import { getServiceClient } from "./supabase_client.ts";
+import { obterDealerToken as obterDealerTokenPadrao } from "./unitv_dealer_token.ts";
 import { enviarTemplateWhatsApp } from "./whatsapp_client.ts";
 import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
@@ -86,7 +87,10 @@ export interface DiagnosticoOpts {
   enviarTemplate?: typeof enviarTemplateWhatsApp;
   numeroJose?: string;
   ancoraSn?: string;
+  // Fase 2A: se `dealerToken` nao for injetado, o token vem de
+  // `obterToken()` (default = Vault -> fallback secret).
   dealerToken?: string;
+  obterToken?: () => Promise<string>;
   dealerName?: string;
 }
 
@@ -203,7 +207,10 @@ export async function diagnosticarTokenUnitv(opts: DiagnosticoOpts): Promise<voi
     // Ancora operacional TEMPORARIA de V1 (ver cabecalho). Nunca
     // gravada/logada. Ausente -> ancora_status='ausente', sem probes.
     const ancoraSn = (opts.ancoraSn ?? Deno.env.get("UNITV_DIAG_ANCHOR_SN") ?? "").trim();
-    const dealerToken = opts.dealerToken ?? Deno.env.get("UNITV_DEALER_TOKEN") ?? "";
+    // Fase 2A: token do Vault (fonte viva) -> fallback secret, via
+    // obterDealerToken. `dealerName` continua so' do env (a Fase 2A move
+    // so' o token). `?? ""` cobre um obterToken que devolva undefined.
+    const dealerToken = opts.dealerToken ?? (await (opts.obterToken ?? obterDealerTokenPadrao)()) ?? "";
     const dealerName = opts.dealerName ?? Deno.env.get("UNITV_DEALER_NAME") ?? "";
 
     const probes: ResultadoProbe[] = [];

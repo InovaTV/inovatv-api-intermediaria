@@ -19,6 +19,7 @@ register("./mock-loader.mjs", import.meta.url);
 
 const { definirResultado, chamadasRegistradas, resetarFake } = await import("./fake_unitv_conta.mjs");
 const { chamadasDiag, resetarDiag } = await import("./fake_unitv_token_diag.mjs");
+const { definirDealerToken, chamadasObterToken, resetarDealerToken } = await import("./fake_unitv_dealer_token.mjs");
 
 const TOKEN_VALIDO = "token-interno-renovacao-longo";
 
@@ -83,13 +84,25 @@ const corpoJson = (r) => r.json().catch(() => null);
 
 // --- mapeamento de resultado ---
 {
-  resetarFake();
+  resetarFake(); resetarDealerToken();
   definirResultado({ ok: true, id: 3433363, sn: "gcnv6v", expireTimeRaw: "2026-11-03 02:31:01", customer: "UniTV" });
   const r = await handler(req());
   const body = await corpoJson(r);
   ok(r.status === 200 && body.outcome === "resolvido" && body.id === 3433363 && body.sn === "gcnv6v", "ok -> {outcome:'resolvido', id, sn}");
   ok(Object.keys(body).sort().join(",") === "id,outcome,sn", "resolvido -> resposta tem EXATAMENTE outcome/id/sn (nada de dealer_token/expireTime/customer)");
   ok(chamadasRegistradas()[0].sn === "gcnv6v", "sn (trimado) repassado ao resolvedor");
+  // Fase 2A: EF resolve o dealer token (Vault->fallback) e o INJETA em resolverContaUnitv
+  ok(chamadasObterToken() === 1, "Fase 2A: obterDealerToken chamado 1x");
+  ok(chamadasRegistradas()[0].opts?.dealerToken === "tkn-vault-fake", "Fase 2A: token resolvido injetado em resolverContaUnitv({dealerToken})");
+}
+// Fase 2A: token do Vault vazio -> EF injeta "" -> resolverContaUnitv devolve
+// credenciais_ausentes -> outcome indisponivel (mesma degradacao de secret ausente)
+{
+  resetarFake(); resetarDiag(); resetarDealerToken();
+  definirDealerToken("");
+  definirResultado({ ok: false, reason: "credenciais_ausentes" });
+  ok((await corpoJson(await handler(req()))).outcome === "indisponivel", "Fase 2A: dealer token vazio -> indisponivel");
+  ok(chamadasRegistradas()[0].opts?.dealerToken === "", "Fase 2A: token vazio e' injetado como '' (nao undefined)");
 }
 {
   resetarFake(); resetarDiag();

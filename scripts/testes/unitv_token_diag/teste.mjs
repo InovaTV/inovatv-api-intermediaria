@@ -170,6 +170,7 @@ async function rodar(over = {}) {
       numeroJose: "numeroJose" in over ? over.numeroJose : NUM_JOSE,
       ancoraSn: "ancoraSn" in over ? over.ancoraSn : ANCORA,
       dealerToken: "dealerToken" in over ? over.dealerToken : DEALER_TOKEN,
+      obterToken: over.obterToken,
       dealerName: DEALER_NAME,
     });
   } finally {
@@ -306,6 +307,20 @@ const COLUNAS = [
 {
   const { rows } = await rodar({ dealerToken: "" });
   ok(rows[0].ancora_status === "ausente" && rows[0].probe_total === 0, "8b: dealerToken vazio -> ausente, 0 probes");
+}
+// 8c. Fase 2A: SEM opts.dealerToken -> obterToken() (Vault->fallback) e' consultado
+{
+  const { rows } = await rodar({
+    dealerToken: undefined,
+    obterToken: async () => "tkn-do-helper-2a",
+    fetchImpl: fetchSeq([() => respOk([CONTA_ANCORA()])]),
+  });
+  ok(rows[0].probe_total === 3 && rows[0].ancora_status === "ok", "8c: sem dealerToken -> obterToken consultado, probes rodam com o valor dele");
+}
+// 8d. obterToken() devolvendo "" -> cai em 'ausente' (mesma degradacao)
+{
+  const { rows } = await rodar({ dealerToken: undefined, obterToken: async () => "" });
+  ok(rows[0].ancora_status === "ausente" && rows[0].probe_total === 0, "8d: obterToken() -> '' -> ausente");
 }
 
 // =====================================================================

@@ -41,6 +41,7 @@ let cfgLote = []; // /rest/v1/renovacoes_lote
 let cfgToken = null; // /rest/v1/tokens_renovacao
 let cfgFilhos = []; // /rest/v1/tokens_renovacao?grupo_id
 let cfgSessao = { sessionid: "sess-fake", csrftoken: "csrf-fake" };
+let cfgDealerToken = "tkn-vault-runner"; // Fase 2A: RPC unitv_dealer_token_ler (scalar text)
 let cfgSync = { status: 200, body: { outcome: "sincronizado", vencimentoAntes: "x", vencimentoDepois: "y" } };
 let chamadasFetch = [];
 let capturarCallback = null;
@@ -59,6 +60,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return new Response(JSON.stringify(cfgToken ? [cfgToken] : []), { status: 200 });
   }
   if (u.includes("/rest/v1/rpc/rocket_sessao_ler")) return new Response(JSON.stringify(cfgSessao), { status: 200 });
+  if (u.includes("/rest/v1/rpc/unitv_dealer_token_ler")) return new Response(JSON.stringify(cfgDealerToken), { status: 200 });
   if (u.endsWith("/functions/v1/renovacao-rocket-vencimento")) {
     return new Response(JSON.stringify(cfgSync.body), { status: cfgSync.status, headers: { "content-type": "application/json" } });
   }
@@ -107,12 +109,35 @@ const tokenUniTV = {
 
   ok(chamadasRenovarUniTV().length === 1, "C1: renovarUmAcessoUniTV chamado EXATAMENTE 1x");
   ok(chamadasRenovarUniTV()[0].sn === "gcnv6v" && chamadasRenovarUniTV()[0].id === 3433363, "C1: chamado com sn/id do token");
+  // Fase 2A: o workflow le o dealer token do Vault (RPC unitv_dealer_token_ler)
+  // e o INJETA no executor congelado -- que assim nunca exerce seu default de env.
+  ok(chamadasRenovarUniTV()[0].dealerToken === "tkn-vault-runner", "C1(2A): dealerToken do Vault injetado no executor");
+  ok(chamadas.some((c) => c.url.includes("/rest/v1/rpc/unitv_dealer_token_ler")), "C1(2A): workflow consultou o Vault (unitv_dealer_token_ler)");
   const sync = chamadas.find((c) => c.url.endsWith("/renovacao-rocket-vencimento"));
   ok(sync && sync.corpo.publicId === PUBLIC_ID && sync.corpo.vencimentoAlvo === "2026-12-03T02:31:01-03:00", "C1: sync do Rocket com public_id + vencimento confirmado");
   ok(sync.headers["X-Internal-Token"] === CALLBACK_TOKEN, "C1: sync usa o X-Internal-Token interno");
   ok(callback.resultado === "sucesso" && callback.vencimentoConfirmado === "2026-12-03T02:31:01-03:00", "C1: callback resultado=sucesso + vencimentoConfirmado");
   ok(!("rocketDesync" in callback), "C1: sem rocketDesync quando o Rocket sincroniza");
   ok(!chamadas.some((c) => c.url.includes("renovacao-sigma-cliente") || c.url.includes("renovacao-sigma-contexto")), "C1: NUNCA toca o caminho Sigma");
+}
+
+// =====================================================================
+// C1b (Fase 2A): Vault vazio -> fallback para process.env.UNITV_DEALER_TOKEN.
+// O executor congelado recebe EXATAMENTE o token que receberia antes da 2A.
+// =====================================================================
+{
+  resetarFakeUnitvRenovar();
+  cfgLote = []; cfgToken = tokenUniTV; cfgSessao = { sessionid: "s", csrftoken: "c" };
+  cfgSync = { status: 200, body: { outcome: "sincronizado" } };
+  cfgDealerToken = null; // Vault ainda nao semeado
+  definirRenovarUmAcessoUniTV({ resultado: "sucesso", vencimentoConfirmado: "2026-12-03T02:31:01-03:00" });
+  const { callback, chamadas } = await rodar("c1b");
+
+  ok(chamadas.some((c) => c.url.includes("/rest/v1/rpc/unitv_dealer_token_ler")), "C1b(2A): workflow consultou o Vault");
+  ok(chamadasRenovarUniTV()[0].dealerToken === process.env.UNITV_DEALER_TOKEN, "C1b(2A): Vault vazio -> executor recebe o token do env (identico ao pre-2A)");
+  ok(chamadasRenovarUniTV()[0].dealerToken === "fake-dealer", "C1b(2A): valor efetivo = process.env.UNITV_DEALER_TOKEN");
+  ok(callback.resultado === "sucesso", "C1b(2A): renovacao segue normal com o fallback");
+  cfgDealerToken = "tkn-vault-runner"; // restaura para os demais cenarios
 }
 
 // =====================================================================
