@@ -1,10 +1,12 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
-> **Atualizado: 2026-08-30 (tarde) — Autocura F4 (código+testes
-> concluídos, NADA deployado, 1º login real PARADO para revisão) + F5
-> (mecanismo de ativação preparado, não aplicado) + reconciliação da
-> Renovação (read-only, nenhuma correção necessária). Ver a SESSÃO
-> 2026-08-30 logo abaixo.** Antes disso: Etapa 2 (Renovação UniTV)
+> **Atualizado: 2026-08-30 (tarde) — Autocura F4 código+testes + F5
+> mecanismo preparado + reconciliação da Renovação. 1ª execução real
+> F4.M FEITA: parou em `captcha_sem_confianca` (OCR sem calibração) —
+> disciplina de segurança confirmada (0 POST, Vault intocado). Episódio
+> `rc=300` na janela = CAUSA INDETERMINADA (usuário fez logout) — NÃO
+> vira allowlist. Ver a SESSÃO 2026-08-30 logo abaixo.** Antes disso:
+> Etapa 2 (Renovação UniTV)
 > implementada e implantada; UniTV validado em produção (Sandbox);
 > lote misto Sigma+UniTV com a execução conjunta comprovada e a falha
 > do ChannelTV isolada. Substitui integralmente a versão anterior
@@ -80,6 +82,43 @@ estendida + commit/push do workflow. **Procedimento exato: doc §F4.M**
 ponto do projeto que cria ciclo `disparo` sem a RPC] → `gh workflow run`
 → o que observar → confirmar → abortar → restaurar). **Não executar sem
 autorização.**
+
+### Autocura — F4.M: 1ª execução real supervisionada FEITA (2026-08-30 ~14:57 UTC)
+
+Secrets configurados (`AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN` Edge+GitHub,
+`UNITV_DEALER_LOGIN`/`_SENHA`/`UNITV_DIAG_ANCHOR_SN` GitHub), EF
+`autocura-unitv-resultado` deployada (**v3**), guards prévios OK
+(`renovacao_unitv_em_voo=0`, `ciclo_em_andamento=0`, config inerte).
+
+Ciclo `617451e3-3c4b-480c-a0a5-b6ea76e899ab` · run `33318256671` · 41 s.
+**Resultado: `falhou` / `captcha_sem_confianca`.** 12/12 CAPTCHAs
+`bucket=n_a` — OCR (templates sintéticos, F3-A sem calibração ainda)
+**não leu nenhum CAPTCHA real**. Núcleo abortou **antes do 1º POST**.
+
+Disciplina confirmada em produção: `login_posts=0`; `vault_gravado=false`;
+`unitv_dealer_token_estado` inalterado (`bootstrap/jose`); Edge secret
+`UNITV_DEALER_TOKEN` digest inalterado; ciclo terminal único, **sem 2ª
+tentativa**; config da autocura intocada. **Caminho feliz NÃO exercitado**
+(gate de OCR nunca abriu — esperado antes da F3-A calibrar).
+`prontidao_f5()` não conta o ciclo como `teste_manual_f4_ok`.
+
+**Episódio `returnCode=300` na janela do teste — CAUSA INDETERMINADA
+(correção do usuário):** F2 registrou `14:30 token_vivo → 14:45/15:00
+token_morto rc=300`. **O usuário fez LOGOUT da conta UniTV e fechou a aba
+durante essa janela.** Portanto:
+- `rc=300` fica como **evidência de token inválido/rejeitado** (código do
+  `/api/account` quando o `dealer_token` não autentica) — **mantido**.
+- **NENHUMA conclusão de TTL** deste episódio (nem ~4–5 h nem outra).
+- **Causa: INDETERMINADA** — possível logout manual, não expiração.
+- **`300` NÃO entra na allowlist** com base neste evento. Pré-requisito
+  (b) da F5 segue **não atendido**.
+- Precisa de **outro `token_morto` sem logout e sem novo login** (morte
+  orgânica passiva) para avaliar se `300` é o código de sessão
+  expirada/inválida.
+
+**Operacional:** token do painel inválido (rc=300) → renovação UniTV
+degradada → precisa **recaptura manual** (SOP §15), independente do F4.
+**Não repetir login. Não alterar código.**
 
 ### Autocura — F5 (ativação): MECANISMO PREPARADO, não aplicado
 

@@ -966,6 +966,71 @@ gh workflow run autocura-unitv-token.yml -f ciclo_id=<CICLO_ID>
   núcleo gate → **Vault intocado**, token atual segue válido (falha de login não
   evicta) → aprende-se o `failure_class` sem estrago.
 
+### F4.M — 1ª execução real supervisionada (2026-08-30 ~14:57 UTC) — RESULTADO
+
+Ciclo `617451e3-3c4b-480c-a0a5-b6ea76e899ab` · GitHub Actions run
+`33318256671` · duração 41 s.
+
+**Resultado: `falhou` / `failure_class = captcha_sem_confianca`.** As 12
+tentativas de CAPTCHA (= `cap_refresh_captcha`) vieram **todas** `bucket=n_a`,
+`gate=false` — o pipeline de OCR (F3-A, templates ainda **sintéticos**, F3-A
+sem nenhuma calibração concluída ainda) **não leu nenhum CAPTCHA real do painel
+a alta confiança**. O núcleo abortou **antes de qualquer POST de login**.
+
+Disciplina de segurança — **confirmada em produção**:
+- `login_posts = 0` — **nenhum POST de login**.
+- `vault_gravado = false` — **Vault intocado**. `unitv_dealer_token_estado`
+  seguiu `bootstrap / jose / 2026-08-30 09:51 UTC` (idêntico ao pré-teste).
+- Edge secret `UNITV_DEALER_TOKEN` — digest inalterado (`ad542cf7…`).
+- Ciclo terminal único, `alertado_jose = true`, **sem 2ª tentativa**.
+- Config da autocura **intocada** (`healer_ativo=false`, `modo_observacao=true`,
+  allowlist `NULL`, `kill_switch=false`, `pausado_ate=NULL`).
+
+**O caminho feliz (gate → 1 POST → token → `/api/account` → Vault →
+revalidação) NÃO foi exercitado** — o gate de OCR nunca abriu. Isso é o
+resultado **esperado** para a F4 antes da F3-A calibrar o OCR (substituir os
+templates sintéticos por amostras reais). `autocura_unitv_prontidao_f5()` **não**
+conta este ciclo como `teste_manual_f4_ok` (exige `outcome='sucesso'`).
+
+### Episódio `returnCode=300` durante a janela do teste — CAUSA INDETERMINADA
+
+O monitor F2 (`*/15`) registrou, no seu ciclo normal:
+
+```
+14:30 UTC  token_vivo
+14:45 UTC  token_morto  returnCode=300   ← batida 1
+15:00 UTC  token_morto  returnCode=300   ← batida 2 (mesmo código) → "confirmado" pela regra do F2
+```
+
+**Correção de registro (informada pelo usuário 2026-08-30): durante essa
+janela o usuário fez LOGOUT da conta UniTV no painel e fechou a aba do
+navegador.** O painel usa sessão única por dealer — um logout pode invalidar a
+sessão no servidor. Portanto:
+
+- **`returnCode=300` fica registrado como evidência de token inválido/rejeitado**
+  pelo painel — é o código que o `/api/account` devolve quando o `dealer_token`
+  não autentica. Isso é útil e **permanece**.
+- **NENHUMA conclusão de TTL** (de ~4–5 h nem de qualquer duração) pode ser
+  tirada deste episódio. A transição `token_vivo → token_morto` entre 14:30 e
+  14:45 **não** é morte natural comprovada.
+- **Causa deste episódio: INDETERMINADA** — possível logout manual do usuário,
+  não expiração de sessão.
+- **`300` NÃO entra na allowlist (`return_codes_que_disparam`) com base neste
+  evento.** O pré-requisito (b) da F5 continua **não atendido**.
+- O `total_token_morto_confirmado=1` e o `ultimo_codigo_desconhecido_alertado=300`
+  no `autocura_unitv_monitor_estado` refletem a mecânica do F2 (dupla batida
+  do mesmo código), **não** um veredito de "sessão expira com código 300".
+
+**Para avaliar se `300` é de fato o código de sessão expirada/inválida é
+preciso outro evento `token_morto` que ocorra SEM logout e SEM novo login** —
+uma morte orgânica observada passivamente. Só então o código pode ser revisado
+e, se for rejeição de auth genuína, autorizado na allowlist (I1 / F5 §F5.1).
+
+**Estado operacional após o episódio:** o token vivo do painel está inválido
+(rc=300, seja por logout, seja por outra causa). Renovação UniTV degradada
+(clientes → `unavailable` → transferência) até **recaptura manual** (SOP §15) —
+independente do teste F4.
+
 ---
 
 ## F5 — Mecanismo de ativação (preparado 2026-08-30, NÃO ativado)
@@ -981,9 +1046,14 @@ gh workflow run autocura-unitv-token.yml -f ciclo_id=<CICLO_ID>
    completas de calibração (`autocura_unitv_ciclos tipo='calibracao'
    estado='concluido'`); métricas de OCR revisadas (`autocura_unitv_ocr_metricas`).
 2. **`returnCode` real de token morto (`C`)** observado pelo monitor F2
-   (`unitv_token_diagnostico veredito='token_morto' probe_return_code=C`),
-   revisado por José como rejeição de auth genuína (não rate-limit).
-3. Teste manual supervisionado F4 (§F4.M) concluído com `sucesso`.
+   (`unitv_token_diagnostico veredito='token_morto' probe_return_code=C`), numa
+   morte **orgânica** — sem logout manual e sem novo login na janela —, revisado
+   por José como rejeição de auth genuína (não rate-limit, não logout).
+   **Ainda NÃO atendido:** o episódio `rc=300` de 2026-08-30 tem causa
+   indeterminada (possível logout do usuário na janela do teste F4) — ver §F4.M.
+3. Teste manual supervisionado F4 (§F4.M) concluído com `sucesso` — **ainda NÃO
+   atendido** (1ª execução parou em `captcha_sem_confianca`; depende da F3-A
+   calibrar o OCR).
 4. Revisão explícita José + GPT.
 
 ### F5.2 A ativação — 1 statement atômico
