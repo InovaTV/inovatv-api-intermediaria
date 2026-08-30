@@ -75,6 +75,34 @@ seguro:
 para o ciclo + alerta + manual). Segura de construir e operar sem nenhum probe
 de login agora.
 
+### 3.1 AJUSTE OBRIGATÓRIO (2026-08-30) — 1 ÚNICO `POST` de login por ciclo
+
+> Este ajuste **substitui** qualquer menção anterior a "1 retry de transporte" /
+> "2º `POST`" nas seções B.7, B.8, 9 e 14. Enquanto a política de lockout do
+> painel for desconhecida (U4 inconclusivo), a V1 **nunca** emite um segundo
+> `POST` de login, em nenhuma hipótese.
+
+Regra única, implementada em `scripts/lib/autocura-unitv-healer.mjs` (`executarHealer`):
+
+```
+CAPTCHA passou no gate de ALTA confiança
+        │
+        ▼   1 POST de login  (postLogin() chamado exatamente 1x, fora de qualquer loop)
+   ┌────────────────────────────────────────────────┐
+   │ sucesso inequívoco    → segue (extrai token)    │
+   │ qualquer não-sucesso  → login_recusado (terminal)│
+   │ transporte / timeout  → login_transporte (terminal)│
+   └────────────────────────────────────────────────┘
+        │
+        └─ NUNCA repete o POST. Nem transporte, nem recusa.
+```
+
+`cap_post_por_ciclo` permanece como **teto rígido** consultado pela RPC de guard
+(`autocura_unitv_pode_disparar`), mas o runner **nunca** o exercita além de 1 —
+a trava dura `postLoginChamado` no núcleo prova isso, e a suíte
+`autocura_healer_fluxo` verifica em todos os cenários que `postLogin` é chamado
+no máximo 1×.
+
 ---
 
 ## 4. Máquina de estados de alto nível
@@ -337,11 +365,12 @@ alerta urgente. (Estouro sistemático = sinal de mudança no painel.)
 
 #### B.7 Limite de `POST` de login
 
-- `cap_post_por_ciclo` (default 2). **Mas**: com CAPTCHA pré-validado a alta
-  confiança, a **1ª recusa de autenticação encerra o ciclo**
-  (`failure_class='login_recusado'`). O 2º `POST` só é usado se o 1º falhar por
-  **transporte** (timeout/5xx/rede), **nunca** por recusa.
-- ≥ 30 s entre `POST`s (se houver 2).
+> **Ver §3.1 — 1 ÚNICO `POST` por ciclo, sem retry de transporte (ajuste
+> 2026-08-30).** O texto abaixo descreve o teto de config; o comportamento real
+> do runner é o da §3.1.
+
+- `cap_post_por_ciclo` (default 2) = **teto rígido** da RPC de guard. O runner
+  **nunca** emite mais de 1 `POST` — nem por transporte, nem por recusa.
 - Cap global cross-ciclo: `cap_post_diario` (default 6) / 24h, verificado pela
   RPC de guard **antes** do dispatch.
 - **Em `modo_observacao=true`: 0 `POST`s, sempre (I2).**
@@ -351,8 +380,8 @@ alerta urgente. (Estouro sistemático = sinal de mudança no painel.)
 | Situação | Ação |
 |---|---|
 | CAPTCHA nunca atinge confiança (≥ `cap_refresh_captcha`) | aborta sem `POST` · `captcha_sem_confianca` · alerta urgente |
-| 1º `POST` → recusa de auth (qualquer resposta ≠ sucesso, com CAPTCHA de alta confiança) | **para** · `login_recusado` · alerta urgente · **não usa o 2º `POST`** · fallback manual (I5) |
-| 1º `POST` → erro de transporte (timeout/5xx) | 1 retry (2º `POST`) após ≥ 30 s; falhou de novo → `login_transporte` · alerta urgente |
+| 1º `POST` → recusa de auth (qualquer resposta ≠ sucesso, com CAPTCHA de alta confiança) | **para** · `login_recusado` · alerta urgente · **não usa 2º `POST`** · fallback manual (I5) |
+| 1º `POST` → erro de transporte (timeout/5xx/rede) | **para** · `login_transporte` · alerta urgente · **não usa 2º `POST`** (ajuste §3.1) · fallback manual (I5) |
 | Login OK, resposta sem token reconhecível | `token_shape_invalido` · Vault intocado (I4) · alerta urgente |
 | Token novo falha `/api/account` read-only | `token_novo_invalido` · Vault intocado (I4) · alerta urgente |
 | Gravou Vault mas revalidação (passo 7) falha | `revalidacao_falhou` · alerta **CRÍTICO** (Vault pode ter token ruim → recaptura manual já) |
@@ -709,9 +738,9 @@ mudança de schema).
         baixa → "Eu não vejo" (refresh, NÃO conta como login)
       estourou → callback(falhou, captcha_sem_confianca) → alerta → EXIT
   10. -- SE modo_observacao=true (I2): callback(observacao, métricas de OCR) → EXIT. NENHUM POST. --
-  11. POST login (UNITV_DEALER_LOGIN + UNITV_DEALER_SENHA + código):
-        recusa de auth   → callback(falhou, login_recusado) → alerta → EXIT (não usa 2º POST) (I5)
-        erro transporte  → 1 retry após 30s; falhou de novo → callback(falhou, login_transporte)
+  11. POST login (UNITV_DEALER_LOGIN + UNITV_DEALER_SENHA + código) -- 1 UNICO POST (§3.1):
+        recusa de auth   → callback(falhou, login_recusado) → alerta → EXIT (nunca 2º POST) (I5)
+        erro transporte  → callback(falhou, login_transporte) → alerta → EXIT (nunca 2º POST) (§3.1)
         sucesso          → segue
   12. extrair dealer_token da resposta → shape 32hex?  não → callback(falhou, token_shape_invalido) [Vault intocado]
   13. /api/account read-only com token novo → returnCode 0?  não → callback(falhou, token_novo_invalido) [Vault intocado]
@@ -804,10 +833,206 @@ implementação.
 | **F1** | Migrations: `autocura_unitv_ciclos`, `autocura_unitv_config` (`healer_ativo=false`, `modo_observacao=true`, allowlist `null`) + 3 RPCs. Aplicação manual. Testes `autocura_pode_disparar`, `autocura_confirmacao`. | schema novo, isolado; nenhum comportamento existente muda |
 | **F2** | EF `autocura-unitv-monitor` (detector proativo + confirmação + sweep, **sem dispatch de workflow ainda**) + cron `*/15` + secret do monitor. EF `autocura-unitv-resultado` (esqueleto). Testes `autocura_monitor_tick`. | grava só `unitv_token_diagnostico` (já existia) + `autocura_unitv_ciclos` |
 | **F3** | Workflow `autocura-unitv-token.yml` + runner + `unitv-captcha-ocr.mjs` + templates, **rodando só em `modo_observacao=true`**: CAPTCHA + OCR + métricas + calibração agendada. **Zero `POST` de login.** Secrets `AUTOCURA_UNITV_CALLBACK_TOKEN`. Testes `autocura_modo_observacao`, `autocura_captcha_ocr`, `autocura_nunca_renew`, `autocura_vault_apenas`. **Roda ≥ 7 dias.** | dispara workflow que só busca CAPTCHA (endpoint pré-auth); não toca a conta |
-| **F4** | Após: (a) OCR calibrado; (b) `returnCode` real de token morto observado, revisado e adicionado à allowlist; (c) revisão. Implementar o caminho `POST` de login + extração/validação de token + gravação no Vault + revalidação. Secrets `UNITV_DEALER_LOGIN`/`UNITV_DEALER_SENHA`. Testes `autocura_token_novo`, `autocura_resultado`, `autocura_loop_guard`. **Ainda `healer_ativo=false`** — validação supervisionada (1 run manual acompanhado). | 1º login real, supervisionado |
-| **F5** | Flip `modo_observacao=false` **e** `healer_ativo=true` (juntos, numa revisão). Autocura automática ativa. Monitorar métricas. | autocura autônoma |
+| **F4** | ✅ **CÓDIGO + TESTES CONCLUÍDOS (2026-08-30)** — em paralelo à janela de observação da F3-A, sem esperá-la. Runner do healer (`scripts/autocura-unitv-token.mjs`), núcleo testável (`scripts/lib/autocura-unitv-healer.mjs`), resolvedor read-only próprio (`scripts/lib/autocura-unitv-conta-readonly.mjs`), workflow `autocura-unitv-token.yml`, callback estendido (`_shared/autocura_resultado.ts` canal `healer` + `autocura-unitv-resultado/index.ts` dois tokens). Regra §3.1 (1 POST, sem retry). Suítes `autocura_healer_fluxo`, `autocura_healer_resultado`, `autocura_healer_nao_age` verdes. **`healer_ativo` continua `false`; sem cron; sem dispatch automático.** Falta: secrets de login (ação do usuário) + o **teste manual supervisionado** (§F4.M — 1º login real, NÃO executado ainda). | nada até o teste manual; depois, 1º login real supervisionado |
+| **F5** | Ativação. **Mecanismo preparado (2026-08-30):** migration `20260830220000_autocura_unitv_ativacao.sql` (**não aplicada**) — RPCs `autocura_unitv_ativar_healer` / `_desativar_healer` / `_reverter_para_observacao` / `_prontidao_f5` (§F5). Ativar = `select autocura_unitv_ativar_healer('{C}')` (1 statement atômico) **+** criar a EF orquestradora + cron `autocura-unitv-healer-check` — só depois dos critérios formais e da revisão. | autocura autônoma |
 
-**Nenhuma fase após F0 começa sem aprovação explícita (José + GPT).**
+**Nenhuma fase após F0 começa sem aprovação explícita (José + GPT). F4/F5 podem
+ser construídas em paralelo à janela de observação da F3-A — mas a F3-A **não é
+pulada**: a ativação (F5) espera >= 14 dias corridos E >= 10 execuções de
+calibração + `returnCode` real de token morto + teste manual F4 + revisão.**
+
+---
+
+## F4.M — Procedimento do teste manual supervisionado (1º login real)
+
+> **NÃO EXECUTAR sem autorização explícita.** Este é o único caminho pelo qual um
+> ciclo `tipo='disparo'` roda enquanto `healer_ativo=false` — deliberadamente
+> fora do fluxo automático, para provar o healer de ponta a ponta uma vez, sob
+> supervisão, **sem renovação de cliente e sem cobrança**.
+>
+> `healer_ativo` permanece `false`, `modo_observacao` permanece `true`, a
+> allowlist permanece `NULL`, **nenhum cron do healer é criado**, **a F5 não é
+> ativada.** O ciclo é criado por `INSERT` direto (service-role, SQL Editor) —
+> exceção documentada, nunca usada pelo fluxo automático (que passa sempre por
+> `autocura_unitv_registrar_inicio`, o qual recusaria com `healer_inativo`).
+
+### Pré-requisitos
+
+1. Secrets de login configurados (ação do usuário): `UNITV_DEALER_LOGIN`,
+   `UNITV_DEALER_SENHA` (**só GitHub Actions**), `AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN`
+   (GitHub + Edge), `UNITV_DIAG_ANCHOR_SN` (GitHub — mesmo valor do Edge secret).
+2. EF `autocura-unitv-resultado` **deployada** com a extensão do canal `healer`.
+3. Workflow `autocura-unitv-token.yml` presente no branch default (`main`).
+4. Janela de baixo tráfego. José acompanhando.
+
+### Guards prévios (rodar no SQL Editor, tudo read-only)
+
+```sql
+-- (a) nenhuma renovacao UniTV em voo (I3)
+select count(*) from tokens_renovacao
+ where tipo = 'unitv'
+   and estado in ('aguardando_confirmacao','autorizada','renovacao_em_andamento');
+-- precisa ser 0
+
+-- (b) nenhum ciclo de autocura em andamento
+select id, tipo, iniciado_em from autocura_unitv_ciclos where estado = 'em_andamento';
+-- precisa vir vazio
+
+-- (c) estado atual da config (so' confere; NAO altera)
+select healer_ativo, modo_observacao, return_codes_que_disparam, kill_switch, pausado_ate
+  from autocura_unitv_config where id = 1;
+-- esperado: false / true / NULL / false / NULL  (nada disto muda no teste)
+
+-- (d) valor do token vivo ANTES (para comparar depois) -- indireto, sem revelar:
+--     rodar renovacao-unitv-conta com o SN ancora e confirmar 'resolvido'.
+```
+
+### Criar o ciclo manual (exceção documentada)
+
+```sql
+-- INSERT direto: unico ponto do projeto que cria um ciclo 'disparo' sem a RPC.
+-- modo_observacao=false na LINHA e' obrigatorio (CHECK observacao_sem_login);
+-- a CONFIG global continua modo_observacao=true.
+insert into autocura_unitv_ciclos (tipo, trigger, modo_observacao, diag_return_code)
+values ('disparo', 'agendado', false, null)
+returning id;   -- anote o UUID -> <CICLO_ID>
+```
+
+### Disparar o workflow
+
+```bash
+gh workflow run autocura-unitv-token.yml -f ciclo_id=<CICLO_ID>
+# acompanhar: gh run watch   (ou a aba Actions do repo)
+```
+
+### O que observar (logs do runner + banco)
+
+- Logs `[autocura-unitv-token]`: `captcha_tentativa` até `bucket=alta`; **um único**
+  `login_post` implícito (o núcleo chama `postLogin` 1×); `token_shape ok`;
+  `vault_gravado`; `revalidacao ok`; `fim outcome=sucesso login_posts=1 vault_gravado=true`.
+- **NUNCA** aparece o token, a senha, o login ou o CAPTCHA resolvido nos logs.
+- Banco:
+  ```sql
+  select estado, outcome, failure_class, login_posts, vault_gravado,
+         captcha_refreshes, captcha_confianca_bucket, ended_at
+    from autocura_unitv_ciclos where id = '<CICLO_ID>';
+  -- esperado: concluido / sucesso / null / 1 / true / <n> / alta
+
+  select origem, atualizado_por, atualizado_em
+    from unitv_dealer_token_estado where id = 1;
+  -- esperado: origem='autocura', atualizado_por='healer', atualizado_em recente
+  ```
+- WhatsApp do José: 1 alerta informativo (`MSG_AUTOCURA_OK`).
+
+### Confirmar sucesso
+
+1. `renovacao-unitv-conta` com o SN âncora → `resolvido` (o token novo do Vault
+   funciona para o fluxo de renovação).
+2. Edge secret `UNITV_DEALER_TOKEN` **inalterado** (só o Vault foi escrito — I4).
+   Confere pelo painel de secrets do Supabase (o valor não muda).
+3. Ciclo `concluido/sucesso`, `origem='autocura'` no `unitv_dealer_token_estado`.
+
+### Como abortar
+
+- **Antes de disparar:** `delete from autocura_unitv_ciclos where id = '<CICLO_ID>' and estado = 'em_andamento';`
+- **Durante o run:** `gh run cancel <run-id>`. O ciclo fica `em_andamento` órfão →
+  `autocura_unitv_expirar_orfaos()` (ou o sweep do monitor) o fecha como
+  `indeterminado/orfao` em `orfao_timeout_min` (20 min). Para fechar já:
+  `select autocura_unitv_expirar_orfaos();` (após o timeout) ou
+  `update autocura_unitv_ciclos set estado='concluido', outcome='indeterminado',
+   failure_class='orfao', ended_at=now() where id='<CICLO_ID>' and estado='em_andamento';`
+
+### Restaurar o estado ao final (sempre)
+
+1. **Config:** nada a restaurar — `healer_ativo/modo_observacao/allowlist/kill_switch`
+   nunca foram tocados. Reconfira com o SELECT do guard (c).
+2. **Ciclo de teste:** fica no histórico como `disparo/sucesso trigger='agendado'`.
+   **É esperado** — `autocura_unitv_prontidao_f5()` procura exatamente por ele
+   (item `teste_manual_f4_ok`). Não apagar.
+3. **Se o teste FALHOU** (qualquer `failure_class`): o alerta URGENTE já chegou ao
+   José. Fallback = recaptura manual (§15). O token vivo pode ter sido evictado
+   pelo login — rodar a recaptura manual e `select unitv_dealer_token_definir(
+   '<token>', 'recaptura_manual', 'jose');`.
+4. **Secrets de login:** decisão do usuário se mantém `UNITV_DEALER_LOGIN`/
+   `_SENHA` configurados (necessários para a F5) ou remove até a ativação.
+
+### Riscos declarados
+
+- O login **pode evictar a sessão viva** (painel = sessão única por dealer) →
+  janela curta (≤ 30 s, cache do Vault) em que a renovação UniTV poderia falhar
+  até o token novo propagar. Mitigação: janela de baixo tráfego + guard (a) = 0 +
+  José acompanhando.
+- Se o login **falhar** (credencial/lockout/CAPTCHA de borda) → passos 4/5 do
+  núcleo gate → **Vault intocado**, token atual segue válido (falha de login não
+  evicta) → aprende-se o `failure_class` sem estrago.
+
+---
+
+## F5 — Mecanismo de ativação (preparado 2026-08-30, NÃO ativado)
+
+> **Nada foi ativado.** `healer_ativo=false`, `modo_observacao=true`, allowlist
+> `NULL`, **sem cron do healer**, **sem dispatch automático**. Esta seção
+> descreve o mecanismo já escrito (migration `20260830220000`, não aplicada) e o
+> que a ativação real fará.
+
+### F5.1 Pré-requisitos da ativação (todos)
+
+1. F3-A: **≥ 14 dias corridos** desde a 1ª calibração **E ≥ 10 execuções**
+   completas de calibração (`autocura_unitv_ciclos tipo='calibracao'
+   estado='concluido'`); métricas de OCR revisadas (`autocura_unitv_ocr_metricas`).
+2. **`returnCode` real de token morto (`C`)** observado pelo monitor F2
+   (`unitv_token_diagnostico veredito='token_morto' probe_return_code=C`),
+   revisado por José como rejeição de auth genuína (não rate-limit).
+3. Teste manual supervisionado F4 (§F4.M) concluído com `sucesso`.
+4. Revisão explícita José + GPT.
+
+### F5.2 A ativação — 1 statement atômico
+
+`select public.autocura_unitv_ativar_healer('{<C>}');` — num único `UPDATE`:
+`return_codes_que_disparam := '{C}'`, `modo_observacao := false`,
+`healer_ativo := true`, `kill_switch := false`, `pausado_ate := null`.
+
+**Sem ativação parcial (garantia estrutural):** os 2 CHECKs de F1
+(`autocura_unitv_config_allowlist_obrigatoria`,
+`autocura_unitv_config_healer_fora_observacao`) fazem o `UPDATE` ou terminar num
+estado combinado válido, ou **falhar inteiro** (config inalterada). Allowlist
+vazia → a própria RPC dá `raise` antes de tocar a config.
+
+### F5.3 Kill-switch e rollback
+
+- `select public.autocura_unitv_desativar_healer('<motivo>');` → `kill_switch=true`.
+  `autocura_unitv_pode_disparar()` recusa tudo no próximo tick; workflow em curso
+  termina no timeout de 8 min; nenhum novo dispatch. Não desliga `healer_ativo`
+  (é corte, não rollback).
+- `select public.autocura_unitv_reverter_para_observacao();` → volta a F3-A
+  (`healer_ativo=false`, `modo_observacao=true`, allowlist `null`,
+  `kill_switch=false`, `pausado_ate=null`). Calibração de OCR segue; nenhum `POST`
+  de login volta a ser possível.
+
+### F5.4 Pré-validação dos guards
+
+`select public.autocura_unitv_prontidao_f5();` (read-only) → `{ pronto, itens[] }`
+com: estado de partida limpo · nenhum `disparo` automático prévio com `sucesso` ·
+janela mínima F3-A (14d/10 execuções) · teste manual F4 `sucesso` · sem falha de
+`disparo` nas últimas 24h. `pronto=false` → **não ativar**. A decisão final
+continua sendo humana.
+
+### F5.5 O que a ativação REAL cria (fora desta migration — feito na hora)
+
+1. **EF `autocura-unitv-healer-orquestrador`** — por tick: lê a última
+   `unitv_token_diagnostico`; se `token_morto` confirmado (dupla confirmação,
+   mesmo `C`, ≥ `confirmacao_gap_min`, janela 24h) **e** `C ∈
+   return_codes_que_disparam` → `autocura_unitv_expirar_orfaos()` →
+   `autocura_unitv_pode_disparar('disparo')` → `autocura_unitv_registrar_inicio(
+   'disparo', 'monitor_proativo', C)` → dispatch `autocura-unitv-token.yml`.
+   **Gateada por `pode_disparar('disparo')`** — enquanto `healer_ativo=false`
+   retorna `healer_inativo` e nada dispara (por isso não é criada agora: seria
+   código dormente sem valor até a ativação).
+2. **Cron `autocura-unitv-healer-check`** (`5,20,35,50 * * * *` — offset do `*/15`
+   do monitor) chamando essa EF, `X-Internal-Token` próprio do Vault.
+
+Até a ativação, o único caminho para um ciclo `disparo` é o `INSERT` manual de
+§F4.M.
 
 ---
 

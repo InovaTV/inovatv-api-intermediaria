@@ -1,13 +1,153 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
-> **Atualizado: 2026-08-29 (fim do dia) — Etapa 2 (Renovação UniTV)
+> **Atualizado: 2026-08-30 (tarde) — Autocura F4 (código+testes
+> concluídos, NADA deployado, 1º login real PARADO para revisão) + F5
+> (mecanismo de ativação preparado, não aplicado) + reconciliação da
+> Renovação (read-only, nenhuma correção necessária). Ver a SESSÃO
+> 2026-08-30 logo abaixo.** Antes disso: Etapa 2 (Renovação UniTV)
 > implementada e implantada; UniTV validado em produção (Sandbox);
 > lote misto Sigma+UniTV com a execução conjunta comprovada e a falha
-> do ChannelTV isolada.** Substitui integralmente a versão anterior
+> do ChannelTV isolada. Substitui integralmente a versão anterior
 > (encerramento da Etapa 1, 2026-08-28). Leia este arquivo inteiro
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-08-30 (tarde) — Autocura F4 (código+testes) + F5 (mecanismo preparado) + reconciliação da Renovação
+
+> **PARADO PARA REVISÃO antes do 1º login real supervisionado (F4.M).**
+> Nada de login/CAPTCHA/POST real foi executado. `healer_ativo=false`,
+> `modo_observacao=true`, allowlist `NULL`. Sem cron do healer. F5 não
+> ativada. Nenhum pagamento/renovação nesta rodada.
+
+### Autocura — F4 (healer real): CÓDIGO + TESTES CONCLUÍDOS, nada deployado
+
+Construída **em paralelo** à janela de observação da F3-A (F3-A segue
+rodando/coletando). Doc oficial atualizado:
+`docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md` (§3.1, §F4.M, §F5).
+
+**Ajuste obrigatório incorporado (§3.1):** **1 ÚNICO `POST` de login por
+ciclo**, sem retry de transporte. `postLogin()` é chamado 1× no núcleo,
+fora de qualquer loop; qualquer não-sucesso → `login_recusado` (terminal);
+transporte/timeout → `login_transporte` (terminal). Trava dura
+`postLoginChamado`.
+
+Arquivos novos/alterados (todos `?? ` / `M` — **não commitados quando
+este bloco foi escrito**):
+- `scripts/lib/autocura-unitv-healer.mjs` — núcleo testável (orquestração
+  CAPTCHA→gate alta→1 POST→extrai→shape `^[0-9a-f]{32}$`→`/api/account`
+  read-only→grava SÓ o Vault (`origem='autocura'`,`por='healer'`)→relê→
+  revalida→callback). Toda `failure_class`.
+- `scripts/lib/autocura-unitv-conta-readonly.mjs` — resolvedor read-only
+  de `/api/account` **próprio da autocura** (I3/§C.9 — nunca importa
+  `unitv-renovar.mjs`; nunca `/renew`).
+- `scripts/autocura-unitv-token.mjs` — runner Playwright (liga deps
+  reais). Seletores/endpoint de login marcados "CONFIRMAR NO 1º RUN".
+- `.github/workflows/autocura-unitv-token.yml` — workflow do healer.
+  `workflow_dispatch(ciclo_id)`, `concurrency: autocura-unitv`, `timeout 8min`.
+  **Sem cron.** Env: `UNITV_DEALER_LOGIN/SENHA` (só aqui),
+  `AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN`, `UNITV_DIAG_ANCHOR_SN`, etc.
+- `supabase/functions/_shared/autocura_resultado.ts` (M) — canal `healer`:
+  `registrar_fim` + 3ª validação independente (lê Vault + `/api/account`
+  read-only) + alerta com dedupe 6h. Caminho de OCR **inalterado**.
+  Exporta `outcomePermitidoNoCanal(canal, outcome)`.
+- `supabase/functions/autocura-unitv-resultado/index.ts` (M) — aceita
+  **os 2 tokens** (`AUTOCURA_UNITV_OCR_CALLBACK_TOKEN` ×
+  `AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN`), decide o canal e cruza
+  canal×outcome (token de OCR nunca fecha ciclo `disparo`).
+- `scripts/testes/autocura_ocr_nao_age/teste.mjs` (M) — os 2 arquivos
+  compartilhados saíram desta suíte (viraram OCR+healer); cobertos por
+  `autocura_healer_nao_age`.
+
+**Testes (verdes):** `autocura_healer_fluxo` (prova: nunca 2º POST em
+NENHUM cenário; token inválido/shape inválido/validação falha → NUNCA
+grava Vault; sucesso → grava + revalida; revalidação falha → crítico) ·
+`autocura_healer_resultado` (registrar_fim + 3ª validação + alertas +
+dedupe + nunca insere métricas de OCR) · `autocura_healer_nao_age`
+(varredura estática: sem `/renew`, `/pagamento/add/`, `unitv-renovar`,
+cobrança, escrita de secret; `postLogin` 1× fora de loop; grava só o
+Vault). **Suíte completa `.mjs`: 37/37.** SQL `autocura_expirar_orfaos`
+intacta.
+
+**Falta para o teste manual (F4.M):** secrets de login (ação do usuário:
+`UNITV_DEALER_LOGIN`, `UNITV_DEALER_SENHA` só GitHub Actions;
+`AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN` GitHub+Edge; `UNITV_DIAG_ANCHOR_SN`
+no GitHub = mesmo valor do Edge) + deploy da `autocura-unitv-resultado`
+estendida + commit/push do workflow. **Procedimento exato: doc §F4.M**
+(guards → `INSERT` direto do ciclo `disparo` [exceção documentada, único
+ponto do projeto que cria ciclo `disparo` sem a RPC] → `gh workflow run`
+→ o que observar → confirmar → abortar → restaurar). **Não executar sem
+autorização.**
+
+### Autocura — F5 (ativação): MECANISMO PREPARADO, não aplicado
+
+`supabase/migrations/20260830220000_autocura_unitv_ativacao.sql`
+(**NÃO aplicada**) — 4 RPCs `SECURITY DEFINER` só `service_role`:
+- `autocura_unitv_ativar_healer('{C}')` — flip **conjunto e atômico**
+  (`return_codes_que_disparam`, `modo_observacao=false`, `healer_ativo=true`,
+  `kill_switch=false`, `pausado_ate=null`) num único `UPDATE`. Os 2 CHECKs
+  de F1 tornam **ativação parcial estruturalmente impossível**. Allowlist
+  vazia → `raise` antes de tocar a config.
+- `autocura_unitv_desativar_healer('<motivo>')` — kill-switch.
+- `autocura_unitv_reverter_para_observacao()` — rollback completo a F3-A.
+- `autocura_unitv_prontidao_f5()` — checklist read-only (estado limpo ·
+  sem `disparo` automático prévio · janela F3-A 14d/10 execuções · teste
+  F4 OK · sem falha de disparo 24h).
+
+**A ativação real** (só após critérios + revisão) = `select
+autocura_unitv_ativar_healer('{C}')` **+** criar a EF
+`autocura-unitv-healer-orquestrador` + cron `autocura-unitv-healer-check`
+(desenhados na doc §F5.5 — **não criados agora** para não deixar código
+dormente). **`healer_ativo` NÃO foi virado.**
+
+### Renovação Automática — reconciliação (read-only, sem pagamento/renovação)
+
+**Frente SEPARADA da autocura.** Estado deployado × `main` (`git log` +
+`supabase functions list`, 2026-08-30):
+
+| Função | prod agora | NEXT_SESSION dizia | leitura |
+|---|---|---|---|
+| `orchestrator` | v61 | v57 | +4 deploys — commits `5b6e991`/`aa9895d`/`3b0e01d` já em prod |
+| `openpix-webhook` | v15 | v12 (❌ sem `7f6cdc0`) | +3 deploys — `7f6cdc0` (msg intermediária) **provavelmente** já em prod; **confirmar por redeploy idempotente de `main` no go-live** |
+| `renovacao-sigma-contexto` | v12 | v9 (=`3b0e01d`) | Iteração 1 (auth Sigma) em prod |
+| `renovacao-sigma-resultado` | v15 | v12 | idem |
+| `renovacao-sigma-watchdog` | v15 | v10 | Camadas 1/3 em prod, cron `*/5` |
+| `renovacao-unitv-conta` | v7 | v5 | UX UniTV (`aa9895d`) em prod |
+
+**`main` HEAD = `ea5f64f`** (F3-A autocura). Working tree tem só os
+arquivos da autocura (acima) + 3 dirs órfãos **não meus, não commitados**
+(`scripts/.interactive-test-harness/`, `scripts/supabase/.temp/`,
+`supabase/functions/poc-sigma-renovacao-real/`) — deixados como estão.
+
+**Causa do "último erro" (lote misto Sigma+UniTV, 2026-08-29, §4.3/§4.5):**
+`ChannelTV` → `resultado_ambiguo` (`pacote_vazio`). **Não é bug de
+código** — o Rocket conecta no painel Sigma novo (`channeltvbr.store`)
+mas **não autentica** (`{"message":"Unauthenticated."}`) com as
+credenciais do servidor "ChannelTV" cadastradas no Rocket. É **config do
+Rocket (ação do José)**. A **Iteração 1** (`3b0e01d`, em prod) já trata:
+`Unauthenticated` → `unavailable` (nunca `pacote_vazio` falso) → retry só
+de leitura → transferência humana; clique de renovação ≤1×. O guard
+`pacote_vazio → resultado_ambiguo` está **correto**.
+
+**PIX `d5241cc0`** (§0, já concluído em sessão anterior): pago no Woovi
+Sandbox, mas chegou `OPENPIX:TRANSACTION_RECEIVED`, não `CHARGE_COMPLETED`.
+Terminal (`renovacao_falhou`, limpeza manual). Camada 1 (`e3bee32`, em
+prod) agora **loga** eventos ignorados; Camada 3 (watchdog `*/5`)
+reconcilia webhook atrasado dentro da janela de 2h. Caso perdido = classe
+(ii), aceito.
+
+**Correção necessária nesta rodada: NENHUMA.** As correções (Iteração 1,
+Camada 1/3, UX UniTV) já estão commitadas e aparentemente deployadas.
+
+**Novo teste controlado — preparado, SEM pagamento (a rodar quando
+autorizado):**
+1. `for f in orchestrator openpix-webhook renovacao-sigma-{contexto,resultado,watchdog,cliente} renovacao-unitv-conta renovacao-confirmar confirmacao-renovacao renovacao-rocket-vencimento; do npx supabase functions deploy $f --no-verify-jwt; done` — redeploy **idempotente** de `main` HEAD; a CLI reporta se o bundle mudou → reconcilia deployado × git de vez, confirma `7f6cdc0`.
+2. `for d in scripts/testes/*/; do npx tsx "${d}teste.mjs"; done` — 23+ suítes de renovação verdes.
+3. Confirmar cron `renovacao-sigma-watchdog` `*/5` ativo (`select * from cron.job`).
+4. José: reautenticar o servidor "ChannelTV" no Rocket (domínio `channeltvbr.store`) — reteste do ChannelTV só depois disso.
+5. **Go-live real (gate próprio, NÃO nesta rodada):** OpenPix Sandbox→produção (`_shared/openpix_client.ts` tem `SANDBOX_BASE_URL` **hardcoded** → env-driven; conta Woovi produção; `OPENPIX_APPID`/`OPENPIX_WEBHOOK_PUBLIC_KEY` de produção; registrar webhook no dashboard prod) **+** questão do número (teste `17996286135` × oficial `17996242415` — migração do oficial é gate separado, não autorizada). 1 PIX real (José paga) só após isso.
 
 ---
 

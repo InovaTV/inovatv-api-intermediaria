@@ -1,0 +1,57 @@
+# F4 da autocura do UNITV_DEALER_TOKEN (2026-08-30) -- WORKFLOW DO HEALER.
+#
+# Disparado SO' por workflow_dispatch, com um ciclo_id tipo='disparo' ja
+# registrado no Supabase. Em F4 o disparo e' MANUAL SUPERVISIONADO
+# (doc secao F4.M) -- nao ha cron do healer e healer_ativo=false impede
+# qualquer disparo automatico. O orquestrador automatico (EF + cron) e'
+# F5, criado so' na ativacao.
+#
+# concurrency: autocura-unitv -> NUNCA roda junto com o workflow de OCR.
+#
+# ATENCAO: este workflow TEM UNITV_DEALER_LOGIN / UNITV_DEALER_SENHA no
+# env (diferente do de OCR). Os valores vem so' de GitHub Secrets, nunca
+# sao ecoados/logados pelo runner (I6).
+name: Autocura UNITV - Healer (token do painel de revenda)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ciclo_id:
+        description: "UUID de um ciclo tipo='disparo' ja registrado no Supabase"
+        required: true
+        type: string
+
+concurrency:
+  group: autocura-unitv
+  cancel-in-progress: false
+
+jobs:
+  healer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencias
+        run: npm install playwright@1.47.0 pngjs@7.0.0
+
+      - name: Instalar Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Healer do dealer token (1 unico POST de login)
+        env:
+          CICLO_ID: ${{ github.event.inputs.ciclo_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN: ${{ secrets.AUTOCURA_UNITV_HEALER_CALLBACK_TOKEN }}
+          UNITV_DEALER_LOGIN: ${{ secrets.UNITV_DEALER_LOGIN }}
+          UNITV_DEALER_SENHA: ${{ secrets.UNITV_DEALER_SENHA }}
+          UNITV_DEALER_NAME: ${{ secrets.UNITV_DEALER_NAME }}
+          UNITV_DIAG_ANCHOR_SN: ${{ secrets.UNITV_DIAG_ANCHOR_SN }}
+        run: node scripts/autocura-unitv-token.mjs

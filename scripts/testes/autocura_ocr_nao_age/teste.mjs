@@ -1,15 +1,21 @@
 // F3-A -- varredura ESTATICA. Trava, por leitura do codigo-fonte, que
-// os componentes de F3-A SO' observam/medem -- nunca logam, nunca agem.
+// os componentes SO'-OCR de F3-A observam/medem -- nunca logam, nunca agem.
 //
-// Arquivos F3-A:
+// Arquivos F3-A (so'-OCR):
 //   scripts/lib/unitv-captcha-ocr.mjs
 //   scripts/autocura-unitv-ocr.mjs
 //   .github/workflows/autocura-unitv-ocr.yml
 //   supabase/functions/_shared/autocura_ocr_dispatch.ts
 //   supabase/functions/_shared/autocura_ocr_agendador.ts
 //   supabase/functions/autocura-unitv-ocr-agendador/index.ts
-//   supabase/functions/_shared/autocura_resultado.ts
-//   supabase/functions/autocura-unitv-resultado/index.ts
+//
+// NOTA (F4, 2026-08-30): _shared/autocura_resultado.ts e
+// autocura-unitv-resultado/index.ts DEIXARAM esta suite -- passaram a
+// ser COMPARTILHADOS OCR+healer (canal='healer' referencia 'disparo',
+// 'healer', unitv_dealer_token_ler legitimamente). Agora sao cobertos
+// por scripts/testes/autocura_healer_nao_age/ com regras healer-aware
+// (continua proibido /renew, /pagamento/add/, unitv-renovar, cobranca,
+// escrita de secret).
 //
 // Rodar: npx tsx scripts/testes/autocura_ocr_nao_age/teste.mjs
 
@@ -25,8 +31,6 @@ const ARQ_CODIGO = [
   "supabase/functions/_shared/autocura_ocr_dispatch.ts",
   "supabase/functions/_shared/autocura_ocr_agendador.ts",
   "supabase/functions/autocura-unitv-ocr-agendador/index.ts",
-  "supabase/functions/_shared/autocura_resultado.ts",
-  "supabase/functions/autocura-unitv-resultado/index.ts",
 ];
 
 // remove comentarios (os cabecalhos descrevem as proibicoes)
@@ -74,9 +78,10 @@ exigido(/node scripts\/autocura-unitv-ocr\.mjs/, yaml, "workflow roda o runner d
 // ---- confirmacoes positivas ----
 exigido(/security\/get-info|form_item_validateCode/, codigo, "runner busca o CAPTCHA (endpoint pre-auth / <img>)");
 exigido(/AUTOCURA_UNITV_OCR_AGENDADOR_TOKEN/, codigo, "a EF agendadora valida X-Internal-Token");
-exigido(/AUTOCURA_UNITV_OCR_CALLBACK_TOKEN/, codigo, "a EF de callback valida X-Internal-Token");
+exigido(/AUTOCURA_UNITV_OCR_CALLBACK_TOKEN/, codigo, "o runner de OCR reporta com AUTOCURA_UNITV_OCR_CALLBACK_TOKEN");
 exigido(/autocura_unitv_expirar_orfaos/, codigo, "o agendador chama expirar_orfaos");
-exigido(/autocura_unitv_ocr_metricas/, codigo, "o callback grava em autocura_unitv_ocr_metricas");
+// (o callback compartilhado _shared/autocura_resultado.ts e autocura-unitv-resultado/index.ts
+//  agora sao cobertos por autocura_healer_nao_age -- ver NOTA no cabecalho)
 
 console.log(falhas === 0 ? "\nTODOS OS TESTES OK" : `\n${falhas} FALHA(S)`);
 process.exit(falhas === 0 ? 0 : 1);
