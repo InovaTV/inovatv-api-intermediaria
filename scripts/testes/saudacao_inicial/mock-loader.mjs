@@ -12,13 +12,13 @@ const OUTRO = new URL("../orchestrator_multiplos_acessos/", import.meta.url);
 const LOCAIS = {
   "_shared/conversas_estado.ts": "fake_conversas_estado.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
+  "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
 };
 
 const HERDADOS = {
   "_shared/rocket_intermediaria.ts": "fake_rocket_intermediaria.mjs",
   "_shared/conhecimento.ts": "fake_conhecimento.mjs",
   "_shared/gemini_client.ts": "fake_gemini_client.mjs",
-  "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
   "_shared/rocket_valor_cliente.ts": "fake_rocket_valor_cliente.mjs",
   "_shared/tokens_renovacao.ts": "fake_tokens_renovacao.mjs",
   "_shared/renovacoes_lote.ts": "fake_renovacoes_lote.mjs",

@@ -231,11 +231,18 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
   // alimenta o badge de estado (c.estado) -- nenhuma logica nova,
   // nenhuma query nova, uma unica fonte de verdade.
   const conversasFiltradas = useMemo(() => {
-    if (filtro === "nao_lidas") return conversas.filter(temNaoLida);
+    // Oculta conversas vazias: linha de conversas_estado preservada no
+    // banco por FK da Renovacao Automatica (tokens_renovacao /
+    // cobrancas_pix / renovacoes_lote), mas sem nenhuma mensagem. So'
+    // apresentacao -- a linha continua intocada no banco.
+    const naoVazias = conversas.filter(
+      (c) => c.ultima_mensagem_cliente_em !== null || c.ultima_mensagem_texto !== null,
+    );
+    if (filtro === "nao_lidas") return naoVazias.filter(temNaoLida);
     if (filtro === "aguardando") {
-      return conversas.filter((c) => c.estado === "aguardando_humano");
+      return naoVazias.filter((c) => c.estado === "aguardando_humano");
     }
-    return conversas;
+    return naoVazias;
   }, [conversas, filtro]);
 
   useEffect(() => {

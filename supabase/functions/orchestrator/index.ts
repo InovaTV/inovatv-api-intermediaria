@@ -874,32 +874,58 @@ Deno.serve(async (req: Request) => {
   }).catch(() => {});
 
   // Saudacao inicial do novo atendimento (decisao de produto,
-  // 2026-08-31, aprovada texto por texto pelo usuario). Enviada UMA
-  // unica vez, so' no PRIMEIRO contato de uma conversa -- criterio:
-  // nenhuma mensagem ainda registrada em mensagens_conversa para este
-  // conversation_id (a mensagem do cliente e a resposta da IA so' sao
-  // gravadas mais adiante, juntas -- entao count === 0 aqui <=> e' a
-  // primeira mensagem ja' processada nesta conversa). Cliente conhecido
-  // (>= 1 mensagem, inclusive pos-atendimento humano) nunca recebe de
-  // novo.
+  // 2026-08-31; ajuste pos-teste real aprovado 2026-08-31).
+  //
+  // PRIMEIRO CONTATO de uma conversa == nenhuma mensagem ainda em
+  // mensagens_conversa para este conversation_id
+  // (contarMensagensDaConversa === 0). Nesse caso, esta requisicao faz
+  // SO' a saudacao e ENCERRA (return) -- NAO chama Gemini, NAO envia
+  // uma segunda mensagem do sistema na mesma requisicao. A proxima
+  // mensagem do cliente ja tera count > 0, este bloco nao roda de novo,
+  // e o fluxo normal do Gemini assume -- a gravacao do cliente pela
+  // Cadeia 1 do fluxo normal nunca duplica, porque naquela requisicao
+  // este bloco esta desligado.
+  //
+  // Ordem de persistencia FIXA: a mensagem inbound do cliente ("ola")
+  // e' gravada ANTES da saudacao -- o Painel mostra
+  // cliente -> Assistente Virtual, nunca o inverso.
   //
   // Determinística: texto fixo unico em MENSAGEM_SAUDACAO_INICIAL
   // (_shared/mensagens_fixas.ts), nunca gerado pelo Gemini -- o
-  // SYSTEM_PROMPT congelado nao e' tocado. ADITIVA: nao substitui a
-  // resposta normal -- o fluxo /match -> Gemini -> validador -> envio
-  // segue identico logo abaixo, respondendo a mensagem atual do
-  // cliente. Best-effort: qualquer falha (contagem ou envio) nunca
-  // bloqueia nem altera o atendimento. Nao roda em aguardando_humano
-  // (Passo 0 ja' retornou) nem em sessao expirada (Passo 0-B ja'
-  // retornou).
-  try {
-    const jaHouveMensagem =
-      (await contarMensagensDaConversa(conversa.conversation_id)) > 0;
-    if (!jaHouveMensagem) {
+  // SYSTEM_PROMPT congelado nao e' tocado. A saudacao so' e' gravada no
+  // historico se o envio teve sucesso (mesma disciplina dos demais
+  // envios do Orquestrador). Best-effort nas gravacoes.
+  //
+  // Nao roda em aguardando_humano (Passo 0 ja' retornou) nem em sessao
+  // expirada (Passo 0-B ja' retornou). Falha ao contar -> NAO trata
+  // como primeiro contato, segue o fluxo normal (comportamento anterior
+  // a esta feature). contarMensagensDaConversa nao e' atomico: duas
+  // mensagens do cliente quase simultaneas no primeiro contato poderiam
+  // gerar duas saudacoes -- cenario raro, mesmo padrao nao-atomico ja
+  // aceito em outros pontos; nao tratado aqui (nenhuma migration/RPC
+  // nova nesta rodada).
+  {
+    let primeiroContato = false;
+    try {
+      primeiroContato =
+        (await contarMensagensDaConversa(conversa.conversation_id)) === 0;
+    } catch {
+      primeiroContato = false;
+    }
+
+    if (primeiroContato) {
+      // 1) mensagem inbound do cliente PRIMEIRO
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null).catch(
+        () => {},
+      );
+
+      // 2) envia a saudacao fixa (nunca lanca -- retorna "unavailable" em falha)
       const envioSaudacao = await enviarMensagemWhatsApp(
         telefone,
         MENSAGEM_SAUDACAO_INICIAL,
       );
+
+      // 3) grava a saudacao SO' se o envio teve sucesso
       if (envioSaudacao.outcome === "success") {
         await inserirMensagem(
           conversa.conversation_id,
@@ -908,9 +934,14 @@ Deno.serve(async (req: Request) => {
           null,
         ).catch(() => {});
       }
+
+      // 4) encerra esta execucao -- Gemini nunca e' chamado nesta requisicao
+      return jsonResponse({
+        outcome: "saudacao_inicial",
+        conversation_id: conversa.conversation_id,
+        envio: { enviado: envioSaudacao.outcome === "success" },
+      });
     }
-  } catch {
-    // best-effort -- a saudacao inicial nunca bloqueia o atendimento
   }
 
   // estado === 'normal': encadeia /match, /status, contexto minimo,

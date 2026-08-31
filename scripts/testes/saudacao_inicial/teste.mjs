@@ -1,11 +1,22 @@
 // Testes locais da SAUDACAO INICIAL do novo atendimento (decisao de
-// produto 2026-08-31). Roda o handler REAL de
-// supabase/functions/orchestrator/index.ts, com _shared/contexto.ts,
-// _shared/validador.ts, _shared/mensagens_fixas.ts e _shared/telefone.ts
-// tambem REAIS. So' as deps externas (banco, WhatsApp, Gemini, Rocket)
-// sao fakes (mock-loader.mjs). conversas_estado e mensagens_atendimento
-// sao fakes LOCAIS -- a suite precisa controlar estado da conversa e
-// contagem de mensagens (o criterio de "primeiro contato").
+// produto 2026-08-31; ajuste pos-teste real aprovado 2026-08-31).
+//
+// Comportamento validado:
+//  - PRIMEIRO CONTATO (contarMensagensDaConversa === 0): a requisicao
+//    grava a mensagem do cliente PRIMEIRO, envia SO' a MENSAGEM_SAUDACAO_
+//    INICIAL, grava a saudacao no historico so' se o envio teve sucesso,
+//    e ENCERRA (return "saudacao_inicial") -- Gemini nunca e' chamado,
+//    nenhuma 2a mensagem do sistema e' enviada.
+//  - Ordem no historico: cliente -> Assistente Virtual (nunca o inverso).
+//  - Mensagens seguintes (count > 0): fluxo normal do Gemini assume; a
+//    saudacao nao repete; a mensagem do cliente nao e' gravada em
+//    duplicidade.
+//  - Cliente conhecido / transferencia / renovacao: inalterados.
+//
+// Roda o handler REAL de supabase/functions/orchestrator/index.ts, com
+// _shared/contexto.ts, _shared/validador.ts, _shared/mensagens_fixas.ts
+// e _shared/telefone.ts REAIS. Deps externas (banco, WhatsApp, Gemini,
+// Rocket) sao fakes (mock-loader.mjs).
 //
 // Como rodar: npx tsx scripts/testes/saudacao_inicial/teste.mjs
 
@@ -16,14 +27,17 @@ register("./mock-loader.mjs", import.meta.url);
 const { resetarConversa, acionamentosRegistrados } = await import("./fake_conversas_estado.mjs");
 const { resetarMensagens, mensagensRegistradas, semearMensagensPrevias } =
   await import("./fake_mensagens_atendimento.mjs");
+const {
+  resetarWhatsapp,
+  getMensagensEnviadas,
+  getMensagensInterativasEnviadas,
+  forcarFalhaEnvioTexto,
+} = await import("./fake_whatsapp_client.mjs");
 const { configurarMatch, configurarStatus, resetarRocketIntermediaria } = await import(
   "../orchestrator_multiplos_acessos/fake_rocket_intermediaria.mjs"
 );
 const { definirProximaRespostaGemini, resetarGemini } = await import(
   "../orchestrator_multiplos_acessos/fake_gemini_client.mjs"
-);
-const { resetarWhatsapp, getMensagensEnviadas, getMensagensInterativasEnviadas } = await import(
-  "../orchestrator_multiplos_acessos/fake_whatsapp_client.mjs"
 );
 const { resetarValorCliente } = await import(
   "../orchestrator_multiplos_acessos/fake_rocket_valor_cliente.mjs"
@@ -92,94 +106,136 @@ const TELEFONE = "5511999999999";
 const AGORA_ISO = new Date().toISOString();
 
 // ---------------------------------------------------------------------
-// Teste 1 -- PRIMEIRO CONTATO recebe a saudacao (uma vez, e ADITIVA:
-// nao substitui a resposta normal)
+// Teste 1 -- PRIMEIRO CONTATO: so' a saudacao, ordem cliente->IA, sem Gemini
 // ---------------------------------------------------------------------
 async function teste1() {
   resetarTudo();
   configurarMatch({ outcome: "no_match", candidates: [] });
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Olá! Estou aqui para ajudar." },
+    data: { tipo: "responder", texto: "ESTA RESPOSTA DO GEMINI NAO DEVE SAIR" },
   });
 
-  const resp = await handler(req({ telefone: TELEFONE, conteudo: "oi" }));
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "ola" }));
   ok(resp.status === 200, "Teste 1: HTTP 200");
+  const body = await resp.json();
+  ok(body?.outcome === "saudacao_inicial", "Teste 1: outcome 'saudacao_inicial'");
+  ok(body?.envio?.enviado === true, "Teste 1: envio.enviado === true");
 
   const enviadas = getMensagensEnviadas();
-  ok(enviadas.length === 2, "Teste 1: exatamente 2 mensagens enviadas (saudacao + resposta normal)");
+  ok(enviadas.length === 1, "Teste 1: exatamente 1 mensagem enviada (so' a saudacao)");
+  ok(enviadas[0]?.texto === MENSAGEM_SAUDACAO_INICIAL, "Teste 1: a mensagem enviada e' a saudacao (texto exato)");
   ok(
-    enviadas[0]?.texto === MENSAGEM_SAUDACAO_INICIAL,
-    "Teste 1: a 1a mensagem enviada e' a saudacao inicial (texto exato)",
+    !enviadas.some((m) => m.texto === "ESTA RESPOSTA DO GEMINI NAO DEVE SAIR"),
+    "Teste 1: o Gemini NAO e' consultado/enviado no primeiro contato",
+  );
+
+  const registradas = mensagensRegistradas();
+  ok(registradas.length === 2, "Teste 1: exatamente 2 linhas no historico (cliente + saudacao)");
+  ok(
+    registradas[0]?.origem === "cliente" && registradas[0]?.texto === "ola",
+    "Teste 1: 1a linha do historico = mensagem do CLIENTE ('ola')",
   );
   ok(
-    enviadas[0]?.telefone === TELEFONE,
-    "Teste 1: saudacao enviada para o telefone da conversa",
+    registradas[1]?.origem === "ia" && registradas[1]?.texto === MENSAGEM_SAUDACAO_INICIAL,
+    "Teste 1: 2a linha do historico = saudacao (cliente ANTES da saudacao)",
   );
-  ok(
-    enviadas[1]?.texto === "Olá! Estou aqui para ajudar.",
-    "Teste 1: a resposta normal do atendimento continua sendo enviada (aditiva, nao substituida)",
-  );
-  ok(
-    mensagensRegistradas().some(
-      (m) => m.origem === "ia" && m.texto === MENSAGEM_SAUDACAO_INICIAL,
-    ),
-    "Teste 1: saudacao registrada no historico (origem 'ia')",
-  );
-  ok(
-    acionamentosRegistrados().length === 0,
-    "Teste 1: nenhuma transferencia acionada",
-  );
+  ok(acionamentosRegistrados().length === 0, "Teste 1: nenhuma transferencia acionada");
 }
 
 // ---------------------------------------------------------------------
-// Teste 2 -- SEGUNDA mensagem da MESMA conversa NAO repete a saudacao
+// Teste 2 -- PRIMEIRO CONTATO com FALHA no envio da saudacao:
+// cliente gravado, saudacao NAO gravada, ainda assim encerra sem Gemini
 // ---------------------------------------------------------------------
 async function teste2() {
   resetarTudo();
+  forcarFalhaEnvioTexto();
   configurarMatch({ outcome: "no_match", candidates: [] });
-
-  // 1a mensagem -- gera a saudacao + resposta 1 (deixa o historico com
-  // linhas em mensagens_conversa)
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Resposta 1." },
+    data: { tipo: "responder", texto: "GEMINI NAO DEVE SER CHAMADO" },
   });
-  await handler(req({ telefone: TELEFONE, conteudo: "oi" }));
-  ok(
-    getMensagensEnviadas().some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
-    "Teste 2 (pre-condicao): 1a mensagem gerou a saudacao",
-  );
 
-  // 2a mensagem da mesma conversa -- limpa so' o registro de envios,
-  // mantem o historico de mensagens_conversa
-  resetarWhatsapp();
-  definirProximaRespostaGemini({
-    outcome: "success",
-    data: { tipo: "responder", texto: "Resposta 2." },
-  });
-  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quanto custa o plano?" }));
-
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "ola" }));
   ok(resp.status === 200, "Teste 2: HTTP 200");
-  const enviadas = getMensagensEnviadas();
+  const body = await resp.json();
+  ok(body?.outcome === "saudacao_inicial", "Teste 2: outcome 'saudacao_inicial' mesmo com envio falho");
+  ok(body?.envio?.enviado === false, "Teste 2: envio.enviado === false");
+
+  const registradas = mensagensRegistradas();
+  ok(registradas.length === 1, "Teste 2: apenas 1 linha no historico");
   ok(
-    !enviadas.some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
-    "Teste 2: a saudacao NAO e' reenviada na 2a mensagem",
+    registradas[0]?.origem === "cliente" && registradas[0]?.texto === "ola",
+    "Teste 2: a linha gravada e' a mensagem do CLIENTE",
   );
   ok(
-    enviadas.length === 1 && enviadas[0]?.texto === "Resposta 2.",
-    "Teste 2: a 2a mensagem recebe so' a resposta normal do atendimento",
+    !registradas.some((m) => m.origem === "ia" && m.texto === MENSAGEM_SAUDACAO_INICIAL),
+    "Teste 2: a saudacao NAO e' gravada quando o envio falha",
+  );
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto === "GEMINI NAO DEVE SER CHAMADO"),
+    "Teste 2: Gemini nao e' chamado nem quando a saudacao falha",
   );
 }
 
 // ---------------------------------------------------------------------
-// Teste 3 -- CLIENTE JA CONHECIDO (conversa com historico): comportamento
-// normal, sem saudacao
+// Teste 3 -- SEGUNDA mensagem (count > 0): fluxo normal do Gemini assume,
+// saudacao nao repete, mensagem do cliente nao duplica
 // ---------------------------------------------------------------------
 async function teste3() {
   resetarTudo();
+  configurarMatch({ outcome: "no_match", candidates: [] });
+
+  // 1a mensagem -> saudacao (historico: cliente 'ola', ia saudacao)
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "responder", texto: "resposta 1" },
+  });
+  await handler(req({ telefone: TELEFONE, conteudo: "ola" }));
+
+  // 2a mensagem da mesma conversa
+  resetarWhatsapp();
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "responder", texto: "Resposta normal do Gemini." },
+  });
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quanto custa o plano?" }));
+
+  ok(resp.status === 200, "Teste 3: HTTP 200");
+  const body = await resp.json();
+  ok(body?.outcome !== "saudacao_inicial", "Teste 3: 2a mensagem NAO e' 'saudacao_inicial'");
+
+  const enviadas = getMensagensEnviadas();
+  ok(
+    !enviadas.some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
+    "Teste 3: a saudacao NAO e' reenviada",
+  );
+  ok(
+    enviadas.length === 1 && enviadas[0]?.texto === "Resposta normal do Gemini.",
+    "Teste 3: a 2a mensagem recebe a resposta normal do Gemini",
+  );
+
+  const registradas = mensagensRegistradas();
+  const qtdOla = registradas.filter((m) => m.origem === "cliente" && m.texto === "ola").length;
+  ok(qtdOla === 1, "Teste 3: a mensagem inicial 'ola' aparece no historico EXATAMENTE uma vez (sem duplicidade)");
+  ok(
+    registradas.some((m) => m.origem === "cliente" && m.texto === "quanto custa o plano?"),
+    "Teste 3: a 2a mensagem do cliente foi gravada",
+  );
+  ok(
+    registradas.some((m) => m.origem === "ia" && m.texto === "Resposta normal do Gemini."),
+    "Teste 3: a resposta do Gemini foi gravada",
+  );
+}
+
+// ---------------------------------------------------------------------
+// Teste 4 -- CLIENTE CONHECIDO (conversa com historico): sem saudacao,
+// comportamento normal
+// ---------------------------------------------------------------------
+async function teste4() {
+  resetarTudo();
   resetarConversa({ sessao_atividade_em: AGORA_ISO });
-  semearMensagensPrevias("conv-teste-1", 6); // conversa que ja trocou 6 mensagens
+  semearMensagensPrevias("conv-teste-1", 6);
 
   configurarMatch({
     outcome: "single_match",
@@ -202,31 +258,32 @@ async function teste3() {
   });
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Localizei seu acesso NewOne. Posso ajudar com mais algo?" },
+    data: { tipo: "responder", texto: "Localizei seu acesso. Posso ajudar com mais algo?" },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "me ajuda?" }));
-  ok(resp.status === 200, "Teste 3: HTTP 200");
+  ok(resp.status === 200, "Teste 4: HTTP 200");
 
   const enviadas = getMensagensEnviadas();
   ok(
     !enviadas.some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
-    "Teste 3: cliente conhecido NAO recebe a saudacao inicial",
+    "Teste 4: cliente conhecido NAO recebe a saudacao",
   );
   ok(
     enviadas.length === 1 &&
-      enviadas[0]?.texto === "Localizei seu acesso NewOne. Posso ajudar com mais algo?",
-    "Teste 3: cliente conhecido recebe so' a resposta normal (comportamento inalterado)",
+      enviadas[0]?.texto === "Localizei seu acesso. Posso ajudar com mais algo?",
+    "Teste 4: cliente conhecido recebe so' a resposta normal",
   );
-  ok(acionamentosRegistrados().length === 0, "Teste 3: nenhuma transferencia acionada");
+  ok(acionamentosRegistrados().length === 0, "Teste 4: nenhuma transferencia acionada");
 }
 
 // ---------------------------------------------------------------------
-// Teste 4 -- FLUXO DE TRANSFERENCIA nao e' afetado (e a saudacao no
-// primeiro contato coexiste com a transferencia)
+// Teste 5 -- TRANSFERENCIA nao e' afetada (conversa com historico)
 // ---------------------------------------------------------------------
-async function teste4() {
+async function teste5() {
   resetarTudo();
+  resetarConversa({ sessao_atividade_em: AGORA_ISO });
+  semearMensagensPrevias("conv-teste-1", 3);
   configurarMatch({ outcome: "no_match", candidates: [] });
   definirProximaRespostaGemini({
     outcome: "success",
@@ -234,29 +291,28 @@ async function teste4() {
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero falar com um humano" }));
-  ok(resp.status === 200, "Teste 4: HTTP 200");
+  ok(resp.status === 200, "Teste 5: HTTP 200");
 
   const enviadas = getMensagensEnviadas();
   ok(
-    enviadas.some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
-    "Teste 4: saudacao enviada (primeiro contato)",
+    !enviadas.some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
+    "Teste 5: nenhuma saudacao (conversa ja tem historico)",
   );
   ok(
     enviadas.some((m) => m.texto === MENSAGEM_TRANSFERENCIA_CLIENTE),
-    "Teste 4: mensagem fixa de transferencia continua sendo enviada",
+    "Teste 5: mensagem fixa de transferencia enviada normalmente",
   );
   ok(
     acionamentosRegistrados().length === 1 &&
       acionamentosRegistrados()[0]?.motivo === "gemini:transferir",
-    "Teste 4: transferencia humana acionada normalmente (motivo gemini:transferir)",
+    "Teste 5: transferencia humana acionada normalmente (motivo gemini:transferir)",
   );
 }
 
 // ---------------------------------------------------------------------
-// Teste 5 -- FLUXO DE RENOVACAO nao e' afetado (cliente conhecido ->
-// sem saudacao; a proposta de renovacao segue e cria o token)
+// Teste 6 -- RENOVACAO nao e' afetada (conversa com historico)
 // ---------------------------------------------------------------------
-async function teste5() {
+async function teste6() {
   resetarTudo();
   resetarConversa({ sessao_atividade_em: AGORA_ISO });
   semearMensagensPrevias("conv-teste-1", 4);
@@ -286,16 +342,13 @@ async function teste5() {
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano BLAZE" }));
-  ok(resp.status === 200, "Teste 5: HTTP 200");
+  ok(resp.status === 200, "Teste 6: HTTP 200");
   ok(
     !getMensagensEnviadas().some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL) &&
       !getMensagensInterativasEnviadas().some((m) => m.texto === MENSAGEM_SAUDACAO_INICIAL),
-    "Teste 5: cliente conhecido em fluxo de renovacao NAO recebe a saudacao",
+    "Teste 6: renovacao (conversa com historico) NAO recebe a saudacao",
   );
-  ok(
-    chamadasCriarToken() === 1,
-    "Teste 5: fluxo de renovacao segue normalmente (token de renovacao criado)",
-  );
+  ok(chamadasCriarToken() === 1, "Teste 6: fluxo de renovacao segue normalmente (token criado)");
 }
 
 async function main() {
@@ -304,6 +357,7 @@ async function main() {
   await teste3();
   await teste4();
   await teste5();
+  await teste6();
 
   console.log(falhas === 0 ? "\nTODOS OS TESTES PASSARAM" : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);
