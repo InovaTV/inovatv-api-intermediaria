@@ -1,6 +1,17 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
-> **Atualizado: 2026-08-30 (noite) — OpenPix Sandbox → PRODUÇÃO,
+> **Atualizado: 2026-08-31 — MIGRAÇÃO DO CANAL WHATSAPP PARA O NÚMERO
+> OFICIAL CONCLUÍDA. `WHATSAPP_PHONE_NUMBER_ID` → oficial
+> (`1261574110375334`); `WHATSAPP_JOSE_NUMERO` → `17981625486`; os
+> outros 3 `WHATSAPP_*` inalterados. 10 EFs de produção redeployadas só
+> para propagar o secret (sem mudança de código). Smoke reativo +
+> consulta real de vencimento + canal de alertas internos (Graph API
+> HTTP 200) — todos OK, zero efeito financeiro. Número de teste antigo
+> `17996286135` removido da Cloud API e depois bloqueado pela Meta —
+> histórico do laboratório, sem impacto, sem ação. Ver seção "SESSÃO
+> 2026-08-31 — MIGRAÇÃO DO CANAL WHATSAPP" logo abaixo. Antes disso:**
+>
+> **2026-08-30 (noite) — OpenPix Sandbox → PRODUÇÃO,
 > Blocos 1–4 CONCLUÍDOS. 2 pagamentos reais em produção: Teste 1
 > recuperado pela Camada 3 do watchdog (webhook 401 por chave pública
 > errada no Bloco 3); chave corrigida → Teste 2 pelo caminho normal do
@@ -24,6 +35,120 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-08-31 — MIGRAÇÃO DO CANAL WHATSAPP PARA O NÚMERO OFICIAL
+
+> Consolidação documental antes de troca de máquina. **Nenhum código de
+> produção alterado, nenhum teste financeiro, nenhuma mudança na Meta ou
+> no Rocket.** Só troca de 2 secrets + redeploy de propagação + testes
+> read-only + esta documentação.
+
+### Estado final do canal (lado Meta — verificado por GET read-only)
+
+- Número oficial: **+55 17 99624-2415** · `phone_number_id` =
+  **`1261574110375334`** (o de teste era `1297487746776498`).
+- WABA = **`1599304625307021`** · App = **`InovaTV IA - Teste` /
+  `1022259220848151`** — os mesmos do número de teste; nada recriado.
+- `GET /1261574110375334`: `status=CONNECTED`, `code_verification_status`/
+  `verified_name`="InovaTV", `platform_type=CLOUD_API`,
+  `quality_rating=GREEN`.
+- `GET /1599304625307021/phone_numbers`: número oficial na WABA correta,
+  `webhook_configuration.application` → `.../functions/v1/webhook`.
+- `GET /1599304625307021/subscribed_apps`: App `1022259220848151` **ainda
+  inscrito** na WABA.
+- `GET /debug_token`: token válido, escopos
+  `whatsapp_business_management` + `whatsapp_business_messaging`.
+- Meta → Configuração de produção: **Configurar webhooks / Registrar
+  número / Adicionar informações de pagamento / Enviar mensagem** —
+  todos **concluídos**. Verificação da empresa **concluída**.
+
+### Secrets — só nome + função (valores nunca neste arquivo)
+
+| Secret | Mudança |
+|---|---|
+| `WHATSAPP_PHONE_NUMBER_ID` | **trocado** → número oficial (`1261574110375334`). Único ponto de leitura no código: `_shared/whatsapp_client.ts`. |
+| `WHATSAPP_JOSE_NUMERO` | **trocado** → `17981625486` (destinatário dos alertas internos ao José). Precisou mudar: era o próprio número oficial → colisão remetente=destinatário (Graph API rejeita). `17981625486` já é ativo no WhatsApp, usado só como destinatário; **não** precisa cadastro na Meta/WABA. |
+| `WHATSAPP_ACCESS_TOKEN` | **inalterado** — System User, escopo da mesma WABA `1599304625307021`. |
+| `WHATSAPP_APP_SECRET` | **inalterado** — nível App. |
+| `WHATSAPP_VERIFY_TOKEN` | **inalterado** — handshake do webhook, nível App. |
+
+Aplicados via `supabase secrets set --env-file` (arquivo gitignored em
+`scripts/.credentials/`, `shred -u` logo após). Digests pós-troca
+conferidos == SHA-256 dos valores esperados; digests dos outros 3
+`WHATSAPP_*` + `updated_at` **inalterados**.
+
+### Redeploy de propagação — SEM mudança de código
+
+10 EFs de produção que enviam WhatsApp (leem `WHATSAPP_PHONE_NUMBER_ID`
+via `_shared/whatsapp_client.ts`, direto ou transitivo):
+`orchestrator`, `openpix-webhook`, `renovacao-confirmar`,
+`confirmacao-renovacao`, `renovacao-sigma-watchdog`,
+`renovacao-sigma-resultado`, `renovacao-unitv-conta`,
+`autocura-unitv-monitor`, `autocura-unitv-resultado`,
+`painel-atendimento-responder`. Todas `ACTIVE` / `verify_jwt=false`.
+`ezbr_sha256` **idêntico** ao anterior em 8/10; as 2 exceções
+(`renovacao-unitv-conta`, `painel-atendimento-responder`) só
+recompilaram porque a última publicação delas era anterior a
+`origin/main 8313245` — ficaram **alinhadas** a `main`, sem alteração de
+fonte (working tree limpo, `HEAD == origin/main == 8313245`).
+`webhook` **não** foi redeployada — não lê o secret (número-agnóstico,
+`phone_number_id` vem de `value.metadata` do payload).
+(Versões subiram +2 nas 10 e +1 no `webhook` que não toquei → rotação
+de chave JWT de plataforma da Supabase concomitante; benigno.)
+
+### Testes reais no número oficial — nenhum efeito financeiro
+
+1. **Smoke reativo** — "ola" do celular pessoal (`5517981625486`) → número
+   oficial. `webhook_mensagens_processadas` gravou o `message_id`;
+   conversa `43fcff07-…` (telefone `5517981625486`), `estado=normal`,
+   resposta `ia` "Olá! Sou o assistente virtual da InovaTV…" em ~0,47 s,
+   sem transferência.
+2. **Consulta real de vencimento** — cliente existente perguntou pelo
+   plano → IA listou os **2 acessos reais** (servidor/plano/vencimento/
+   telas corretos) e pediu qual consultar. Comportamento idêntico ao
+   validado nas Rodadas 3/4.
+3. **Canal de alertas internos** — EF descartável `diag-alerta-interno`
+   (deployada → 1 invocação → **deletada**; arquivo local removido)
+   enviou texto "TESTE DE ALERTA INTERNO" para `WHATSAPP_JOSE_NUMERO`
+   (`17981625486`) pelo número oficial como remetente →
+   **Graph API HTTP 200**, `contacts[0].wa_id=5517981625486`,
+   `messages[0].id` retornado, `error=null`, latência 566 ms.
+4. **Estado financeiro** — `cobrancas_pix` / `tokens_renovacao` /
+   `renovacoes_lote`: **0** linhas criadas ou alteradas nas 3 h dos
+   testes (última atividade real = Bloco 4, 20:38–20:39 UTC).
+
+### Número de teste antigo — histórico do laboratório
+
+- **`+55 17 99628-6135`** (chip descartável, `phone_number_id`
+  `1297487746776498`): **removido da Meta/Cloud API** pelo usuário e
+  devolvido ao **WhatsApp Business comum** como canal provisório de
+  atendimento até o oficial estar 100%.
+- **Fato novo:** a **Meta bloqueou posteriormente esse número de
+  teste.** Classificado como **histórico do ambiente de teste** — já
+  cumpriu a função de laboratório, **sem impacto no número oficial**,
+  **sem ação necessária**. **Não tentar reativar/recuperar.**
+
+### Autocura — reafirmação (inalterada nesta sessão)
+
+F3-A **intacta** (`autocura-unitv-monitor` `*/15` +
+`autocura-unitv-ocr-agendador` `0 3 * * *` ativos, só observação).
+**F4 e F5 congeladas:** `healer_ativo=false`, `modo_observacao=true`,
+`return_codes_que_disparam=NULL`, `kill_switch=false`, **nenhum cron de
+healer**. F4.M real interrompida com segurança em
+`captcha_sem_confianca` — **sem POST de login, Vault intocado**.
+`rc=300` = causa **indeterminada** (logout do usuário) → **não entra na
+allowlist**.
+
+### Próximo passo recomendado (canal WhatsApp)
+
+Observar o número oficial em atendimento reativo real por um período.
+**Templates business-initiated fora da janela de 24 h** podem depender
+da aprovação do `verified_name` "InovaTV" pela Meta (mesmo comportamento
+do número de teste) — validar no primeiro caso real. Migração do
+RocketZap e do número oficial no Rocket permanece **gate próprio**
+(seção "Pendências reais restantes" abaixo).
 
 ---
 
@@ -225,8 +350,11 @@ correção da chave**:
 
 ### Pendências reais restantes (renovação automática)
 
-1. **Número oficial `17996242415`** — migração para a Cloud API é gate
-   próprio, separado; os testes hoje foram todos no número de teste.
+1. **Número oficial `17996242415`** — migração do **canal WhatsApp**
+   para a Cloud API **CONCLUÍDA em 2026-08-31** (ver seção "SESSÃO
+   2026-08-31 — MIGRAÇÃO DO CANAL WHATSAPP"). O que **permanece gate
+   próprio**: migração das ~15 automações do **RocketZap** e do número
+   oficial dentro do **Rocket** (não iniciada).
 2. **Registro/notificação do pagamento UniTV no Rocket** — decisão
    anterior, tratamento posterior.
 3. **Melhorias de UX/latência** a decidir depois (ex.: latência da
