@@ -1,5 +1,15 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **⚠️ INCIDENTE ABERTO (2026-08-31) — a WABA `1599304625307021` /
+> número oficial `1261574110375334` está RESTRITA pela Meta de enviar
+> mensagens a usuários no Brasil (erro `130497`). Graph API aceita
+> (HTTP 200 + wamid), o callback de status volta `failed` com
+> `errors[].code=130497`. Confirmado em 2 envios (04:08 e 04:11 UTC).
+> NÃO é bug do nosso código — atendimento reativo e saudação inicial
+> ficam sem entrega para clientes BR até destravar na Meta (passo
+> manual). Ver seção "INCIDENTE META — 2026-08-31" logo abaixo. Antes
+> disso:**
+>
 > **Atualizado: 2026-08-31 — MIGRAÇÃO DO CANAL WHATSAPP PARA O NÚMERO
 > OFICIAL CONCLUÍDA. `WHATSAPP_PHONE_NUMBER_ID` → oficial
 > (`1261574110375334`); `WHATSAPP_JOSE_NUMERO` → `17981625486`; os
@@ -35,6 +45,101 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## INCIDENTE META — 2026-08-31 — WABA restrita para envio a usuários no Brasil (erro `130497`)
+
+> **Registro de incidente. Não é bug do nosso código.** Nenhuma
+> alteração de código/banco/secret/Meta/Rocket feita neste registro —
+> só documentação. Próximo passo é investigação MANUAL na Meta, fora do
+> escopo de código.
+
+### Causa (definitiva, confirmada por log da Meta)
+
+**A Business Account / WABA da Meta está RESTRITA de enviar mensagens a
+usuários no Brasil.** Código de erro da Graph API: **`130497` — "Business
+account is restricted from messaging users in this country."**
+
+### Evidência
+
+Dois envios distintos do número oficial `1261574110375334` →
+`5517981625486` (celular pessoal do José), com a instrumentação
+`orchestrator` v71 / `webhook` v27 ativa:
+
+| Envio (UTC) | Graph API (síncrono) | Callback de status (assíncrono, `webhook`) |
+|---|---|---|
+| **2026-08-31 04:08:25** | **HTTP 200 + `wamid`** (aceito) | `whatsapp_delivery_status` → `status=failed`, `errors[].code=130497` |
+| **2026-08-31 04:11:07** | **HTTP 200 + `wamid`** (aceito) | `whatsapp_delivery_status` → `status=failed`, `errors[].code=130497` |
+
+Consistente também com as não-entregas anteriores do mesmo número
+(2026-08-31 03:13 resposta do Gemini; 03:47 saudação fixa) — mesma
+restrição. A única mensagem que chegou de fato foi a saudação das
+**03:13**, provavelmente antes de a restrição entrar em vigor (ou
+janela de graça inicial da conta).
+
+### O que NÃO é a causa
+
+- ❌ Não é o Orquestrador, a saudação inicial, o Gemini, validador,
+  throttle nem pacing/ecosystem-health.
+- ❌ Não é código. `enviarMensagemWhatsApp` fez o que devia (a Graph
+  API respondeu 200 + wamid); o `failed 130497` só aparece no callback
+  de status posterior.
+- ❌ Não é o número/secret errado — remetente `1261574110375334` e
+  destinatário `5517981625486` corretos e inalterados desde a migração
+  de 2026-08-30.
+
+### Impacto
+
+**Nenhuma mensagem iniciada pela empresa a partir do número oficial
+`1261574110375334` é entregue a usuários no Brasil enquanto a restrição
+estiver ativa.** Isso deixa inoperante, para clientes BR:
+- o atendimento reativo real (resposta do Orquestrador/Gemini);
+- a saudação inicial de primeiro contato.
+
+O canal está **tecnicamente correto** (webhook recebe, Orquestrador
+processa, Graph API aceita) mas **sem entrega** por decisão da Meta.
+
+### Estado do código (para não reabrir por engano)
+
+- **Feature "saudação inicial"**: código correto e implantado
+  (`orchestrator` v71). Primeiro contato = grava mensagem do cliente →
+  envia só a saudação fixa (`MENSAGEM_SAUDACAO_INICIAL`) → grava a
+  saudação só se o envio teve sucesso → encerra (não chama Gemini).
+  Testes locais (`scripts/testes/saudacao_inicial/`, 6 cenários) 100%
+  verdes. **Não validável em produção enquanto a Meta bloquear a
+  entrega.**
+- **Instrumentação de observabilidade** (commit `c1f2ffd`, deployada em
+  `orchestrator` v71 + `webhook` v27): `whatsapp_send_accepted` (loga
+  wamid na aceitação da Graph API) e `whatsapp_delivery_status` (loga
+  cada callback de status; se `failed`, o `errors[].code/title/details`).
+  Foi essa instrumentação que capturou o `130497`. Mantida.
+- **Painel de Atendimento**: correção de UI implantada no Vercel
+  (oculta conversas sem mensagens — `ultima_mensagem_*` nulos); commit
+  `8d5e27b`. Duas linhas de `conversas_estado` preservadas por FK da
+  Renovação Automática (`43fcff07`/`5517981625486` e
+  `5f96d721`/`5517981563170`) continuam no banco, só não aparecem
+  vazias.
+- **Defeito pré-existente registrado, NÃO corrigido** (fora do escopo
+  desta rodada, exige decisão): no caminho `responder` puro do
+  Orquestrador, a Cadeia 1 grava `cliente`+`ia` em `mensagens_conversa`
+  **incondicionalmente**, antes/independente do resultado do envio —
+  então "aparece no Painel" ≠ "aceito pela Graph API" nesse caminho.
+  Menor correção proposta: mover esses `inserirMensagem` para dentro do
+  `if (envioResultado.enviado)` da Cadeia 2 (mesmo padrão da
+  transferência/renovação/saudação). Só corrige o registro enganoso,
+  não a entrega.
+- Conversa `43fcff07` (`5517981625486`) tem 6 mensagens de teste
+  (03:47 + 04:08 + 04:11). Não limpo aqui.
+
+### Próximo passo (MANUAL, na Meta — não é trabalho de código)
+
+Investigar em **WhatsApp Manager / Business Manager / suporte da Meta** a
+**origem e o motivo da restrição `130497`** da WABA `1599304625307021` /
+número `1261574110375334`: verificação de empresa, política de conteúdo,
+qualidade/denúncias, país de operação declarado, `verified_name`
+("InovaTV" ainda "Em análise"), limites da conta. Sem esse
+destravamento, nenhum teste real de entrega faz sentido.
 
 ---
 
