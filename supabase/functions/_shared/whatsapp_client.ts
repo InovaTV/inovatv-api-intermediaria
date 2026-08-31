@@ -69,12 +69,31 @@ export async function enviarMensagemWhatsApp(
   paraNumero: string,
   texto: string,
 ): Promise<EnvioWhatsAppResultado> {
-  return enviarPayloadWhatsApp({
+  const resultado = await enviarPayloadWhatsApp({
     messaging_product: "whatsapp",
     to: paraNumero,
     type: "text",
     text: { body: texto },
   });
+
+  // Observabilidade minima (diagnostico 2026-08-31) -- loga apenas a
+  // ACEITACAO da Graph API (HTTP 2xx + messages[0].id). NAO muda o
+  // comportamento nem a saudacao. Nunca loga corpo da mensagem, token
+  // ou secret.
+  if (resultado.outcome === "success") {
+    console.log(
+      "[whatsapp_client] whatsapp_send_accepted",
+      JSON.stringify({
+        evento: "whatsapp_send_accepted",
+        wamid: resultado.messageId,
+        destinatario: paraNumero,
+        timestamp: new Date().toISOString(),
+        outcome: "success",
+      }),
+    );
+  }
+
+  return resultado;
 }
 
 // Botoes interativos nativos da Cloud API. A decisao de negocio (quando

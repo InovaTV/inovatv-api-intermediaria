@@ -177,8 +177,39 @@ async function processarValue(value: MetaValue): Promise<void> {
   }
 
   if (value.statuses) {
-    // Atualizacao de status (enviada/entregue/lida/falhou) -- reconhecida,
-    // descartada, sem log (nao e' sinal de problema).
+    // Observabilidade minima (diagnostico 2026-08-31) -- loga um evento
+    // estruturado POR status recebido (enviada/entregue/lida/falhou).
+    // DEPOIS do log, mantem EXATAMENTE o comportamento atual: reconhece
+    // e descarta -- nao persiste, nao cria tabela, nao muda fluxo.
+    for (const s of value.statuses) {
+      const st = s as {
+        id?: string;
+        recipient_id?: string;
+        status?: string;
+        timestamp?: string;
+        errors?: {
+          code?: unknown;
+          title?: unknown;
+          details?: unknown;
+          error_data?: { details?: unknown };
+        }[];
+      };
+      const log: Record<string, unknown> = {
+        evento: "whatsapp_delivery_status",
+        wamid: st.id,
+        recipient_id: st.recipient_id,
+        status: st.status,
+        timestamp: st.timestamp,
+      };
+      if (st.status === "failed" && Array.isArray(st.errors)) {
+        log.errors = st.errors.map((e) => ({
+          code: e?.code,
+          title: e?.title,
+          details: e?.error_data?.details ?? e?.details,
+        }));
+      }
+      console.log("[webhook] whatsapp_delivery_status", JSON.stringify(log));
+    }
     return;
   }
 
