@@ -33,6 +33,28 @@ export const IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO = "pt_BR";
 export const MENSAGEM_SESSAO_EXPIRADA =
   "Vi que você ficou um tempo ausente. Como nossa sessão ficou inativa por mais de 1 hora, o contexto anterior foi encerrado para começarmos novamente com segurança. Pode me dizer como posso ajudá-lo?";
 
+// Saudacao inicial do novo atendimento (decisao de produto, 2026-08-31,
+// aprovada texto por texto pelo usuario). Mensagem fixa, NUNCA gerada
+// pelo Gemini -- o SYSTEM_PROMPT congelado nao e' tocado. Enviada UMA
+// unica vez, so' no primeiro contato de uma conversa (Orquestrador:
+// nenhuma linha ainda em mensagens_conversa para o conversation_id).
+// ADITIVA: nao substitui a resposta normal do atendimento.
+//
+// TEXTO TEMPORARIO (fase de adaptacao dos clientes ao novo atendimento)
+// -- deliberadamente longo agora, sera' encurtado/substituido depois.
+// Esta constante e' o UNICO lugar do texto: reduzir/trocar = editar so'
+// aqui, sem tocar em nenhuma logica de atendimento.
+export const MENSAGEM_SAUDACAO_INICIAL =
+  "👋 Olá! Sou o Assistente Virtual da InovaTV 😊\n\n" +
+  "Este é o nosso canal oficial no WhatsApp ✅\n\n" +
+  "✨ A InovaTV mudou a forma de atendimento!\n\n" +
+  "Agora você pode resolver tudo de forma rápida e automática por aqui. Você pergunta, eu respondo — sem precisar esperar por um atendente. 😉\n\n" +
+  "📅 Quer saber quando seu plano vence? É só perguntar.\n\n" +
+  "🔄 Quer renovar seu plano? Eu também posso ajudar você a fazer sua renovação automaticamente por aqui.\n\n" +
+  "🛠️ Precisa de ajuda ou suporte? Também posso ajudar você por aqui.\n\n" +
+  "Para não incomodar você, não enviaremos mais lembretes de vencimento. 📅 É só perguntar quando quiser.\n\n" +
+  "E agora, me diga: como posso ajudar você hoje? 😊";
+
 // Valor real do plano -- parsing centralizado aqui (2026-08-23, Bloco 1
 // do fluxo de renovacao com PagBank real). O campo `valor` do Rocket
 // chega em formato variavel (numero ou texto, com virgula ou ponto) --

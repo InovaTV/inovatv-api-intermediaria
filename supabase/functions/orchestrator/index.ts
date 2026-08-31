@@ -143,7 +143,7 @@ import {
   atualizarSessao,
   expirarSessaoAtomicamente,
 } from "../_shared/conversas_estado.ts";
-import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
+import { inserirMensagem, contarMensagensDaConversa } from "../_shared/mensagens_atendimento.ts";
 import {
   chamarMatch,
   chamarStatus,
@@ -159,6 +159,7 @@ import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
   MENSAGEM_SESSAO_EXPIRADA,
+  MENSAGEM_SAUDACAO_INICIAL,
   MENSAGEM_BUSCANDO_DADOS_RENOVACAO,
   MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
   mensagemFalhaResolucaoUnitv,
@@ -871,6 +872,46 @@ Deno.serve(async (req: Request) => {
   await atualizarSessao(conversa.conversation_id, {
     sessaoAtividadeEm: new Date().toISOString(),
   }).catch(() => {});
+
+  // Saudacao inicial do novo atendimento (decisao de produto,
+  // 2026-08-31, aprovada texto por texto pelo usuario). Enviada UMA
+  // unica vez, so' no PRIMEIRO contato de uma conversa -- criterio:
+  // nenhuma mensagem ainda registrada em mensagens_conversa para este
+  // conversation_id (a mensagem do cliente e a resposta da IA so' sao
+  // gravadas mais adiante, juntas -- entao count === 0 aqui <=> e' a
+  // primeira mensagem ja' processada nesta conversa). Cliente conhecido
+  // (>= 1 mensagem, inclusive pos-atendimento humano) nunca recebe de
+  // novo.
+  //
+  // Determinística: texto fixo unico em MENSAGEM_SAUDACAO_INICIAL
+  // (_shared/mensagens_fixas.ts), nunca gerado pelo Gemini -- o
+  // SYSTEM_PROMPT congelado nao e' tocado. ADITIVA: nao substitui a
+  // resposta normal -- o fluxo /match -> Gemini -> validador -> envio
+  // segue identico logo abaixo, respondendo a mensagem atual do
+  // cliente. Best-effort: qualquer falha (contagem ou envio) nunca
+  // bloqueia nem altera o atendimento. Nao roda em aguardando_humano
+  // (Passo 0 ja' retornou) nem em sessao expirada (Passo 0-B ja'
+  // retornou).
+  try {
+    const jaHouveMensagem =
+      (await contarMensagensDaConversa(conversa.conversation_id)) > 0;
+    if (!jaHouveMensagem) {
+      const envioSaudacao = await enviarMensagemWhatsApp(
+        telefone,
+        MENSAGEM_SAUDACAO_INICIAL,
+      );
+      if (envioSaudacao.outcome === "success") {
+        await inserirMensagem(
+          conversa.conversation_id,
+          "ia",
+          MENSAGEM_SAUDACAO_INICIAL,
+          null,
+        ).catch(() => {});
+      }
+    }
+  } catch {
+    // best-effort -- a saudacao inicial nunca bloqueia o atendimento
+  }
 
   // estado === 'normal': encadeia /match, /status, contexto minimo,
   // Gemini (Etapa 5), validador (Etapa 6, segunda fatia), se

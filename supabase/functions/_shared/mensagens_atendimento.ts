@@ -32,6 +32,24 @@ export async function inserirMensagem(
   return data as MensagemAtendimento;
 }
 
+// Saudacao inicial (decisao de produto 2026-08-31) -- o Orquestrador
+// usa isto para decidir se e' o PRIMEIRO contato de uma conversa
+// (count === 0 => nenhuma mensagem ja registrada => envia a saudacao
+// fixa uma unica vez). Aditiva: nenhuma funcao existente e' alterada.
+export async function contarMensagensDaConversa(
+  conversationId: string,
+): Promise<number> {
+  const client = getServiceClient();
+
+  const { count, error } = await client
+    .from("mensagens_conversa")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId);
+
+  if (error) throw error;
+  return count ?? 0;
+}
+
 // Historico completo de uma conversa (Componente 5 §8) -- usado pelo
 // Painel pra mostrar tudo que ja foi trocado, sem limite de janela de
 // tempo. Nao usado pelo Orquestrador (ele so insere, nunca precisa
