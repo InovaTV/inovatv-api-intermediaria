@@ -48,20 +48,156 @@
 
 ---
 
-## INCIDENTE META — 2026-08-31 — WABA restrita para envio a usuários no Brasil (erro `130497`)
+## SESSÃO 2026-08-31 (noite) — SAUDAÇÃO INICIAL + PAINEL + OBSERVABILIDADE WHATSAPP + INCIDENTE META `130497`
 
-> **Registro de incidente. Não é bug do nosso código.** Nenhuma
-> alteração de código/banco/secret/Meta/Rocket feita neste registro —
-> só documentação. Próximo passo é investigação MANUAL na Meta, fora do
-> escopo de código.
+> Consolidação de fechamento. Commits do dia: `662c9a5`, `8d5e27b`,
+> `c1f2ffd`, `94e11c1` — **todos em `origin/main`**. Deploys: `orchestrator`
+> **v71**, `webhook` **v27** (Supabase, `--no-verify-jwt`); Painel
+> (Next.js, `inovatv-api-intermediaria/painel/`) publicado no Vercel pela
+> integração Git a partir de `8d5e27b`. Nenhuma mudança em Meta, secrets,
+> Rocket, banco (exceto limpezas de histórico do Painel descritas abaixo),
+> F4/F5. Nenhuma cobrança/renovação.
 
-### Causa (definitiva, confirmada por log da Meta)
+### 1. Saudação inicial do novo atendimento
+
+**O que é:** primeira mensagem que o cliente recebe ao abrir uma conversa
+nova com o número oficial. Texto fixo, temporário (fase de adaptação dos
+clientes ao novo modelo de atendimento) — deve ser **encurtado/revisado**
+no futuro, editando **apenas** a constante `MENSAGEM_SAUDACAO_INICIAL` em
+`supabase/functions/_shared/mensagens_fixas.ts` (ponto único do texto, sem
+tocar lógica).
+
+**Texto final aprovado** (`MENSAGEM_SAUDACAO_INICIAL`, commit `8d5e27b`):
+
+```
+👋 Olá! Sou o Assistente Virtual da InovaTV 😊
+
+Este é o nosso canal oficial no WhatsApp ✅
+
+✨ A InovaTV mudou a forma de atendimento!
+
+Agora você pode resolver tudo de forma rápida e automática por aqui. Você pergunta, eu respondo — sem precisar esperar por um atendente. 😉
+
+📅 Quer saber quando seu plano vence? É só perguntar.
+
+🔄 Quer renovar seu plano? Eu também posso ajudar você a fazer sua renovação automaticamente por aqui.
+
+🛠️ Precisa de ajuda ou suporte? Também posso ajudar você por aqui.
+
+Para não incomodar você, não enviaremos mais lembretes de vencimento. 📅 É só perguntar quando quiser.
+
+E agora, me diga: como posso ajudar você hoje? 😊
+```
+
+**Comportamento (implantado em `orchestrator` v71):**
+- **Critério de "primeiro contato":** `contarMensagensDaConversa(conversation_id) === 0`
+  (nova função aditiva em `_shared/mensagens_atendimento.ts`) — nenhuma
+  linha ainda em `mensagens_conversa` para a conversa. Cliente conhecido
+  (≥ 1 mensagem, inclusive pós-atendimento humano) nunca recebe de novo.
+- **Ordem de gravação:** a **mensagem do cliente é gravada ANTES da
+  saudação** (`inserirMensagem("cliente", …)` → depois a saudação) — no
+  Painel aparece `cliente → Assistente Virtual`, nunca o inverso.
+- **Mudança pós-teste real (aprovada 2026-08-31):** no primeiro contato a
+  requisição faz **só a saudação e ENCERRA (`return "saudacao_inicial"`)**
+  — **NÃO chama o Gemini**, não envia uma segunda mensagem do sistema. A
+  próxima mensagem do cliente (`count > 0`) segue o fluxo normal do
+  Gemini; o bloco não roda de novo, então a Cadeia 1 do fluxo normal
+  nunca duplica a gravação do cliente.
+- **A saudação só é gravada no histórico se o envio teve sucesso**
+  (`envioSaudacao.outcome === "success"`) — mesma disciplina dos demais
+  envios do Orquestrador (transferência/renovação).
+- Nunca gerada pelo Gemini. `SYSTEM_PROMPT` congelado intocado.
+- Testes locais: `scripts/testes/saudacao_inicial/` — 6 cenários, 100%
+  verdes (roda o handler real do `orchestrator` + validador + contexto +
+  `mensagens_fixas` reais; deps externas fakeadas). Inclui
+  `fake_whatsapp_client.mjs` com toggle de falha de envio.
+- **NÃO validável em produção enquanto o incidente Meta `130497` (seção 4)
+  impedir a entrega.** No teste real de 01:08 BRT a saudação nem chegou a
+  ser o caminho exercitado (ver seção 4 / conversa com resíduo).
+
+### 2. Painel de Atendimento
+
+- **Correção visual (frontend apenas, commit `8d5e27b`):**
+  `painel/app/conversas/layout.tsx` → `conversasFiltradas` passou a ocultar
+  conversas onde `ultima_mensagem_cliente_em === null` **e**
+  `ultima_mensagem_texto === null`. Aplica-se aos 3 filtros ("Todas",
+  "Não lidas", "Aguardando humano"). **Nenhuma mudança de Edge Function,
+  nenhuma mudança de schema, nenhum DELETE.** Publicado no Vercel
+  (deployment `dpl_CLfKXE8vHm7wLoSuyNfVvqbSk3Tz`, alias de produção
+  `inovatv-api-intermediaria.vercel.app`); bundle deployado confirmado
+  contendo o filtro.
+- **Histórico do Painel zerado (2 limpezas de banco, transação atômica com
+  gate de verificação pré-COMMIT):**
+  1. Limpeza geral: `mensagens_conversa` 405→0, `conversas_episodios`
+     27→0, `conversas_estado` 10→2. 8 conversas sem dado operacional
+     removidas por completo.
+  2. Limpeza direcionada das 2 conversas remanescentes (`43fcff07` /
+     `5517981625486` e `5f96d721` / `5517981563170`): mensagens e
+     episódios dessas 2 apagados; linhas de `conversas_estado`
+     **mantidas** (FK), campos de estado/prévia/sessão zerados,
+     `estado='normal'`.
+- **Preservação das referências operacionais da Renovação Automática:**
+  `cobrancas_pix` (16), `tokens_renovacao` (28), `renovacoes_lote` (6) —
+  **intactos, fingerprint MD5 idêntico antes/depois** nas duas limpezas.
+  As 2 linhas de `conversas_estado` foram mantidas exatamente porque
+  `cobrancas_pix`/`tokens_renovacao`/`renovacoes_lote` têm FK
+  `ON DELETE NO ACTION` para elas.
+- **Estado atual do Painel:** lista **vazia** ("Nenhuma conversa neste
+  filtro."), nada selecionado automaticamente. As 2 linhas de
+  `conversas_estado` existem no banco mas estão ocultas (ambos
+  `ultima_mensagem_*` nulos). Assim que um cliente mandar mensagem, a
+  conversa dele volta a aparecer.
+- **Defeito pré-existente registrado, NÃO corrigido** (ver seção 5,
+  pendência 3): no caminho `responder` puro do Orquestrador, a Cadeia 1
+  grava `cliente`+`ia` em `mensagens_conversa` **incondicionalmente**,
+  antes/independente do resultado do envio — "aparece no Painel" ≠
+  "aceito pela Graph API" nesse caminho.
+
+### 3. Observabilidade de envio WhatsApp (commit `c1f2ffd`)
+
+**Motivo da criação:** após o 1º teste real, a saudação apareceu no Painel
+mas não chegou ao WhatsApp; a infraestrutura não tinha como distinguir
+"aceito pela Graph API" de "entregue" — os callbacks de status da Meta
+(`value.statuses`) eram **reconhecidos e descartados sem log**.
+
+- **`_shared/whatsapp_client.ts`:** `enviarMensagemWhatsApp`, ao receber
+  sucesso da Graph API (HTTP 2xx + `messages[0].id`), loga
+  `{ evento: "whatsapp_send_accepted", wamid, destinatario, timestamp,
+  outcome: "success" }`. Nunca loga corpo da mensagem, token ou secret.
+  Retorno inalterado.
+- **`webhook/index.ts`:** o bloco `value.statuses` passa a logar
+  `{ evento: "whatsapp_delivery_status", wamid, recipient_id, status,
+  timestamp }` **por status recebido**; se `failed`, acrescenta
+  `errors[].code/title/details`. **Depois do log, mantém exatamente o
+  comportamento atual** (reconhece e descarta — sem persistir, sem tabela,
+  sem mudança de fluxo).
+- **Funções instrumentadas e redeployadas:** `orchestrator` (v71, carrega
+  o novo `_shared/whatsapp_client.ts`) e `webhook` (v27). As outras 9
+  funções que importam `whatsapp_client.ts` mantêm a cópia antiga — não
+  precisam de redeploy para o diagnóstico da saudação.
+- Foi essa instrumentação que capturou o `130497` (seção 4).
+
+### 4. INCIDENTE META — WABA restrita para envio a usuários no Brasil (erro `130497`)
+
+> **Não é bug do nosso código. Próximo passo é investigação MANUAL na
+> Meta.** Prioridade nº 1 para amanhã.
+
+#### Causa (definitiva, confirmada por log da Meta)
 
 **A Business Account / WABA da Meta está RESTRITA de enviar mensagens a
 usuários no Brasil.** Código de erro da Graph API: **`130497` — "Business
 account is restricted from messaging users in this country."**
 
-### Evidência
+#### Identificadores
+
+- Número oficial: **+55 17 99624-2415**
+- `phone_number_id`: **`1261574110375334`** (secret `WHATSAPP_PHONE_NUMBER_ID`,
+  inalterado desde a migração de 2026-08-30 23:47 UTC)
+- WABA: **`1599304625307021`**
+- App Meta: `InovaTV IA - Teste` / `1022259220848151`
+- `verified_name` "InovaTV": ainda **"Em análise"** na Meta
+
+#### Evidência
 
 Dois envios distintos do número oficial `1261574110375334` →
 `5517981625486` (celular pessoal do José), com a instrumentação
@@ -78,7 +214,7 @@ restrição. A única mensagem que chegou de fato foi a saudação das
 **03:13**, provavelmente antes de a restrição entrar em vigor (ou
 janela de graça inicial da conta).
 
-### O que NÃO é a causa
+#### O que NÃO é a causa
 
 - ❌ Não é o Orquestrador, a saudação inicial, o Gemini, validador,
   throttle nem pacing/ecosystem-health.
@@ -89,7 +225,7 @@ janela de graça inicial da conta).
   destinatário `5517981625486` corretos e inalterados desde a migração
   de 2026-08-30.
 
-### Impacto
+#### Impacto
 
 **Nenhuma mensagem iniciada pela empresa a partir do número oficial
 `1261574110375334` é entregue a usuários no Brasil enquanto a restrição
@@ -100,39 +236,7 @@ estiver ativa.** Isso deixa inoperante, para clientes BR:
 O canal está **tecnicamente correto** (webhook recebe, Orquestrador
 processa, Graph API aceita) mas **sem entrega** por decisão da Meta.
 
-### Estado do código (para não reabrir por engano)
-
-- **Feature "saudação inicial"**: código correto e implantado
-  (`orchestrator` v71). Primeiro contato = grava mensagem do cliente →
-  envia só a saudação fixa (`MENSAGEM_SAUDACAO_INICIAL`) → grava a
-  saudação só se o envio teve sucesso → encerra (não chama Gemini).
-  Testes locais (`scripts/testes/saudacao_inicial/`, 6 cenários) 100%
-  verdes. **Não validável em produção enquanto a Meta bloquear a
-  entrega.**
-- **Instrumentação de observabilidade** (commit `c1f2ffd`, deployada em
-  `orchestrator` v71 + `webhook` v27): `whatsapp_send_accepted` (loga
-  wamid na aceitação da Graph API) e `whatsapp_delivery_status` (loga
-  cada callback de status; se `failed`, o `errors[].code/title/details`).
-  Foi essa instrumentação que capturou o `130497`. Mantida.
-- **Painel de Atendimento**: correção de UI implantada no Vercel
-  (oculta conversas sem mensagens — `ultima_mensagem_*` nulos); commit
-  `8d5e27b`. Duas linhas de `conversas_estado` preservadas por FK da
-  Renovação Automática (`43fcff07`/`5517981625486` e
-  `5f96d721`/`5517981563170`) continuam no banco, só não aparecem
-  vazias.
-- **Defeito pré-existente registrado, NÃO corrigido** (fora do escopo
-  desta rodada, exige decisão): no caminho `responder` puro do
-  Orquestrador, a Cadeia 1 grava `cliente`+`ia` em `mensagens_conversa`
-  **incondicionalmente**, antes/independente do resultado do envio —
-  então "aparece no Painel" ≠ "aceito pela Graph API" nesse caminho.
-  Menor correção proposta: mover esses `inserirMensagem` para dentro do
-  `if (envioResultado.enviado)` da Cadeia 2 (mesmo padrão da
-  transferência/renovação/saudação). Só corrige o registro enganoso,
-  não a entrega.
-- Conversa `43fcff07` (`5517981625486`) tem 6 mensagens de teste
-  (03:47 + 04:08 + 04:11). Não limpo aqui.
-
-### Próximo passo (MANUAL, na Meta — não é trabalho de código)
+#### Próximo passo (MANUAL, na Meta — não é trabalho de código)
 
 Investigar em **WhatsApp Manager / Business Manager / suporte da Meta** a
 **origem e o motivo da restrição `130497`** da WABA `1599304625307021` /
@@ -140,6 +244,80 @@ número `1261574110375334`: verificação de empresa, política de conteúdo,
 qualidade/denúncias, país de operação declarado, `verified_name`
 ("InovaTV" ainda "Em análise"), limites da conta. Sem esse
 destravamento, nenhum teste real de entrega faz sentido.
+
+### 5. Número de teste antigo `+55 17 99628-6135` — só histórico
+
+- Chip descartável usado no laboratório da IA própria.
+- **Removido da Cloud API** (WhatsApp Business App tirado de propósito).
+- **Posteriormente bloqueado pela Meta.**
+- Classificado apenas como **histórico de laboratório** — sem impacto na
+  operação, **nenhuma ação necessária**, não tentar recuperar/reativar.
+  (Já registrado também na seção "SESSÃO 2026-08-31 — MIGRAÇÃO DO CANAL
+  WHATSAPP", mais abaixo.)
+
+### 6. Estratégia de produto — lembretes de vencimento
+
+- **Decisão:** **NÃO** construir motor automático de lembretes de
+  vencimento neste momento (nem cron, nem template de lembrete, nem
+  substituição das réguas do RocketZap).
+- O cliente **consulta o vencimento quando quiser**, perguntando à IA
+  ("Quer saber quando seu plano vence? É só perguntar" — dito na
+  saudação).
+- A **Renovação Automática continua disponível** normalmente (fluxo
+  OpenPix → Rocket → Cloud API já em produção).
+- A **saudação inicial informa essa mudança** ao cliente ("Para não
+  incomodar você, não enviaremos mais lembretes de vencimento").
+- A frente "Substituição do RocketZap / Motor de lembretes"
+  (`docs/renovacao_automatica/`) fica **congelada** — não reabrir sem
+  decisão de produto nova.
+
+### 7. Commits / versões / deploys de 2026-08-31 (noite)
+
+| Commit | O que é | Em `origin/main`? |
+|---|---|---|
+| `662c9a5` | Saudação inicial (1ª versão: primeiro contato, ainda aditiva ao Gemini) + suíte `scripts/testes/saudacao_inicial/` | ✅ |
+| `8d5e27b` | Saudação: primeiro contato faz só a saudação + ordem cliente→IA + Painel oculta conversas vazias; texto final aprovado | ✅ |
+| `c1f2ffd` | Observabilidade: `whatsapp_send_accepted` (`_shared/whatsapp_client.ts`) + `whatsapp_delivery_status` (`webhook/index.ts`) | ✅ |
+| `94e11c1` | Registro do incidente Meta `130497` (só doc — versão inicial desta seção) | ✅ |
+
+**Deploys:**
+- `orchestrator`: **v71** ACTIVE, `verify_jwt=false` — carrega saudação
+  (v71) + `_shared/whatsapp_client.ts` instrumentado.
+- `webhook`: **v27** ACTIVE, `verify_jwt=false` — `whatsapp_delivery_status`.
+- **Nenhuma outra Edge Function redeployada** (28 demais nas versões
+  anteriores).
+- **Painel (Next.js, `inovatv-api-intermediaria/painel/`):** publicado no
+  **Vercel** pela integração Git a partir de `8d5e27b` — deployment
+  `dpl_CLfKXE8vHm7wLoSuyNfVvqbSk3Tz`, alias de produção
+  `inovatv-api-intermediaria.vercel.app` (READY, bundle confirmado com o
+  filtro).
+- **`inovatv_central` e `inovatv_painel` (repositórios):** **não tocados
+  hoje** — HEAD == origin/main (`0b66b55` e `ccb31be` respectivamente).
+
+### 8. Pendências para amanhã (ordem de prioridade)
+
+1. **Investigação manual na Meta do erro `130497`** — próxima prioridade
+   absoluta. Sem destravar isso, nada de WhatsApp de saída funciona para
+   clientes BR.
+2. **Teste da saudação em produção** — **não** considerado validado
+   enquanto a restrição `130497` impedir a entrega. Código correto e
+   implantado (v71), testes locais 100%.
+3. **Correção definitiva da inconsistência do Painel** (Cadeia 1 grava
+   `cliente`+`ia` sem confirmar envio, no caminho `responder` puro) —
+   avaliar depois, **não implementar agora**. Menor correção já proposta:
+   mover os `inserirMensagem` para dentro do `if (envioResultado.enviado)`
+   da Cadeia 2. Só conserta o registro enganoso, não a entrega.
+4. **Revisão futura da saudação temporária** — encurtar/reduzir o texto
+   quando os clientes estiverem acostumados ao novo modelo. Editar
+   **apenas** `MENSAGEM_SAUDACAO_INICIAL` em `_shared/mensagens_fixas.ts`.
+5. **Mensagens automáticas do Rocket** — por enquanto **não implementar
+   lembretes**. Estratégia atual: consulta de vencimento sob demanda pela
+   IA (seção 6). Frente do "Motor de lembretes" congelada.
+6. *(operacional, não é bug)* Cada teste manual futuro deve partir de uma
+   conversa **efetivamente zerada** — o teste de 01:08 caiu no fluxo
+   normal (e não no primeiro-contato do v71) porque as 2 linhas do teste
+   das 03:47 nunca foram removidas de `43fcff07`. Hoje a conversa
+   `43fcff07` (`5517981625486`) foi zerada (limpeza direcionada, seção 2).
 
 ---
 
