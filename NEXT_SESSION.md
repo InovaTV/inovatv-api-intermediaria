@@ -1,5 +1,20 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **🟢 DECISÃO 2026-09-03 — INVESTIGAÇÃO DO `130497` ENCERRADA.** Não
+> investigar mais a causa, não fazer testes de envio para diagnóstico,
+> não alterar WABA/número/tokens/estrutura/código por causa disso, não
+> levantar novas hipóteses. Caminho definido: **Plano A** = tentativa
+> prática com a identidade **TOPE TV** (nome de exibição no número
+> oficial existente `1261574110375334`, sem tocar em mais nada);
+> **Plano B** = **WasenderAPI** (API de terceiro), acionado só se o
+> Plano A não restaurar a operação — sem insistência prolongada na
+> Meta. Passo 0 (confirmar status do nome) e Passo 1 (submeter "TOPE
+> TV") **ainda não executados**. Detalhe completo na seção **"DECISÃO
+> 2026-09-03 — ENCERRAMENTO DA INVESTIGAÇÃO `130497` + PLANO A (TOPE
+> TV) / PLANO B (WASENDERAPI)"** logo abaixo. O incidente `130497` em
+> si continua real (registro técnico mantido abaixo), só não será mais
+> investigada a causa. Antes disso:**
+>
 > **⚠️ INCIDENTE ABERTO (2026-08-31) — a WABA `1599304625307021` /
 > número oficial `1261574110375334` está RESTRITA pela Meta de enviar
 > mensagens a usuários no Brasil (erro `130497`). Graph API aceita
@@ -45,6 +60,129 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## DECISÃO 2026-09-03 — ENCERRAMENTO DA INVESTIGAÇÃO `130497` + PLANO A (TOPE TV) / PLANO B (WASENDERAPI)
+
+> Decisão de produto do usuário, registrada nesta data. **Nenhuma
+> alteração de código, infraestrutura, WABA, número, tokens ou
+> configuração foi feita neste registro — só documentação.** Passo 0
+> (confirmar status do nome) e Passo 1 (submeter "TOPE TV") descritos
+> abaixo **ainda não foram executados** — cada um exige autorização
+> pontual própria.
+
+### 1. Investigação do `130497` — ENCERRADA
+
+Evidência considerada suficiente pelo usuário:
+- a Graph API aceita o envio inicialmente (HTTP 200 + WAMID);
+- o callback de status assíncrono volta `failed` com `errors[].code=130497`;
+- a Meta não informa de forma objetiva a causa específica da restrição;
+- continuar investigando Account Quality, políticas, IPTV, nome da
+  empresa, WABA ou outras hipóteses não está produzindo resposta
+  verificável.
+
+**A partir de agora, nesta frente, NÃO:**
+- fazer novas investigações sobre a causa do `130497`;
+- fazer testes de envio com o objetivo de diagnosticar a restrição;
+- alterar a WABA oficial `1599304625307021` por causa disso;
+- alterar número, tokens ou estrutura existente por causa disso;
+- levantar novas hipóteses sobre a origem do bloqueio.
+
+O incidente em si continua real e o registro técnico ("INCIDENTE META
+— 2026-08-31", logo abaixo) permanece intacto — só a *investigação da
+causa* foi encerrada.
+
+### 2. Plano A — tentativa prática com a identidade TOPE TV
+
+Ativos já existentes, considerados **suficientes** para esta etapa —
+**não adicionar conteúdo ao site**, não transformar isto em novo
+projeto de investigação:
+- domínio `topetv.com.br` (registrado, hospedado na Hostinger, no plano
+  que antes atendia `inovatv.pro` — site antigo removido pelo usuário);
+- site institucional publicado, HTTPS ativo (`/`, `/privacidade.html`,
+  `/termos.html` funcionando);
+- `contato@topetv.com.br`;
+- associação institucional declarada no site ("A TOPE TV é uma marca da
+  JS Informática RP" + `contato@jsinformaticarp.com.br`), sem misturar
+  as marcas — sem CNPJ/endereço/telefone/serviços/site da JS
+  Informática, sem propaganda de IPTV/planos/preços/servidores.
+
+**Escopo da tentativa:** submeter **"TOPE TV"** (com E — nunca "Topa
+TV") como **nome de exibição do número oficial existente**
+`1261574110375334`, na WABA `1599304625307021`. **Não** cria WABA
+nova, **não** cria número novo, **não** toca `phone_number_id`, tokens,
+roteamento, Edge Functions, banco nem código — é configuração 100%
+Meta-side. `verified_name` retornado pela Graph API mudaria de
+"InovaTV" para "TOPE TV" se aprovado; nada no código depende desse
+campo.
+
+Sequência (nenhum passo executado ainda; cada um exige autorização
+própria):
+- **Passo 0 — leitura, não altera nada:** confirmar o estado atual do
+  nome de exibição do número oficial. Se "InovaTV" ainda estiver "Em
+  análise", a Meta bloqueia submissão de nome novo (já ocorreu em
+  2026-08-21 com "InovaTV Central" — erro *"verificação já em
+  andamento"*) — nesse caso, esperar a análise fechar. Se rejeitado /
+  campo liberado, seguir para o Passo 1. Fonte: WhatsApp Manager
+  (usuário) ou `GET` read-only na Graph API
+  (`fields=verified_name,name_status,new_name_status`) com token de
+  leitura.
+- **Passo 1 — a ação real:** submeter "TOPE TV" como nome de exibição
+  na WhatsApp Manager (número oficial → Perfil → Editar nome de
+  exibição).
+- **Passo 2 — aguardar** a análise da Meta (dias a semanas — "InovaTV"
+  está pendente desde 2026-08-15). Sem testes de envio nesse período.
+- **Passo 3 — teste único de validação, se/quando aprovado:** UM envio
+  real ao número pessoal do José, só para ver se a entrega passa (ou
+  seja, se o `130497` caiu junto).
+  - Entregou → Plano A funcionou; o rebrand de conteúdo
+    (`MENSAGEM_SAUDACAO_INICIAL`, `SYSTEM_PROMPT` congelado, 29 entradas
+    de `conhecimento_institucional`, Painel, site) vira **etapa
+    separada com decisão própria** — não faz parte desta tentativa.
+  - Continua `130497` → Plano A falhou → aciona Plano B.
+
+**Nota técnica registrada na análise que precedeu esta decisão:** nome
+de exibição e `130497` são mecanismos independentes da Meta —
+aprovação de nome ≠ permissão de mensageria por país. Aprovar "TOPE
+TV" **não garante** que o `130497` seja levantado. Por isso o Passo 3
+(teste único) é o que de fato decide entre Plano A e Plano B.
+
+**Risco registrado (usuário já decidiu prosseguir):** 3ª submissão de
+nome de exibição numa conta com 2 rejeições anteriores ("InovaTV" e
+"JS Informática RP") + restrição `130497` ativa pode ser lida pelos
+sistemas da Meta como tentativa de evasão. Baixo esforço tentar, não é
+risco zero.
+
+### 3. Plano B — WasenderAPI (NÃO implementar agora)
+
+Se o Plano A não restaurar a operação (nome aprovado mas entrega
+continua bloqueada, ou nome novamente rejeitado), **parar de insistir
+na Meta** e migrar o canal de saída para **WasenderAPI** (API de
+terceiro para WhatsApp).
+
+- **Por enquanto: apenas registrado como o próximo caminho.** Nenhuma
+  conta, credencial, integração, código ou custo novo criado nesta
+  data.
+- Detalhamento (arquitetura de integração, ponto de troca no
+  `_shared/whatsapp_client.ts` / Orquestrador, contrato, custo, riscos
+  de banimento de número em API não-oficial) fica para quando/se o
+  Plano B for acionado — com sua própria análise e autorização, mesma
+  disciplina de sempre.
+- Motivo da existência do Plano B: o usuário não quer o projeto parado
+  por semanas tentando descobrir um motivo que a própria Meta não
+  informa.
+
+### 4. Estado ao registrar esta decisão
+
+- Nenhuma alteração de código/infra/Meta/Rocket/banco/secret.
+- Passo 0 e Passo 1 **não executados**.
+- `orchestrator` v71 / `webhook` v27 (instrumentação de
+  observabilidade) seguem em produção, inalterados.
+- Repositórios `inovatv_central`, `inovatv-api-intermediaria`,
+  `inovatv_painel`: `HEAD == origin/main`, working tree limpo (sync de
+  2026-09-03).
+- Ponteiro para esta decisão adicionado em `inovatv_central/CLAUDE.md`.
 
 ---
 
