@@ -359,7 +359,26 @@ Deno.serve(async (req: Request) => {
           console.log("[webhook-wasender] mensagem sem key.id -- ignorada");
           continue;
         }
-        if (key.fromMe === true) continue; // eco da propria saida
+        if (key.fromMe === true) {
+          // LOG TEMPORARIO (autorizado 2026-09-04) -- captura de UM
+          // payload fromMe real do 2415 para desenhar o comando
+          // #humano/#ia. NAO muda comportamento: a mensagem continua
+          // descartada pelo `continue` logo abaixo (nunca vai ao
+          // Orquestrador/RPC/cliente). So os 6 campos autorizados --
+          // nunca corpo/conteudo/tokens. Remover apos a captura.
+          console.log(
+            "[webhook-wasender] DEBUG fromMe",
+            JSON.stringify({
+              event: evento,
+              keyId: key.id,
+              fromMe: key.fromMe,
+              remoteJid: key.remoteJid,
+              senderPn: key.senderPn,
+              cleanedSenderPn: key.cleanedSenderPn,
+            }),
+          );
+          continue; // eco da propria saida
+        }
         if (ehGrupo(key)) {
           console.log(
             "[webhook-wasender] mensagem de grupo -- ignorada",
