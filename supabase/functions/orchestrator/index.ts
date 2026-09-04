@@ -1141,8 +1141,13 @@ Deno.serve(async (req: Request) => {
       : null;
 
   // De-selecao explicita: cliente pede pra ver todos os acessos de novo.
+  // Inclui pedidos por "planos" no PLURAL ("quais sao todos os meus
+  // planos?", "quais meus planos", "quais planos eu tenho", "me mostre
+  // todos os meus planos", ...) -- tratados como "quero ver todos os
+  // acessos/planos cadastrados". NUNCA casa o singular "qual meu plano"
+  // / "qual e' o meu plano" (comportamento aprovado, inalterado).
   const clienteQuerTodosAcessos =
-    /\b(todos os (meus )?acessos|todas as (minhas )?assinaturas|quais (sao os )?(meus )?acessos|quantos acessos|meus acessos|minhas assinaturas|outro acesso|outra assinatura|lista de acessos)\b/i.test(
+    /\b(todos os (meus )?acessos|todas as (minhas )?assinaturas|quais (sao os )?(meus )?acessos|quantos acessos|meus acessos|minhas assinaturas|outro acesso|outra assinatura|lista de acessos|todos os (meus )?planos|quais( (s[ãa]o|todos|os|meus))* planos|meus planos)\b/i.test(
       conteudo,
     );
 
@@ -1192,6 +1197,54 @@ Deno.serve(async (req: Request) => {
       conversa.acesso_selecionado = acessoSelecionadoEfetivoPublicId;
     }
   }
+
+  // ────────────────────────────────────────────────────────────────
+  // Pedido explicito de "ver TODOS os acessos/planos" em conversa
+  // NORMAL. Resposta 100% DETERMINISTICA: NAO chama o Gemini e NUNCA
+  // transfere para atendente -- os dados ja estao todos aqui
+  // (statusResults desta requisicao). Usa o MESMO bloco aprovado
+  // montarMensagemAcessosConsulta (Nome do cadastro, Usuario,
+  // Servidor, Plano, Vencimento; nunca telas/senha/aplicativo/
+  // dispositivo/MAC/email). acesso_selecionado ja foi limpo pelo bloco
+  // de selecao acima (ramo clienteQuerTodosAcessos). Gateado por
+  // !ehContextoRenovacao (a renovacao tem seu proprio interceptor de
+  // lista, intocado) e por haver >=1 acesso com dado real -- sem dado
+  // (no_match / Rocket indisponivel) segue o fluxo normal (Gemini).
+  if (
+    clienteQuerTodosAcessos &&
+    !ehContextoRenovacao &&
+    acessosOrdenadosParaSelecao.length > 0
+  ) {
+    const textoTodosAcessos = montarMensagemAcessosConsulta(
+      acessosOrdenadosParaSelecao.map((s) => ({
+        nome: s.cliente.nome ?? null,
+        usuario: s.cliente.usuario ?? null,
+        servidorNome: s.cliente.servidorNome ?? null,
+        planoNome: s.cliente.planoNome ?? null,
+        vencimento: s.cliente.vencimento ?? null,
+      })),
+    );
+    // Componente 1 §15-A: nao envia por cima de um atendente humano
+    // que assumiu no meio do caminho.
+    const conversaAntesDoEnvio = await buscarOuCriarConversa(telefone);
+    let enviadoTodos = false;
+    if (conversaAntesDoEnvio.estado !== "aguardando_humano") {
+      const envioTodos = await enviarMensagemWhatsApp(telefone, textoTodosAcessos);
+      enviadoTodos = envioTodos.outcome === "success";
+    }
+    try {
+      await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
+      await inserirMensagem(conversa.conversation_id, "ia", textoTodosAcessos, null);
+    } catch {
+      // best-effort, mesma filosofia do resto do fluxo
+    }
+    return jsonResponse({
+      outcome: "listar_todos_acessos",
+      conversation_id: conversa.conversation_id,
+      envio: { enviado: enviadoTodos },
+    });
+  }
+  // ────────────────────────────────────────────────────────────────
 
   // montarContextoCliente MOVIDO pra ca (era logo apos matchIndisponivel):
   // agora com o acesso efetivo, pra filtrar o [DADOS CONECTADOS - CLIENTE]
