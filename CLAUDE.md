@@ -15,9 +15,18 @@ Este repositório hospeda as Edge Functions do Supabase que sustentam:
 - **O Orquestrador da IA própria** (`supabase/functions/orchestrator/`)
   — reconhecimento de intenção, validação determinística, resolução de
   acesso, integração com o Gemini e com o Rocket Gestor. Em produção
-  real (`orchestrator`, versão v35 no momento da escrita deste
-  documento — confirmar versão atual via `supabase functions list`).
-- **O Webhook do WhatsApp Cloud API** (`supabase/functions/webhook/`).
+  real (`orchestrator` — confirmar versão atual via
+  `supabase functions list`).
+- **O Webhook do WhatsApp Cloud API / Meta**
+  (`supabase/functions/webhook/`).
+- **O Webhook de entrada do WhatsApp via WasenderAPI**
+  (`supabase/functions/webhook-wasender/`) — canal do número oficial
+  **+55 17 99624-2415** (sessão Wasender "Tope Tv" #117404).
+  `messages.received` → Orquestrador; `messages.upsert` → comandos de
+  operador **`#humano` / `#ia`** (assumir / encerrar atendimento humano
+  pelo próprio WhatsApp). Em produção, `webhook-wasender` v7.
+  Documentação oficial:
+  [`docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md`](docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md).
 - **O Painel de Atendimento** (`painel/`, Next.js) e suas Edge
   Functions de apoio (`painel-atendimento-*`).
 - **A integração com o Rocket Gestor** (`/match`, `/status`,

@@ -1,5 +1,21 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-04 — CANAL DE ENTRADA WASENDER: COMANDOS DE
+> OPERADOR `#humano` / `#ia` EM PRODUÇÃO.** `webhook-wasender` v6 → **v7
+> ACTIVE** (`verify_jwt=false`) no Supabase de produção
+> `nduxsuxkopuvhwugdkqi`. Commit **`f9285bf`** em `origin/main`. Escopo
+> exclusivo: `webhook-wasender/index.ts` + `_shared/comando_atendimento.ts`
+> (novo) + `_shared/conversas_estado.ts` (+`buscarConversaPorTelefone`).
+> **Orchestrator / match / status / webhook (Meta) NÃO redeployados;
+> secrets / migrations / RPCs / configuração do Wasender INTACTOS.** O
+> ciclo `#humano` → cliente sem resposta → `#ia` → cliente respondido
+> pela IA foi **validado ao vivo em produção**. **Isto é o canal de
+> ENTRADA / comando — NÃO é o go-live do "Plano B" nem a migração do
+> canal de SAÍDA, que continuam como gate separado.** Detalhe completo:
+> [`docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md`](docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md)
+> · seção **"SESSÃO 2026-09-04 — CANAL DE ENTRADA WASENDER: COMANDOS
+> `#humano` / `#ia`"** logo abaixo. Antes disso:**
+>
 > **🟢 DECISÃO 2026-09-03 — INVESTIGAÇÃO DO `130497` ENCERRADA.** Não
 > investigar mais a causa, não fazer testes de envio para diagnóstico,
 > não alterar WABA/número/tokens/estrutura/código por causa disso, não
@@ -60,6 +76,100 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-09-04 — CANAL DE ENTRADA WASENDER: COMANDOS `#humano` / `#ia`
+
+> **Documento mestre desta frente:
+> [`docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md`](docs/canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md)**
+> — arquitetura, payloads, RPCs, testes, procedimentos de deploy e de
+> alternância LAB↔produção, secrets (sem valores), pendências. Esta
+> seção é só o "onde paramos".
+
+### O que entrou em produção
+
+- `webhook-wasender` **v6 → v7 ACTIVE** (`verify_jwt=false`), projeto
+  Supabase de produção `nduxsuxkopuvhwugdkqi`. Commit **`f9285bf`** em
+  `origin/main` (3 arquivos, byte-idênticos ao LAB `099feae`):
+  - `supabase/functions/webhook-wasender/index.ts` — o ramo
+    `messages.upsert` passa a detectar `#humano` / `#ia` digitados no
+    **próprio número 2415** (`key.fromMe === true`) **antes** de ignorar
+    o resto. Dedup por `key.id`, telefone via `key.cleanedSenderPn`,
+    chama as RPCs `assumir_atendimento` / `encerrar_atendimento_humano`
+    (existentes, inalteradas) e envia uma confirmação curta best-effort
+    na conversa. `messages.received` / `messages.update` / verificação de
+    assinatura / `chamarOrquestrador` **inalterados**.
+  - `supabase/functions/_shared/comando_atendimento.ts` — **NOVO**:
+    `detectarComandoAtendimento` (match estrito de `#humano`/`#ia`) +
+    `executarComandoAtendimento`.
+  - `supabase/functions/_shared/conversas_estado.ts` —
+    **+`buscarConversaPorTelefone`** (novo export, só `SELECT`, nunca
+    cria). Nenhuma função existente tocada.
+- **Nada mais foi redeployado.** `orchestrator` v75, `match` v37,
+  `status` v41, `webhook` (Meta) v28 — sha256 conferido inalterado.
+- **Nenhum secret alterado.** `WASENDER_API_TOKEN` /
+  `WASENDER_WEBHOOK_SECRET` de produção já eram as credenciais da sessão
+  "Tope Tv"/2415 (digests conferidos).
+
+### Wasender / sessão 2415
+
+- Sessão **"Tope Tv" #ID 117404 · +55 17 99624-2415 · Connected** (plano
+  Basic, 1 sessão).
+- **Payload URL atual: PRODUÇÃO** —
+  `https://nduxsuxkopuvhwugdkqi.supabase.co/functions/v1/webhook-wasender`.
+- Eventos assinados: `messages.received` + `messages.upsert`. Demais
+  desligados. Message Filtering (Groups/Broadcasts/Channels) ligados.
+- Assinatura do webhook: header `X-Webhook-Signature` = o próprio Webhook
+  Secret **em texto puro** (não é HMAC).
+
+### Histórico da alternância LAB ↔ produção (durante a etapa, já revertida)
+
+A Payload URL foi comutada **temporariamente para o LAB**
+(`uleklqdlwyofnkcsdigz`) para validar `#humano`/`#ia` ao vivo contra o
+2415 sem tocar produção; corrigidos no caminho o `WASENDER_WEBHOOK_SECRET`
+(1º teste deu 401) e o `WASENDER_API_TOKEN` (confirmação deu
+`401 invalid API key`) do **projeto LAB**, alinhando-os à sessão 2415.
+Depois **restaurada para produção** (só o campo Payload URL). Os secrets
+`WASENDER_*` do projeto LAB ficaram configurados com as credenciais da
+sessão 2415 (relevante se o LAB for reusado — re-apontar a Payload URL,
+com o aviso de que isso desvia clientes reais).
+
+### Testes
+
+- **Automatizados** (`scripts/testes/comando_atendimento_upsert/`, só no
+  repo do LAB): **93 asserts** — 26 da função pura + 17 testes de handler
+  (67 asserts). Regressão LAB completa: **39 PASS / 2 FAIL**; as 2 falhas
+  (`autocura_healer_nao_age`, `autocura_ocr_nao_age`) são **pré-existentes**
+  (`ENOENT` de `.github/workflows/autocura-unitv-*.yml`), sem relação.
+- **Reais (04/09/2026):** `#humano` do WhatsApp real do 2415 → invocação
+  HTTP 200, `outcome:"assumido"`, conversa → `aguardando_humano`. Após o
+  deploy de produção, smoke read-only (401 sem assinatura / 200 GET / 405
+  PUT) e o **ciclo completo `#humano` → cliente sem resposta → `#ia` →
+  cliente respondido pela IA validado ao vivo em produção** (teste
+  aprovado pelo usuário).
+
+### Auditoria técnica
+
+**APROVADO PARA PRODUÇÃO**, condicionado a deploy escopado só a
+`webhook-wasender` (+ os 2 `_shared`) e à pré-condição de secrets de
+produção — ambas cumpridas.
+
+### Pendências (ver §24 do documento mestre)
+
+- Canal de **SAÍDA** / go-live geral do "Plano B" — **gate separado**,
+  não faz parte desta etapa.
+- Sem feedback ao atendente para comando digitado errado / sem
+  `cleanedSenderPn` (deliberado — match estrito).
+- Modelo mono-operador: `#ia` do 2415 encerra episódio mesmo com
+  atendimento em curso no Painel.
+- `pushName` não confirmado no payload WasenderAPI → `nome_snapshot` pode
+  ficar sem fonte neste canal.
+- Decidir se a suíte `comando_atendimento_upsert` é copiada para o repo
+  de produção (hoje só no LAB).
+
+> O ciclo `#humano` → cliente sem resposta → `#ia` → cliente respondido
+> pela IA **já foi validado ao vivo** — **não** é pendência.
 
 ---
 

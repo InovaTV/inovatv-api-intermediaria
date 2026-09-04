@@ -641,3 +641,84 @@ primeiro uso de verdade, nunca no carregamento do módulo).
   preenchido com a URL pública conhecida, não é segredo).
 - Nenhum dos dois foi tocado nesta sessão — só referenciados em código,
   igual ao padrão já usado com `GEMINI_API_KEY` etc.
+
+## Estado (2026-09-04): comandos de operador `#humano` / `#ia` no `webhook-wasender` — em produção
+
+> **Documento mestre desta frente:
+> [`canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md`](canal_wasender/CANAL_WASENDER_COMANDOS_HUMANO_IA.md)**
+> — arquitetura, payloads, RPCs, testes, procedimentos de deploy e de
+> alternância LAB↔produção, secrets (sem valores), pendências. Esta
+> seção só registra a implementação de código.
+
+O `webhook-wasender` (canal de entrada do WhatsApp via WasenderAPI, número
+oficial 2415, já em produção como v6 tratando `messages.received` →
+Orquestrador) ganhou o tratamento de **comandos de operador** no ramo
+`messages.upsert`.
+
+**Arquivos (commit `f9285bf`, byte-idênticos ao LAB `inovatv-wasender-lab@099feae`):**
+
+- `supabase/functions/webhook-wasender/index.ts` — o ramo `messages.upsert`
+  passa a, **antes** de logar "ignorado de proposito" e responder 200,
+  varrer as mensagens: para cada uma com `key.fromMe === true`, `key.id`
+  presente, não-grupo, e cujo texto (após `trim().toLowerCase()` e strip
+  de pontuação final) seja exatamente `#humano` ou `#ia` — resolve o
+  telefone do cliente por `key.cleanedSenderPn` (o `remoteJid` vem `@lid`),
+  aplica `normalizarTelefone`, deduplica por `key.id`
+  (`registrarMensagemSeNova`, mesma tabela `webhook_mensagens_processadas`),
+  e agenda `processarComandoUpsertPosDedup` em `EdgeRuntime.waitUntil`.
+  `messages.received`, `messages.update`, a verificação de assinatura e
+  `chamarOrquestrador` **não foram tocados**. Erro real de dedup → HTTP
+  500 (Wasender reenvia).
+- `supabase/functions/_shared/comando_atendimento.ts` — **novo**.
+  `detectarComandoAtendimento(texto)` (match estrito) e
+  `executarComandoAtendimento(comando, telefoneCanonico)`
+  (`buscarConversaPorTelefone` → RPC `assumir_atendimento` /
+  `encerrar_atendimento_humano` com `p_operador = "whatsapp-2415"` →
+  mapeia o outcome para um de seis textos de confirmação fixos). **Não
+  chama Orquestrador nem Gemini.** Confirmação enviada best-effort por
+  `enviarMensagemWhatsApp`; falha de envio é só logada, não desfaz o
+  estado. Nenhum dos seis textos casa `#humano`/`#ia` → o eco da
+  confirmação não vira comando (sem loop).
+- `supabase/functions/_shared/conversas_estado.ts` — **+`buscarConversaPorTelefone`**
+  (novo export; só `SELECT ... .eq("telefone", ...).maybeSingle()`;
+  **nunca cria**). Nenhuma função existente alterada.
+
+**Não alterado por esta etapa:** `orchestrator/index.ts` (byte-idêntico
+LAB↔produção, diff 0 linhas — o "Passo 0" que pausa a IA em
+`aguardando_humano` já existia), nenhuma migration, nenhuma RPC, nenhum
+secret, nenhuma configuração do Wasender/Meta.
+
+### Verificação real feita
+
+- **Testes automatizados** — suíte nova `scripts/testes/comando_atendimento_upsert/`
+  (existe **só no repo do LAB**): roda o handler real de
+  `webhook-wasender/index.ts` sob shims de `Deno.serve`/`EdgeRuntime`,
+  com fakes para `conversas_estado`/`wasender_client`/`webhook_dedup` e
+  `telefone.ts`/`comando_atendimento.ts` **reais**. `npx tsx
+  scripts/testes/comando_atendimento_upsert/teste.mjs` → **93 asserts**
+  (26 da função pura `detectarComandoAtendimento` + 17 testes de handler
+  T1–T17 / 67 asserts). Regressão completa do LAB: **39 PASS / 2 FAIL**;
+  as 2 falhas (`autocura_healer_nao_age`, `autocura_ocr_nao_age`) são
+  **pré-existentes** (`ENOENT` de `.github/workflows/autocura-unitv-*.yml`),
+  sem relação.
+- **Auditoria técnica** dos 3 arquivos (diff LAB↔produção, RPCs nas
+  migrations, Passo 0 do Orquestrador) → **APROVADO PARA PRODUÇÃO**.
+- **Deploy** `webhook-wasender` v6 → **v7 ACTIVE** (`--no-verify-jwt`),
+  Supabase `nduxsuxkopuvhwugdkqi`. Nenhuma outra função com sha256
+  alterado; nenhum secret alterado (`WASENDER_*` de produção já eram os
+  da sessão 2415, digests conferidos).
+- **Smoke read-only pós-deploy:** `POST` sem `X-Webhook-Signature` → 401;
+  `GET` → 200; `PUT` → 405.
+- **Teste real de produção** (aprovado pelo usuário): ciclo `#humano` →
+  cliente sem resposta da IA → `#ia` → cliente respondido pela IA —
+  transições de estado e pausa/retomada da IA confirmadas. A confirmação
+  na conversa é best-effort (coberta pelos testes T15–T17; a entrega em
+  produção não foi objeto de observação dedicada).
+
+### Pendências (ver §24 do documento mestre)
+
+Canal de saída / go-live do "Plano B" (gate separado) · sem feedback ao
+atendente em comando digitado errado ou sem `cleanedSenderPn` (deliberado)
+· modelo mono-operador · `pushName` não confirmado no payload WasenderAPI
+· decidir se a suíte `comando_atendimento_upsert` é copiada para este
+repositório (hoje só no LAB).
