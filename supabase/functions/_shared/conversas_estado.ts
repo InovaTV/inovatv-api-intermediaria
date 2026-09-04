@@ -103,6 +103,26 @@ export async function buscarConversaPorId(
   return (data as ConversaEstado) ?? null;
 }
 
+// Busca uma conversa por telefone, NUNCA cria (diferente de
+// buscarOuCriarConversa). Usado pelos comandos #humano/#ia recebidos
+// pelo webhook-wasender: se nao ha conversa registrada para aquele
+// numero, nao ha atendimento a assumir/encerrar -- retorna null e o
+// chamador responde uma confirmacao "sem conversa", sem efeito.
+export async function buscarConversaPorTelefone(
+  telefone: string,
+): Promise<ConversaEstado | null> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("conversas_estado")
+    .select("*")
+    .eq("telefone", telefone)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as ConversaEstado) ?? null;
+}
+
 // Lista todas as conversas, paginada, mais recente primeiro
 // (Componente 5 §8) -- qualquer estado, nao so aguardando_humano.
 export async function listarConversas(

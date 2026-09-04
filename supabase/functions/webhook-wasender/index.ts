@@ -35,6 +35,12 @@
 // silencio (POST sem segredo -> 401), mesmo padrao do webhook Meta.
 
 import { registrarMensagemSeNova } from "../_shared/webhook_dedup.ts";
+import { normalizarTelefone } from "../_shared/telefone.ts";
+import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
+import {
+  detectarComandoAtendimento,
+  executarComandoAtendimento,
+} from "../_shared/comando_atendimento.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -304,6 +310,48 @@ function processarStatusUpdate(payload: WasenderPayload): void {
 }
 
 // ----------------------------------------------------------------------------
+// Comandos de atendimento humano (#humano / #ia) digitados no proprio
+// WhatsApp Business do 2415. Teste real 2026-09-04: chegam como
+// messages.upsert + key.fromMe === true, com o telefone do CLIENTE em
+// key.cleanedSenderPn (remoteJid vem como @lid, inutil). A deteccao e a
+// deduplicacao por key.id ja rodaram sincronas no handler; aqui so
+// executa a RPC de estado e envia a confirmacao curta na propria
+// conversa.
+//
+// LOOP: a confirmacao NAO e "#humano"/"#ia" -- o eco dela como
+// messages.upsert cai no ramo "mensagem fromMe normal" e e ignorado.
+// ----------------------------------------------------------------------------
+async function processarComandoUpsertPosDedup(
+  keyId: string,
+  comando: "assumir" | "encerrar",
+  telefoneCanonico: string,
+): Promise<void> {
+  try {
+    const resultado = await executarComandoAtendimento(comando, telefoneCanonico);
+    console.log(
+      "[webhook-wasender] comando de atendimento humano processado",
+      JSON.stringify({ id: keyId, comando, outcome: resultado.outcome }),
+    );
+    if (resultado.confirmacao) {
+      // best-effort: falha de envio nao desfaz a mudanca de estado.
+      const envio = await enviarMensagemWhatsApp(telefoneCanonico, resultado.confirmacao);
+      if (envio.outcome !== "success") {
+        console.log(
+          "[webhook-wasender] falha ao enviar confirmacao do comando",
+          JSON.stringify({ id: keyId, comando }),
+        );
+      }
+    }
+  } catch (erro) {
+    console.log(
+      "[webhook-wasender] excecao ao processar comando de atendimento",
+      JSON.stringify({ id: keyId, comando }),
+      String(erro),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Normaliza data.messages para array (a doc mostra objeto unico; Baileys
 // costuma usar array -- tratamos as duas formas).
 // ----------------------------------------------------------------------------
@@ -391,10 +439,60 @@ Deno.serve(async (req: Request) => {
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
 
-  // Ignorado DE PROPOSITO: messages.upsert traz entrada E saida -- se
-  // fosse processado junto de messages.received, cada mensagem seria
-  // tratada 2x. Nao assinar este evento no painel; aqui e no-op.
+  // messages.upsert traz entrada E saida. Continua IGNORADO para o fluxo
+  // normal (evita processar cada mensagem 2x junto de messages.received).
+  // UNICA excecao: comandos de atendimento humano (#humano / #ia)
+  // digitados no proprio WhatsApp do 2415 -- so' chegam por este evento,
+  // com key.fromMe === true. Detecta e executa ANTES de ignorar o resto.
   if (evento === "messages.upsert") {
+    try {
+      for (const msg of normalizarMensagens(payload.data)) {
+        const key = msg.key ?? {};
+        if (key.fromMe !== true) continue; // so mensagem do proprio numero
+        if (!key.id) continue;
+        if (ehGrupo(key)) continue; // nunca comando de grupo
+        const comando = detectarComandoAtendimento(extrairTexto(msg));
+        if (!comando) continue; // mensagem fromMe normal -> segue ignorada
+
+        const cleaned =
+          typeof key.cleanedSenderPn === "string" ? soDigitos(key.cleanedSenderPn) : "";
+        if (!cleaned) {
+          // So veio remoteJid @lid, sem cleanedSenderPn -- nao da para
+          // identificar o cliente destinatario. Ignora o comando.
+          console.log(
+            "[webhook-wasender] comando sem cleanedSenderPn -- ignorado",
+            JSON.stringify({ id: key.id }),
+          );
+          continue;
+        }
+
+        // Dedup atomica por key.id -- retry / upsert duplicado nao
+        // executa a RPC 2x. So os comandos passam por aqui; mensagens
+        // fromMe normais nunca sao registradas (comportamento inalterado).
+        const dedup = await registrarMensagemSeNova(key.id);
+        if (dedup !== "nova") {
+          console.log(
+            "[webhook-wasender] comando duplicado (dedup) -- ignorado",
+            JSON.stringify({ id: key.id }),
+          );
+          continue;
+        }
+
+        const telefoneCanonico = normalizarTelefone(cleaned);
+        EdgeRuntime.waitUntil(
+          processarComandoUpsertPosDedup(key.id, comando, telefoneCanonico),
+        );
+      }
+    } catch (erro) {
+      // Erro real de dedup (banco) -- nao confirma o evento, WasenderAPI
+      // reenvia. Mesmo padrao do ramo messages.received.
+      console.log(
+        "[webhook-wasender] erro ao deduplicar comando upsert -- evento NAO confirmado",
+        String(erro),
+      );
+      return new Response("Erro interno ao processar comando", { status: 500 });
+    }
+
     console.log("[webhook-wasender] messages.upsert ignorado de proposito (evita duplicidade)");
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
