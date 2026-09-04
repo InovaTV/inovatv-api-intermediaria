@@ -215,6 +215,99 @@ export function montarMensagemMultiplosAcessosRenovacao(
   ].join("\n");
 }
 
+// ────────────────────────────────────────────────────────────────────
+// UX de apresentacao de DADOS DE ACESSO em conversa normal (consulta)
+// -- revisao aprovada 2026-09-04 (inovatv-wasender-lab). Bloco
+// DETERMINISTICO, NUNCA gerado pelo Gemini -- enviado pelo Orquestrador
+// quando o cliente pede dados do proprio acesso ("quando meu plano
+// vence?", "meu usuario", "meus dados", ...). NAO e' o fluxo de
+// renovacao (que tem suas proprias mensagens, intocadas).
+//
+// Campos APROVADOS: Nome do cadastro, Usuario, Servidor, Plano,
+// Vencimento (data + hora). NUNCA: telas, senha, aplicativo,
+// dispositivo, MAC, e-mail (os 4 ultimos nem existem no /status).
+//
+// Vencimento: o /status devolve ISO 8601 com offset (ex.
+// "2026-10-30T20:59:00-03:00"). formatarVencimentoConsulta reformata
+// pra "DD/MM/AAAA HH:MM" em America/Sao_Paulo -- a HORA vem EXATAMENTE
+// do Rocket, nunca escolhida/alterada/arredondada. Valor invalido/null
+// -> "nao informado".
+//
+// Numeracao: multiplos acessos -> "1.", "2.", ... NO INICIO DA LINHA,
+// FORA do negrito. Contrato do parser de selecao numerica congelado
+// (buscarUltimaMensagemIa/mapaNumeroAcesso). Acesso UNICO -> SEM
+// numero (nao ha o que selecionar; apresentacao natural).
+export interface DadosAcessoApresentacao {
+  nome: string | null;
+  usuario: string | null;
+  servidorNome: string | null;
+  planoNome: string | null;
+  vencimento: string | null; // ISO 8601 cru, exatamente como o /status devolveu
+}
+
+export function formatarVencimentoConsulta(iso: string | null): string {
+  if (!iso) return "não informado";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "não informado";
+  return d
+    .toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+    .replace(", ", " ");
+}
+
+function blocoDadosAcesso(a: DadosAcessoApresentacao, numero: number | null): string {
+  const titulo =
+    numero !== null
+      ? `${numero}. *${a.nome ?? "não informado"}*`
+      : `*${a.nome ?? "não informado"}*`;
+  return [
+    titulo,
+    `🔑 Usuário: ${a.usuario ?? "não informado"}`,
+    `🖥️ Servidor: ${a.servidorNome ?? "não informado"}`,
+    `📦 Plano: ${a.planoNome ?? "não informado"}`,
+    `📅 Vencimento: ${formatarVencimentoConsulta(a.vencimento)}`,
+  ].join("\n");
+}
+
+export function montarMensagemAcessosConsulta(
+  acessos: DadosAcessoApresentacao[],
+): string {
+  if (acessos.length === 1) {
+    // Refinamento visual (2026-09-04): titulo padronizado com o
+    // servidor do acesso. Campos aprovados INALTERADOS.
+    const srv = acessos[0].servidorNome;
+    const titulo = srv ? `📋 *Seu acesso ${srv}*` : "📋 *Seu acesso*";
+    return [titulo, "", blocoDadosAcesso(acessos[0], null)].join("\n");
+  }
+  // Lista de MULTIPLOS acessos -- formato VALIDADO, NAO alterar: a
+  // numeracao "1.", "2.", ... no inicio da linha (fora do negrito) e'
+  // contrato do parser de selecao (buscarUltimaMensagemIa/mapaNumeroAcesso).
+  const blocos = acessos.map((a, i) => blocoDadosAcesso(a, i + 1));
+  return [
+    "📋 *Seus acessos*",
+    "",
+    blocos.join(`\n\n${SEPARADOR_ACESSOS}\n\n`),
+    "",
+    "Me diga o número do acesso que você quer consultar.",
+  ].join("\n");
+}
+
+// Refinamento visual (2026-09-04): confirmacao FIXA e curta enviada
+// LOGO APOS uma selecao numerica ("1"/"2"/...) que resolveu um acesso.
+// NAO repete nome do cadastro / plano / vencimento -- isso e' pedido a
+// parte, via montarMensagemAcessosConsulta. NUNCA gerada pelo Gemini.
+export function montarMensagemAcessoSelecionado(servidorNome: string | null): string {
+  const alvo = servidorNome ? `seu acesso ${servidorNome}` : "esse acesso";
+  return [`Perfeito! Vou considerar ${alvo}. 👍`, "", "Como posso ajudar?"].join("\n");
+}
+// ────────────────────────────────────────────────────────────────────
+
 // Renovacao em lote (Etapa 1, 2026-08-29) -- UX aprovada. Confirmacao
 // UNICA para N acessos. Valores por acesso e total vem de
 // _shared/precos_renovacao.ts (regra comercial INTERNA -- nunca citada

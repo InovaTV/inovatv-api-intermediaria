@@ -39,7 +39,7 @@ function camposCliente(status: StatusResult): string {
 export function montarContextoCliente(
   telefone: string,
   statusResults: StatusResult[],
-  opts: { matchIndisponivel?: boolean } = {},
+  opts: { matchIndisponivel?: boolean; acessoSelecionadoPublicId?: string | null } = {},
 ): string | null {
   if (opts.matchIndisponivel) {
     return [
@@ -51,8 +51,26 @@ export function montarContextoCliente(
 
   if (statusResults.length === 0) return null;
 
-  const linhas =
-    statusResults.length === 1
+  // Selecao de acesso em conversa NORMAL (plano Selecao de acesso,
+  // secao 4-C, inovatv-wasender-lab). Quando o cliente ja escolheu um
+  // acesso (por numero na lista, ou nomeando o servidor) e esse acesso
+  // existe no conjunto atual, o Gemini ve SO' esse acesso -- usando
+  // EXATAMENTE o formato de 1 acesso ja testado (Componente 1 §12), sem
+  // formato novo. Fora disso (nenhuma selecao, ou selecao ja invalida),
+  // o comportamento de N acessos e' 100% inalterado.
+  const acessoSelecionado =
+    opts.acessoSelecionadoPublicId != null
+      ? statusResults.find(
+          (s) =>
+            s.publicId === opts.acessoSelecionadoPublicId &&
+            s.outcome === "success" &&
+            !!s.cliente,
+        )
+      : undefined;
+
+  const linhas = acessoSelecionado
+    ? [camposCliente(acessoSelecionado)]
+    : statusResults.length === 1
       ? [camposCliente(statusResults[0])]
       : statusResults.map(
           (s, i) => `Acesso ${i + 1}/${statusResults.length}: ${camposCliente(s)}`,

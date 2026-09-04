@@ -143,7 +143,11 @@ import {
   atualizarSessao,
   expirarSessaoAtomicamente,
 } from "../_shared/conversas_estado.ts";
-import { inserirMensagem, contarMensagensDaConversa } from "../_shared/mensagens_atendimento.ts";
+import {
+  inserirMensagem,
+  contarMensagensDaConversa,
+  buscarUltimaMensagemIa,
+} from "../_shared/mensagens_atendimento.ts";
 import {
   chamarMatch,
   chamarStatus,
@@ -153,7 +157,13 @@ import { montarContextoCliente, montarContextoConversa } from "../_shared/contex
 import { buscarConhecimentoRelevante } from "../_shared/conhecimento.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
-import { enviarMensagemWhatsApp, enviarMensagemInterativaWhatsApp, enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+// LAB (inovatv-wasender-lab): a via de ENVIO aponta para o cliente
+// WasenderAPI, nao para o whatsapp_client.ts (Meta). Mesmas 3 funcoes,
+// mesmas assinaturas, mesmo contrato EnvioWhatsAppResultado -- nenhum
+// call site abaixo muda. O whatsapp_client.ts (Meta) permanece intocado
+// como referencia. Ver _shared/wasender_client.ts e a "AUDITORIA
+// DOCUMENTAL DO WASENDERAPI -- 2026-09-04" no NEXT_SESSION.md.
+import { enviarMensagemWhatsApp, enviarMensagemInterativaWhatsApp, enviarTemplateWhatsApp } from "../_shared/wasender_client.ts";
 import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
@@ -168,6 +178,8 @@ import {
   montarMensagemBotoesConfirmacaoRenovacao,
   montarMensagemMultiplosAcessosRenovacao,
   montarMensagemConfirmacaoLote,
+  montarMensagemAcessosConsulta,
+  montarMensagemAcessoSelecionado,
 } from "../_shared/mensagens_fixas.ts";
 import { normalizarTelefone } from "../_shared/telefone.ts";
 import { nomeApareceComoPalavra } from "../_shared/rotulo_acesso.ts";
@@ -321,6 +333,15 @@ async function gravarAcessoSelecionadoSeCitado(
 // preservado) -- so' influencia o que o Gemini VE no proximo turno,
 // via [CONTEXTO DA CONVERSA] (montarContextoConversa).
 const REGEX_INTENCAO_RENOVACAO = /\brenova(r|ç[aã]o|cao|ndo|d[ao])\b/i;
+
+// UX de apresentacao de dados de acesso (revisao aprovada 2026-09-04,
+// inovatv-wasender-lab) -- opcao (a): o bloco DETERMINISTICO de dados
+// (montarMensagemAcessosConsulta) so' substitui a prosa do Gemini
+// quando a mensagem do cliente E, ela mesma, um pedido de dados do
+// proprio acesso. Fora disso, a resposta "responder" do Gemini segue
+// 100% inalterada -- nada de transformar toda resposta em bloco.
+const REGEX_PEDIDO_DADOS_ACESSO =
+  /\b(vencimento|vence\b|expira\b|meu\s+usu[aá]rio|meu\s+login|meus?\s+dados(\s+(cadastrais|do\s+acesso))?|meu\s+cadastro|dados\s+(do\s+)?(meu\s+)?(acesso|cadastro|plano)|qual\s+(é\s+)?(o\s+)?(meu\s+)?(plano|servidor|usu[aá]rio|vencimento|acesso)\b|quando\s+.{0,20}\b(vence|expira))/i;
 
 // Renovacao em lote (Etapa 1, 2026-08-29) -- resposta do cliente a
 // lista de multiplos acessos pedindo pra renovar TODOS de uma vez.
@@ -974,9 +995,12 @@ Deno.serve(async (req: Request) => {
   const matchIndisponivel =
     matchResult.outcome === "unavailable" || matchResult.outcome === "invalid_request";
 
-  const contextoCliente = montarContextoCliente(telefone, statusResults, {
-    matchIndisponivel,
-  });
+  // NOTA (plano "Selecao de acesso", inovatv-wasender-lab): a chamada
+  // de montarContextoCliente foi MOVIDA para depois do bloco de
+  // "acesso efetivo" abaixo -- ela precisa saber qual acesso o cliente
+  // ja selecionou (por numero ou por nome de servidor) para filtrar o
+  // contexto. contextoCliente so' e' consumido em partesContexto,
+  // bem mais abaixo, entao mover nao muda mais nada.
 
   // Componente 2 (Camada de Conhecimento Empresarial, PROPOSTA_
   // INTEGRACAO_ORQUESTRADOR.md secao 1/3): busca so pelo texto da
@@ -1021,6 +1045,143 @@ Deno.serve(async (req: Request) => {
 
   const ignorarSelecaoAnterior =
     novaIntencaoRenovacaoExplicita || acessoSelecionadoObsoletoPorOperacaoTerminal;
+
+  // ────────────────────────────────────────────────────────────────
+  // Selecao de acesso em conversa NORMAL (nao-renovacao).
+  // Plano "Selecao de acesso em conversas normais", secoes 4-A/4-B/4-C
+  // (inovatv-wasender-lab). Objetivo: quando o cliente escolhe um
+  // acesso (por numero na lista, ou nomeando o servidor), essa escolha
+  // vira ESTADO da conversa e o Gemini passa a ver SO' aquele acesso --
+  // independente de intencao de renovar.
+  //
+  // Isolamento estrito do fluxo de renovacao: TUDO aqui e' gateado por
+  // !ehContextoRenovacao. Quando a conversa esta em contexto de
+  // renovacao, este bloco NAO grava nada, NAO muta conversa e deixa
+  // acessoSelecionadoEfetivoPublicId = null -> montarContextoCliente
+  // segue emitindo os N acessos EXATAMENTE como hoje, e a derivacao de
+  // acessoSelecionadoServidor logo abaixo (que a renovacao usa)
+  // permanece intocada.
+  const acessosOrdenadosParaSelecao = ordenarAcessosMultiplos(statusResults);
+  const haMultiplosAcessosReais = acessosOrdenadosParaSelecao.length >= 2;
+
+  // ehContextoRenovacao: mesma nocao de clienteDemonstrouIntencaoRenovar
+  // usada mais abaixo (REGEX na mensagem atual OU intencao_atual na
+  // sessao), computada aqui so' pra gatear este bloco. Nao substitui
+  // aquela variavel -- ela continua sendo calculada e usada como hoje.
+  const ehContextoRenovacao =
+    novaIntencaoRenovacaoExplicita ||
+    (!ignorarSelecaoAnterior && conversa.intencao_atual === "renovacao");
+
+  // Gatilho 4-A + 4-B: a lista de acessos em conversa NORMAL e' PROSA do
+  // Gemini (numeracao arbitraria escolhida por ele, NAO
+  // ordenarAcessosMultiplos). Por isso o mapa numero->acesso e' extraido
+  // do TEXTO da ULTIMA mensagem da IA: para cada segmento iniciado por
+  // "N)"/"N."/"N -"/"N:" casa o nome do servidor (statusResults) que
+  // aparece nele. Deterministico (mesmo texto + mesmo conjunto -> mesmo
+  // mapa). Se >=2 numeros mapearem, a lista esta "pendente" e um numero
+  // seco vira selecao. Se nao der pra mapear, o numero segue ao Gemini
+  // como texto (degradacao segura). Best-effort na leitura da mensagem.
+  const mapaNumeroAcesso = new Map<
+    number,
+    StatusResult & { cliente: NonNullable<StatusResult["cliente"]> }
+  >();
+  if (haMultiplosAcessosReais && !ehContextoRenovacao) {
+    let ultimaIa: string | null = null;
+    try {
+      ultimaIa = await buscarUltimaMensagemIa(conversa.conversation_id);
+    } catch {
+      ultimaIa = null;
+    }
+    if (ultimaIa) {
+      const segmentos = ultimaIa.split(/(?=(?:^|[\s|(\-–—])[1-9]\d*\s*[).:\-–—])/);
+      for (const seg of segmentos) {
+        const inicioNumerado = seg.match(/^[\s|(\-–—]*([1-9]\d*)\s*[).:\-–—]/);
+        if (!inicioNumerado) continue;
+        const num = Number(inicioNumerado[1]);
+        if (mapaNumeroAcesso.has(num)) continue;
+        const casados = acessosOrdenadosParaSelecao.filter((s) =>
+          s.cliente.servidorNome ? nomeApareceComoPalavra(seg, s.cliente.servidorNome) : false,
+        );
+        if (casados.length === 1) mapaNumeroAcesso.set(num, casados[0]);
+      }
+    }
+  }
+  const listaAcessosPendente = mapaNumeroAcesso.size >= 2;
+
+  const numeroSecoSelecaoConsulta = conteudo.trim().match(/^\s*([1-9]\d*)\s*$/);
+  const indiceSelecaoConsulta = numeroSecoSelecaoConsulta
+    ? Number(numeroSecoSelecaoConsulta[1])
+    : null;
+  const selecaoAcessoConsulta =
+    haMultiplosAcessosReais &&
+    !ehContextoRenovacao &&
+    listaAcessosPendente &&
+    indiceSelecaoConsulta !== null &&
+    mapaNumeroAcesso.has(indiceSelecaoConsulta)
+      ? (mapaNumeroAcesso.get(indiceSelecaoConsulta) as StatusResult)
+      : null;
+
+  // De-selecao explicita: cliente pede pra ver todos os acessos de novo.
+  const clienteQuerTodosAcessos =
+    /\b(todos os (meus )?acessos|todas as (minhas )?assinaturas|quais (sao os )?(meus )?acessos|quantos acessos|meus acessos|minhas assinaturas|outro acesso|outra assinatura|lista de acessos)\b/i.test(
+      conteudo,
+    );
+
+  // 4-C: acesso efetivo desta requisicao. Prioridade:
+  //  (1) selecao numerica recem-feita (4-B)
+  //  (2) servidor UNICO citado na mensagem ATUAL do cliente ("e o meu NewOne?")
+  //  (3) acesso_selecionado persistido, ainda no conjunto atual e nao obsoleto
+  //  (—) de-selecao explicita zera tudo
+  let acessoSelecionadoEfetivoPublicId: string | null = null;
+  if (!ehContextoRenovacao) {
+    if (clienteQuerTodosAcessos) {
+      acessoSelecionadoEfetivoPublicId = null;
+      if (conversa.acesso_selecionado) {
+        await atualizarSessao(conversa.conversation_id, { acessoSelecionado: null }).catch(
+          () => {},
+        );
+        conversa.acesso_selecionado = null;
+      }
+    } else if (selecaoAcessoConsulta) {
+      acessoSelecionadoEfetivoPublicId = selecaoAcessoConsulta.publicId;
+    } else if (haMultiplosAcessosReais) {
+      const servidoresCitadosNaMsg = acessosOrdenadosParaSelecao.filter((s) =>
+        s.cliente.servidorNome ? nomeApareceComoPalavra(conteudo, s.cliente.servidorNome) : false,
+      );
+      if (servidoresCitadosNaMsg.length === 1) {
+        acessoSelecionadoEfetivoPublicId = servidoresCitadosNaMsg[0].publicId;
+      } else if (
+        !ignorarSelecaoAnterior &&
+        conversa.acesso_selecionado &&
+        acessosOrdenadosParaSelecao.some((s) => s.publicId === conversa.acesso_selecionado)
+      ) {
+        acessoSelecionadoEfetivoPublicId = conversa.acesso_selecionado;
+      }
+    }
+
+    // Persiste a nova selecao (numero ou servidor citado) -- best-effort,
+    // so' quando MUDA de verdade. A derivacao de acessoSelecionadoServidor
+    // logo abaixo le conversa.acesso_selecionado ja atualizado -> contexto
+    // filtrado e hint de conversa ficam consistentes.
+    if (
+      acessoSelecionadoEfetivoPublicId &&
+      acessoSelecionadoEfetivoPublicId !== conversa.acesso_selecionado
+    ) {
+      await atualizarSessao(conversa.conversation_id, {
+        acessoSelecionado: acessoSelecionadoEfetivoPublicId,
+      }).catch(() => {});
+      conversa.acesso_selecionado = acessoSelecionadoEfetivoPublicId;
+    }
+  }
+
+  // montarContextoCliente MOVIDO pra ca (era logo apos matchIndisponivel):
+  // agora com o acesso efetivo, pra filtrar o [DADOS CONECTADOS - CLIENTE]
+  // ao acesso escolhido quando houver um.
+  const contextoCliente = montarContextoCliente(telefone, statusResults, {
+    matchIndisponivel,
+    acessoSelecionadoPublicId: acessoSelecionadoEfetivoPublicId,
+  });
+  // ────────────────────────────────────────────────────────────────
 
   // Memoria de sessao (2026-08-23): resolve conversa.acesso_selecionado
   // (public_id guardado) contra o conjunto FRESCO de statusResults
@@ -1149,6 +1310,81 @@ Deno.serve(async (req: Request) => {
       clienteDemonstrouIntencaoRenovar &&
       resolverAcessoRenovacao(conteudo, statusResults, acessoSelecionadoServidor) === null;
 
+    // ── UX de apresentacao de DADOS DE ACESSO (revisao aprovada
+    // 2026-09-04, inovatv-wasender-lab; Abordagem A + opcao (a)) ──────
+    // textoRespostaCliente = o que o cliente REALMENTE recebe quando o
+    // Gemini classifica "responder". Substitui a prosa do Gemini por um
+    // bloco DETERMINISTICO (montarMensagemAcessosConsulta) SO' quando,
+    // TODOS ao mesmo tempo:
+    //   - tipo === "responder" e Validador aprovou;
+    //   - NAO e' contexto de renovacao (ehContextoRenovacao);
+    //   - NAO e' o interceptor de lista de renovacao (C3);
+    //   - a mensagem do CLIENTE e' um pedido de dados de acesso
+    //     (REGEX_PEDIDO_DADOS_ACESSO) -- opcao (a). Excecao: com 2+
+    //     acessos e nenhum selecionado, tambem entra quando a PROSA do
+    //     Gemini ja esta apresentando a lista (>=2 servidores citados),
+    //     pra padronizar a lista de escolha.
+    // A MESMA string vai pra gravacao de historico e pro envio (Painel
+    // bate com o WhatsApp). Fora dessas condicoes -> geminiData.texto,
+    // 100% inalterado. NAO toca prompt/contexto/validador/renovacao/
+    // maquina de estados/selecao. A numeracao do bloco ("1." fora do
+    // negrito) respeita o contrato do parser de selecao congelado.
+    const textoRespostaCliente = ((): string => {
+      if (
+        !validacao.aprovado ||
+        geminiData.tipo !== "responder" ||
+        ehContextoRenovacao ||
+        interceptarListaMultiplosAcessos
+      ) {
+        return geminiData.texto;
+      }
+      // Refinamento visual (2026-09-04): quando a mensagem ATUAL foi uma
+      // SELECAO NUMERICA que resolveu um acesso agora (selecaoAcessoConsulta
+      // != null -- ja implica !ehContextoRenovacao), a resposta e' uma
+      // confirmacao FIXA e curta, NUNCA a prosa do Gemini, sem repetir
+      // dados. A selecao ja foi persistida pelo bloco 4-B; aqui so' o texto.
+      if (selecaoAcessoConsulta) {
+        return montarMensagemAcessoSelecionado(
+          selecaoAcessoConsulta.cliente?.servidorNome ?? null,
+        );
+      }
+      const pediuDadosAcesso = REGEX_PEDIDO_DADOS_ACESSO.test(conteudo);
+      const geminiApresentaLista =
+        acessosOrdenadosParaSelecao.filter((s) =>
+          s.cliente.servidorNome
+            ? nomeApareceComoPalavra(geminiData.texto, s.cliente.servidorNome)
+            : false,
+        ).length >= 2;
+
+      let apresentar:
+        | (StatusResult & { cliente: NonNullable<StatusResult["cliente"]> })[]
+        | null = null;
+      if (acessoSelecionadoEfetivoPublicId) {
+        const sel = acessosOrdenadosParaSelecao.find(
+          (s) => s.publicId === acessoSelecionadoEfetivoPublicId,
+        );
+        if (sel && pediuDadosAcesso) apresentar = [sel];
+      } else if (acessosOrdenadosParaSelecao.length >= 2) {
+        if (pediuDadosAcesso || geminiApresentaLista) {
+          apresentar = acessosOrdenadosParaSelecao;
+        }
+      } else if (acessosOrdenadosParaSelecao.length === 1) {
+        if (pediuDadosAcesso) apresentar = acessosOrdenadosParaSelecao;
+      }
+
+      if (!apresentar) return geminiData.texto;
+      return montarMensagemAcessosConsulta(
+        apresentar.map((s) => ({
+          nome: s.cliente.nome ?? null,
+          usuario: s.cliente.usuario ?? null,
+          servidorNome: s.cliente.servidorNome ?? null,
+          planoNome: s.cliente.planoNome ?? null,
+          vencimento: s.cliente.vencimento ?? null,
+        })),
+      );
+    })();
+    // ────────────────────────────────────────────────────────────────
+
     // Renovacao em lote (Etapa 1, 2026-08-29) -- cliente respondeu "0"
     // (ou "os dois"/"ambos"/...) a lista de multiplos acessos. Guarda
     // igual a do interceptor C3: 2+ acessos reais + intencao de renovar
@@ -1272,7 +1508,11 @@ Deno.serve(async (req: Request) => {
       // derruba a resposta ao cliente.
       try {
         await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
-        await inserirMensagem(conversa.conversation_id, "ia", geminiData.texto, null);
+        // textoRespostaCliente (nao geminiData.texto): grava no historico
+        // EXATAMENTE o que o cliente recebeu -- o bloco deterministico de
+        // dados de acesso quando ele foi acionado (revisao UX 2026-09-04),
+        // ou a prosa do Gemini nos demais casos.
+        await inserirMensagem(conversa.conversation_id, "ia", textoRespostaCliente, null);
       } catch {
         // best-effort, mesma filosofia do aviso ao Jose (§16-A)
       }
@@ -1533,12 +1773,15 @@ Deno.serve(async (req: Request) => {
       if (conversaAtual.estado === "aguardando_humano") {
         envioResultado = { enviado: false };
       } else {
-        const envio = await enviarMensagemWhatsApp(telefone, geminiData.texto);
+        // textoRespostaCliente: bloco deterministico de dados de acesso
+        // quando acionado (revisao UX 2026-09-04), senao a prosa do
+        // Gemini -- mesma string ja gravada no historico acima.
+        const envio = await enviarMensagemWhatsApp(telefone, textoRespostaCliente);
         envioResultado = { enviado: envio.outcome === "success" };
         if (envioResultado.enviado) {
           await gravarAcessoSelecionadoSeCitado(
             conversa.conversation_id,
-            geminiData.texto,
+            textoRespostaCliente,
             statusResults,
           );
           // Memoria de sessao (extensao 2026-08-23): a mensagem que

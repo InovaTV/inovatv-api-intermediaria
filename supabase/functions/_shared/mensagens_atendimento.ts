@@ -50,6 +50,30 @@ export async function contarMensagensDaConversa(
   return count ?? 0;
 }
 
+// Ultima mensagem da IA nesta conversa (plano "Selecao de acesso",
+// secao 4-A, inovatv-wasender-lab). O Orquestrador usa isto so' pra
+// decidir se uma LISTA de multiplos acessos acabou de ser apresentada
+// (gatilho da selecao numerica "1"/"2" em conversa normal). Best-
+// effort no chamador (try/catch -> null). Aditiva: nenhuma funcao
+// existente e' alterada.
+export async function buscarUltimaMensagemIa(
+  conversationId: string,
+): Promise<string | null> {
+  const client = getServiceClient();
+
+  const { data, error } = await client
+    .from("mensagens_conversa")
+    .select("texto")
+    .eq("conversation_id", conversationId)
+    .eq("origem", "ia")
+    .order("criado_em", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data?.texto as string | undefined) ?? null;
+}
+
 // Historico completo de uma conversa (Componente 5 §8) -- usado pelo
 // Painel pra mostrar tudo que ja foi trocado, sem limite de janela de
 // tempo. Nao usado pelo Orquestrador (ele so insere, nunca precisa
