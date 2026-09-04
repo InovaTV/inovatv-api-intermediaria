@@ -1043,8 +1043,27 @@ Deno.serve(async (req: Request) => {
       conversa.acesso_selecionado,
     ));
 
+  // Reset da selecao/intencao guardada para o CONTEXTO DE RENOVACAO
+  // (Peca 1 + Peca 2). Inalterado -- alimenta ehContextoRenovacao,
+  // intencaoRenovacaoEstabelecida e acessoSelecionadoServidor (e, por
+  // eles, todo o fluxo de renovacao a jusante). ultimaOperacaoRenovacao
+  // EhTerminal() continua sendo consultada exatamente como antes.
   const ignorarSelecaoAnterior =
     novaIntencaoRenovacaoExplicita || acessoSelecionadoObsoletoPorOperacaoTerminal;
+
+  // Reset da selecao para a CONTINUIDADE DE CONSULTA NORMAL. So' um
+  // pedido NOVO e explicito de renovar (Peca 1) reseta uma selecao de
+  // consulta. A Peca 2 (ultima operacao de renovacao TERMINAL) NAO se
+  // aplica aqui: uma renovacao antiga e ja concluida daquele mesmo
+  // acesso nao pode apagar a selecao "1 -> BLAZE" que o cliente acabou
+  // de fazer so' para CONSULTAR seus dados. Bug real 2026-09-04, so'
+  // reproduzivel quando o acesso tem historico real de renovacao
+  // terminal -- os fixtures artificiais das suites nao cobriam essa
+  // condicao (ultimaOperacaoRenovacaoEhTerminal retornava false por
+  // "nenhuma operacao"). A invalidacao por operacao terminal segue
+  // valendo integralmente para o contexto de renovacao, via
+  // ignorarSelecaoAnterior acima.
+  const ignorarSelecaoParaConsulta = novaIntencaoRenovacaoExplicita;
 
   // ────────────────────────────────────────────────────────────────
   // Selecao de acesso em conversa NORMAL (nao-renovacao).
@@ -1151,7 +1170,7 @@ Deno.serve(async (req: Request) => {
       if (servidoresCitadosNaMsg.length === 1) {
         acessoSelecionadoEfetivoPublicId = servidoresCitadosNaMsg[0].publicId;
       } else if (
-        !ignorarSelecaoAnterior &&
+        !ignorarSelecaoParaConsulta &&
         conversa.acesso_selecionado &&
         acessosOrdenadosParaSelecao.some((s) => s.publicId === conversa.acesso_selecionado)
       ) {
