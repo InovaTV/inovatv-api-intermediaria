@@ -395,6 +395,26 @@ Deno.serve(async (req: Request) => {
   // fosse processado junto de messages.received, cada mensagem seria
   // tratada 2x. Nao assinar este evento no painel; aqui e no-op.
   if (evento === "messages.upsert") {
+    // LOG TEMPORARIO (autorizado 2026-09-04) -- captura dos campos de
+    // identificacao de CADA mensagem de um messages.upsert real do 2415,
+    // para desenhar o comando #humano/#ia. NAO processa nada: o evento
+    // continua ignorado (return 200 abaixo), sem Orquestrador/RPC/dedup/
+    // envio, sem tocar messages.received. So os 6 campos autorizados --
+    // nunca corpo/conteudo/tokens. Remover apos a captura.
+    for (const msg of normalizarMensagens(payload.data)) {
+      const key = msg.key ?? {};
+      console.log(
+        "[webhook-wasender] DEBUG upsert",
+        JSON.stringify({
+          event: evento,
+          keyId: key.id,
+          fromMe: key.fromMe,
+          remoteJid: key.remoteJid,
+          senderPn: key.senderPn,
+          cleanedSenderPn: key.cleanedSenderPn,
+        }),
+      );
+    }
     console.log("[webhook-wasender] messages.upsert ignorado de proposito (evita duplicidade)");
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
