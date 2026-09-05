@@ -14,6 +14,12 @@ const MAPA = {
   "_shared/conhecimento.ts": "fake_conhecimento.mjs",
   "_shared/gemini_client.ts": "fake_gemini_client.mjs",
   "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
+  // Achado real (2026-09-05, investigacao do "achado D"): o orchestrator
+  // ja importa de wasender_client.ts, nao mais whatsapp_client.ts -- sem
+  // esta entrada, o cliente REAL do Wasender carregava sem mock (sem
+  // WASENDER_API_TOKEN no ambiente de teste -> "unavailable" silencioso,
+  // nenhuma mensagem capturada pelo fake).
+  "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
   "_shared/rocket_valor_cliente.ts": "fake_rocket_valor_cliente.mjs",
   "_shared/tokens_renovacao.ts": "fake_tokens_renovacao.mjs",
   // Etapa 1 (renovacao em lote): renovacoes_lote.ts toca banco

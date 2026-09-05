@@ -192,7 +192,7 @@ async function testeA() {
   configurarDoisAcessos();
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
@@ -290,7 +290,7 @@ async function testeB() {
   configurarDoisAcessos();
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Perfeito, vou preparar a renovação do BLAZE." },
+    data: { tipo: "propor_renovacao", texto: "Perfeito, vou preparar a renovação do BLAZE.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
@@ -324,7 +324,7 @@ async function testeC() {
   configurarMatch({ outcome: "no_match", candidates: [] });
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou te ajudar a renovar!" },
+    data: { tipo: "propor_renovacao", texto: "Vou te ajudar a renovar!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
@@ -361,7 +361,7 @@ async function testeD() {
   configurarDoisAcessos();
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "transferir", texto: "Vou te encaminhar para um atendente." },
+    data: { tipo: "transferir", texto: "Vou te encaminhar para um atendente.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "preciso falar com um humano" }));
@@ -409,7 +409,7 @@ async function testeE() {
     "Você tem mais de um acesso vinculado a este número. Poderia me dizer qual deles você quer renovar?";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: PROSA_GEMINI },
+    data: { tipo: "responder", texto: PROSA_GEMINI, esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
@@ -457,7 +457,7 @@ async function testeF() {
   resetarTudo();
   configurarDoisAcessos();
   const PROSA = "Seu plano Mensal está ativo. Posso ajudar com mais alguma coisa?";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA, esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "meu plano está funcionando?" }));
   await resp.json();
@@ -477,7 +477,7 @@ async function testeG() {
   resetarTudo();
   configurarUmAcesso();
   const PROSA = "Claro! Seu acesso BLAZE pode ser renovado. Deseja seguir?";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA, esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
   await resp.json();
@@ -497,7 +497,7 @@ async function testeH() {
   configurarDoisAcessos();
   getConversaAtual().intencao_atual = "renovacao"; // estabelecida antes desta mensagem
   const PROSA = "Certo! Sobre qual acesso você gostaria de falar?";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA, esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "vamos lá então" }));
   await resp.json();
@@ -523,7 +523,7 @@ async function testeI() {
   getConversaAtual().intencao_atual = "renovacao"; // lista ja foi enviada antes
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Qual acesso você quer renovar?" },
+    data: { tipo: "responder", texto: "Qual acesso você quer renovar?", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
@@ -601,7 +601,7 @@ async function testeJ() {
     cliente: { nome: "Terceiro Acesso", vencimento: "2026-10-01T23:59:00-03:00", planoNome: "Mensal", servidorNome: "OUTRO", telas: 1, valor: "35.00" },
   });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -625,7 +625,7 @@ async function testeK() {
   getConversaAtual().intencao_atual = "renovacao"; // lista ja enviada antes
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Qual acesso você quer renovar?" },
+    data: { tipo: "responder", texto: "Qual acesso você quer renovar?", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
@@ -661,7 +661,7 @@ async function testeL() {
   resetarTudo();
   configurarDoisAcessos();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: " 2 " })); // espacos: mesmo formato ancorado do "0"
   const body = await resp.json();
@@ -689,7 +689,7 @@ async function testeM() {
   resetarTudo();
   configurarDoisAcessos();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "Qual deles?" } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "Qual deles?", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "3" }));
   const body = await resp.json();
@@ -714,7 +714,7 @@ async function testeN() {
   resetarTudo();
   configurarDoisAcessos();
   const PROSA = "Certo, anotado. Mais alguma coisa?";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: PROSA, esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
   await resp.json();
@@ -736,7 +736,7 @@ async function testeO() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do NewOne." },
+    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do NewOne.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero o NewOne" }));
@@ -765,7 +765,7 @@ async function testeP() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE." },
+    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
@@ -805,7 +805,7 @@ async function testeQ() {
   configurarTokenExistente(null);
   definirLoteAtivoParaPublicId(PUBLIC_ID_B); // lote cobre o acesso 2 (NewOne)
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   const body = await resp.json();
@@ -833,7 +833,7 @@ async function testeR() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE." },
+    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
@@ -874,7 +874,7 @@ async function testeS() {
     planoNome: "Mensal", valor: "35.00", vencimento: "2026-11-03T23:59:00-03:00", usuario: "gcnv6v",
   });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   const body = await resp.json();
@@ -906,7 +906,7 @@ async function testeS2() {
   configurarSigmaMaisUnitv();
   definirResolucaoContaUnitv({ outcome: "nao_encontrado" });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   await resp.json();
@@ -947,7 +947,7 @@ async function testeS3() {
     cliente: { nome: "José Antonio Dos Santos", usuario: null, vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
   });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   await resp.json();
@@ -974,7 +974,7 @@ async function testeS4() {
   configurarSigmaMaisUnitv();
   definirResolucaoContaUnitv({ outcome: "indisponivel" });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   await resp.json();
@@ -1005,7 +1005,7 @@ async function testeT() {
   resetarTudo();
   configurarSigmaMaisUnitv();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
   const body = await resp.json();
@@ -1029,7 +1029,7 @@ async function testeU() {
   resetarTudo();
   configurarSigmaMaisUnitv();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   const body = await resp.json();
@@ -1061,7 +1061,7 @@ async function testeU2() {
   configurarSigmaMaisUnitv();
   definirResolucaoContaUnitv({ outcome: "indisponivel" });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   const body = await resp.json();
@@ -1092,7 +1092,7 @@ async function testeV() {
   resetarTudo();
   configurarDoisUnitv();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -1114,7 +1114,7 @@ async function testeV2() {
   configurarDoisUnitv();
   definirResolucaoContaUnitv({ outcome: "ambiguo" });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -1140,7 +1140,7 @@ async function testeV4() {
   configurarSigmaMaisUnitv();
   definirResolucaoContaUnitv({ outcome: "nao_encontrado" });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -1183,7 +1183,7 @@ async function testeV3() {
     cliente: { nome: "José Antonio Dos Santos", vencimento: "2026-11-03T23:59:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
   });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -1216,7 +1216,7 @@ async function testeW() {
     planoNome: "Mensal", valor: "35.00", vencimento: "2026-11-03T23:59:00-03:00", usuario: "gcnv6v",
   });
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
   await resp.json();
@@ -1242,7 +1242,7 @@ async function testeX() {
   resetarTudo();
   configurarDoisAcessos(); // BLAZE + NewOne (ambos sigma)
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "0" }));
   await resp.json();
@@ -1272,7 +1272,7 @@ async function testeY() {
   configurarDoisAcessosOrdemInvertida();
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou te ajudar a renovar!" },
+    data: { tipo: "propor_renovacao", texto: "Vou te ajudar a renovar!", esclarecimento: false },
   });
   const respLista = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
   await respLista.json();
@@ -1293,7 +1293,7 @@ async function testeY() {
   resetarTudo();
   configurarDoisAcessosOrdemInvertida();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
   const resp2 = await handler(req({ telefone: TELEFONE, conteudo: "2" }));
   const body2 = await resp2.json();
   ok(
@@ -1312,7 +1312,7 @@ async function testeY() {
   resetarTudo();
   configurarDoisAcessosOrdemInvertida();
   getConversaAtual().intencao_atual = "renovacao";
-  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "..." } });
+  definirProximaRespostaGemini({ outcome: "success", data: { tipo: "responder", texto: "...", esclarecimento: false } });
   const resp1 = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
   const body1 = await resp1.json();
   ok(
@@ -1340,7 +1340,7 @@ async function testeZ1() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
@@ -1371,7 +1371,7 @@ async function testeZ2() {
     getConversaAtual().intencao_atual = "renovacao";
     definirProximaRespostaGemini({
       outcome: "success",
-      data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+      data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
     });
     const resp = await handler(req({ telefone: TELEFONE, conteudo: frase }));
     await resp.json();
@@ -1393,7 +1393,7 @@ async function testeZ3() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Confirmando sua renovação, um momento." },
+    data: { tipo: "propor_renovacao", texto: "Confirmando sua renovação, um momento.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "pode ser esse acesso mesmo" }));
@@ -1420,7 +1420,7 @@ async function testeZ4() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Vou renovar seu acesso UNITV!" },
+    data: { tipo: "propor_renovacao", texto: "Vou renovar seu acesso UNITV!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o UNITV" }));
@@ -1446,7 +1446,7 @@ async function testeZ5() {
   getConversaAtual().intencao_atual = "renovacao"; // lista foi enviada antes
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "responder", texto: "Qual acesso?" },
+    data: { tipo: "responder", texto: "Qual acesso?", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "1" }));
@@ -1474,7 +1474,7 @@ async function testeZ6() {
   definirUltimaOperacaoTerminalParaPublicId(PUBLIC_ID_A); // ultima renovacao do BLAZE ja terminou
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
@@ -1497,7 +1497,7 @@ async function testeZ7() {
   // NAO marca como terminal -> operacao viva / anafora -> honra
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Confirmando, um momento." },
+    data: { tipo: "propor_renovacao", texto: "Confirmando, um momento.", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "isso, esse mesmo" }));
@@ -1519,7 +1519,7 @@ async function testeZ8() {
   getConversaAtual().intencao_atual = "renovacao";
   definirProximaRespostaGemini({
     outcome: "success",
-    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!" },
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
