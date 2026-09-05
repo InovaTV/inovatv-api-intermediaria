@@ -1,5 +1,34 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-05 — RENOVAÇÃO REAL VIA WASENDER (ChannelTV,
+> R$35) DE PONTA A PONTA, COM DINHEIRO REAL. Duas causas raiz reais
+> encontradas e corrigidas na mesma sessão: (1) Account Protection da
+> sessão Wasender bloqueava o 2º envio rápido em sequência — DESABILITADO
+> na sessão `Tope Tv` `#117404`; (2) `_shared/renovacao_confirmacao.ts`,
+> `renovacao-sigma-resultado/index.ts` e `_shared/notificacao_transferencia.ts`
+> ainda enviavam pelo cliente Meta (restrito) em vez do Wasender (que já
+> funciona) — os 3 migrados (import trocado, contrato idêntico).**
+> Também nesta sessão: campo estruturado `esclarecimento` no Gemini
+> (caso Elias, IA pode pedir esclarecimento em pergunta ampla/ambígua em
+> vez de transferir) e o adaptador de confirmação de renovação via
+> Wasender (`_shared/renovacao_wasender_resolver.ts` +
+> `webhook-wasender/index.ts`) — ambos já estavam **deployados em
+> produção** desde antes desta sessão de fechamento, só faltava
+> **commitar** (working tree tinha esse trabalho todo pendente de
+> versionamento). Migration `20260904200000_esclarecimento_pendente.sql`
+> confirmada aplicada em produção mas ausente deste repositório —
+> copiada de `inovatv-wasender-lab` nesta sessão (mesmo conteúdo, só
+> versionamento). Detalhe completo na seção **"SESSÃO 2026-09-05 —
+> RENOVAÇÃO REAL VIA WASENDER + ESCLARECIMENTO + MIGRAÇÃO META→WASENDER"**
+> logo abaixo. **Pendências:** Base Mestra TOPE TV não promovida;
+> `renovacao-sigma-watchdog` ainda tem 3 envios diretos ao cliente via
+> `whatsapp_client.ts` (Meta) para os próprios textos do watchdog
+> (timeout/expiração/lote) — fora do escopo desta migração; outros
+> módulos Meta identificados (ver tabela na seção) permanecem fora
+> desta etapa; comportamento de "Oi" populando `esclarecimento_pendente`
+> registrado para revisão futura, não investigado nesta sessão. Antes
+> disso:**
+>
 > **✅ CHECKPOINT 2026-09-04 — CANAL DE ENTRADA WASENDER: COMANDOS DE
 > OPERADOR `#humano` / `#ia` EM PRODUÇÃO.** `webhook-wasender` v6 → **v7
 > ACTIVE** (`verify_jwt=false`) no Supabase de produção
@@ -76,6 +105,117 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-09-05 — RENOVAÇÃO REAL VIA WASENDER + ESCLARECIMENTO + MIGRAÇÃO META→WASENDER
+
+**Sessão de fechamento — commita/documenta trabalho que já estava
+deployado em produção desde antes desta sessão (esclarecimento +
+adaptador de confirmação Wasender), mais o diagnóstico e correção de
+duas falhas reais de transporte encontradas durante um teste real de
+renovação com dinheiro de verdade.**
+
+### PRODUÇÃO — estado das Edge Functions ao final desta sessão
+
+| Função | Versão registrada no deploy desta etapa | Versão/hash atuais confirmados (`supabase functions list`) |
+|---|---|---|
+| `orchestrator` | v76 | v80, `sha256 cc7272ef3b33c43fc72128a81f3720070efa8bcfb94ff2904fe94ffbb07f2241` (mesmo conteúdo — versão só subiu por rotação de chave JWT da plataforma, sem redeploy nesta sessão) |
+| `webhook-wasender` | v8 | v12, `sha256 60a7d2abc202ab7bb036a8776713d07f0df9d4adef2110d44b9a38bce7496817` (mesma nota acima) |
+| `renovacao-confirmar` | v28 | v28, `sha256 205bdaf38d42e04fb773fb7b455497e4cce3c672faf858c57b077b78296e1e15` |
+| `renovacao-sigma-resultado` | v28 | v28, `sha256 b30d810dcba28627aa7fb54a71b8ccfa52f16b4e2f30a4cdffdd901be7082524` |
+| `renovacao-sigma-watchdog` | v28 | v28, `sha256 7a0e2d0c87867fc5948bd35e5c3adb471babd227b8c2a3a0dd52cbe02252b2c6` — **bundle atualizado** (herda `_shared/notificacao_transferencia.ts` corrigido), **arquivo-fonte do watchdog não alterado** |
+
+`_shared/notificacao_transferencia.ts` migrado para `wasender_client.ts`
+(era `whatsapp_client.ts`/Meta) — afeta as 3 funções acima que o
+importam direta ou transitivamente.
+
+### TESTE REAL — renovação ChannelTV, R$35, ponta a ponta
+
+Cliente de teste (`5517981625486`), acesso ChannelTV, R$35,00, token
+`4dfa9e56-c498-48cb-b032-8806823bbf60`:
+
+1. Proposta ACEITO/CANCELAR chegou no WhatsApp real (após desabilitar
+   Account Protection).
+2. ACEITO processado (`estado='autorizada'`, `operacao_id` vinculado).
+3. Cobrança PIX real criada no Woovi/OpenPix (R$35,00).
+4. Pagamento real efetuado pelo usuário.
+5. Cobrança confirmada `status='pago'`.
+6. Workflow do GitHub Actions disparado, renovação no Sigma concluída.
+7. Vencimento atualizado para **30/12/2026, 20:59:59**
+   (`vencimento_confirmado`).
+8. Mensagem final "✅ Pagamento confirmado!" chegou no WhatsApp real
+   (confirmado pelo usuário e pelo Outgoing Message Activity do
+   Wasender).
+
+### PROBLEMAS ENCONTRADOS E RESOLVIDOS
+
+1. **Account Protection da sessão Wasender bloqueava o 2º envio rápido
+   em sequência** (menos de ~5s depois do 1º envio) — mesma falha que
+   já vinha se repetindo (`renovacao:falha_enviar_botoes_confirmacao`).
+   **Resolvido:** desabilitado manualmente na sessão `Tope Tv` `#117404`
+   (painel `wasenderapi.com`), confirmado antes/depois + sessão
+   continuou conectada. Reenvio de teste da proposta confirmou sucesso
+   imediatamente após a mudança.
+2. **`_shared/renovacao_confirmacao.ts` ainda usava `whatsapp_client.ts`
+   (Meta)** para as mensagens de "preparando pagamento" e do PIX —
+   cliente ficava em silêncio mesmo com a cobrança criada com sucesso.
+   **Resolvido:** import trocado para `wasender_client.ts` (contrato
+   idêntico, mesma assinatura das 3 funções). Reenvio de teste das 2
+   mensagens pendentes deste token confirmou sucesso.
+3. **`renovacao-sigma-resultado/index.ts` ainda usava `whatsapp_client.ts`
+   (Meta)** para o template final "Pagamento confirmado!" e o aviso de
+   dessincronia ao José — mesmo risco do item 2, ainda não exercitado
+   até este teste. **Resolvido:** import trocado para `wasender_client.ts`.
+   Confirmado no teste real (item 8 acima).
+4. **`_shared/notificacao_transferencia.ts` ainda usava `whatsapp_client.ts`
+   (Meta)** para a notificação de transferência humana (cliente +
+   José) — chamado de dentro dos 2 arquivos acima e também de
+   `renovacao-sigma-watchdog`. **Resolvido:** import trocado para
+   `wasender_client.ts`. Herdado automaticamente por
+   `renovacao-confirmar`, `renovacao-sigma-resultado` e
+   `renovacao-sigma-watchdog` (bundle refrescado nos 3, sem alterar o
+   código-fonte do watchdog).
+
+Todas as 3 correções de import são de uma linha cada, contrato
+preservado byte a byte (mesmas assinaturas de função, mesmo tipo de
+retorno) — nenhuma mensagem, destinatário, parâmetro de template ou
+regra de negócio foi alterada.
+
+### PENDÊNCIAS
+
+- **Base Mestra TOPE TV não promovida** — conteúdo comercial (planos,
+  indicação, cancelamento, institucional) segue só no LAB
+  (`inovatv-wasender-lab`), não incorporado à
+  `conhecimento_institucional` de produção.
+- **`renovacao-sigma-watchdog/index.ts` ainda tem 3 envios diretos ao
+  cliente via `whatsapp_client.ts` (Meta)** para textos próprios do
+  watchdog (mensagem consolidada de lote travado, expiração sem
+  pagamento — 2x). Diferente da `notificacao_transferencia.ts` (já
+  migrada), estes 3 são chamadas diretas dentro do próprio arquivo do
+  watchdog, que **não foi alterado nesta etapa** (decisão explícita).
+  Só afeta cenários de falha/timeout do watchdog (backstop, não o
+  caminho principal) — nunca exercitado no teste real acima.
+- **Outros módulos que ainda usam `whatsapp_client.ts` (Meta)**,
+  identificados mas fora do escopo desta etapa:
+  `confirmacao-renovacao/index.ts` (fallback de links antigos, lógica
+  própria duplicada, não importa os arquivos migrados),
+  `painel-atendimento-responder`, `autocura-unitv-monitor`,
+  `autocura-unitv-resultado`, `poc-confirmacao-renovacao`.
+- **Comportamento de "Oi" populando `esclarecimento_pendente`** —
+  observado durante a investigação desta sessão, registrado para
+  revisão futura, não investigado a fundo aqui.
+- Migration `20260904200000_esclarecimento_pendente.sql` estava
+  aplicada em produção mas ausente deste repositório — copiada de
+  `inovatv-wasender-lab` (mesmo conteúdo) nesta sessão, junto do commit
+  de fechamento.
+
+### Funções descartáveis usadas nos testes desta sessão — já removidas
+
+`teste-reenvio-proposta-channeltv` e `teste-reenvio-pix-channeltv`:
+criadas, invocadas uma única vez cada, depois **deletadas do Supabase**
+e removidas do working tree local. Não constam em `supabase functions
+list` nem no git deste repositório.
 
 ---
 
