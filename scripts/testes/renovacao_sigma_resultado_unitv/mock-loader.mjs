@@ -8,6 +8,7 @@ const MAPA = {
   "_shared/notificacao_transferencia.ts": "fake_notificacao_transferencia.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
   "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
+  "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
 };
 export async function resolve(specifier, context, nextResolve) {
   for (const [sufixo, fake] of Object.entries(MAPA)) {

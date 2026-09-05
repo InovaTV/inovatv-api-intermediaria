@@ -10,6 +10,7 @@ const MAPA = {
   "_shared/supabase_client.ts": "fake_supabase_client.mjs",
   "_shared/openpix_client.ts": "fake_openpix_client.mjs",
   "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
+  "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
   "_shared/conversas_estado.ts": "fake_conversas_estado.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
   "_shared/openpix_webhook_signature.ts": "fake_openpix_webhook_signature.mjs",

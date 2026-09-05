@@ -23,7 +23,7 @@
 //   "unavailable", pendencia separada, ainda nao implementada). Esse
 //   comportamento e herdado deliberadamente, nao um bug novo desta
 //   funcao.
-import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "./whatsapp_client.ts";
+import { enviarMensagemWhatsApp, enviarTemplateWhatsApp } from "./wasender_client.ts";
 import { inserirMensagem } from "./mensagens_atendimento.ts";
 import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,

@@ -21,7 +21,7 @@ import {
 } from "./renovacoes_lote.ts";
 import { criarCobrancaOpenPix } from "./openpix_client.ts";
 import { criarCobrancaPixRegistro } from "./cobrancas_pix.ts";
-import { enviarMensagemWhatsApp } from "./whatsapp_client.ts";
+import { enviarMensagemWhatsApp } from "./wasender_client.ts";
 import { acionarTransferenciaHumana } from "./conversas_estado.ts";
 import { notificarTransferenciaHumana } from "./notificacao_transferencia.ts";
 import { inserirMensagem } from "./mensagens_atendimento.ts";

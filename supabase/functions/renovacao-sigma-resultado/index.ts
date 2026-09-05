@@ -39,7 +39,7 @@ import {
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
-import { enviarTemplateWhatsApp, enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarTemplateWhatsApp, enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import {
   NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
   IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,

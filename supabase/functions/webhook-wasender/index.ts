@@ -41,6 +41,13 @@ import {
   detectarComandoAtendimento,
   executarComandoAtendimento,
 } from "../_shared/comando_atendimento.ts";
+// Adaptador de confirmacao de renovacao (Opcao C, aprovado 2026-09-04) --
+// so RESOLVE identificacao+acao e produz {telefone, buttonReplyId}. Nunca
+// chama confirmarRenovacao()/Woovi/OpenPix -- isso continua sendo
+// responsabilidade exclusiva de renovacao-confirmar/_shared/
+// renovacao_confirmacao.ts, encaminhado abaixo pelo MESMO contrato HTTP
+// que o webhook Meta ja usa (ver encaminharParaRenovacaoConfirmar).
+import { resolverRoteamentoConfirmacaoRenovacao } from "../_shared/renovacao_wasender_resolver.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -186,6 +193,55 @@ async function chamarOrquestrador(
 }
 
 // ----------------------------------------------------------------------------
+// Encaminhamento da confirmacao de renovacao (Wasender) -- MESMO contrato
+// HTTP que webhook/index.ts (Meta)::confirmarRenovacaoWhatsApp ja usa:
+// mesmo endpoint, mesmo header X-Internal-Token, mesmo body de 2 campos.
+// So transporta o payload ja pronto produzido pelo adaptador -- nunca
+// interpreta o buttonReplyId aqui (isso e' feito por
+// renovacao-confirmar/index.ts, via a mesma regex ID_RENOVACAO de sempre),
+// nunca cria cobranca, nunca altera estado de renovacao, nunca fala com
+// Woovi/OpenPix. A logica de negocio inteira permanece em
+// _shared/renovacao_confirmacao.ts, intocada.
+// ----------------------------------------------------------------------------
+async function encaminharParaRenovacaoConfirmar(
+  telefone: string,
+  buttonReplyId: string,
+): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const tokenInterno = Deno.env.get("RENOVACAO_CONFIRMAR_INTERNAL_TOKEN");
+
+  if (!supabaseUrl || !tokenInterno) {
+    console.log(
+      "[webhook-wasender] encaminhamento a renovacao-confirmar abortado -- configuracao ausente",
+      JSON.stringify({ supabaseUrlPresente: !!supabaseUrl, tokenPresente: !!tokenInterno }),
+    );
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/renovacao-confirmar`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Token": tokenInterno,
+      },
+      body: JSON.stringify({ telefone, buttonReplyId }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!resp.ok) {
+      const corpo = await resp.text().catch(() => "");
+      console.log(
+        "[webhook-wasender] encaminhamento a renovacao-confirmar falhou",
+        JSON.stringify({ status: resp.status, corpo }),
+      );
+    }
+  } catch (erro) {
+    console.log("[webhook-wasender] excecao ao encaminhar a renovacao-confirmar", String(erro));
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Resolucao de telefone a partir da key do WasenderAPI.
 // Prioridade: cleanedSenderPn -> senderPn (strip @s.whatsapp.net) ->
 //             remoteJid @s.whatsapp.net -> null.
@@ -271,6 +327,59 @@ async function processarMensagemRecebidaPosDedup(msg: WasenderMensagem): Promise
     );
     return;
   }
+
+  // Adaptador de confirmacao de renovacao (Opcao C, aprovado 2026-09-04) --
+  // tenta resolver a mensagem como confirmacao ANTES de repassar ao
+  // Orquestrador. So' leitura (renovacoes_lote/tokens_renovacao/
+  // conversas_estado.intencao_atual); nunca decide estado de negocio.
+  const roteamentoRenovacao = await resolverRoteamentoConfirmacaoRenovacao(telefone, texto);
+
+  if (roteamentoRenovacao.outcome === "roteado") {
+    // Encaminha pro MESMO endpoint interno que o webhook Meta ja usa --
+    // renovacao-confirmar continua sendo o unico lugar que interpreta o
+    // token e chama confirmarRenovacao()/Woovi/OpenPix. Early return:
+    // esta mensagem NUNCA tambem chega ao Orquestrador (evita duplo
+    // processamento -- a mesma resposta do cliente nao pode virar
+    // confirmacao de renovacao E pergunta ao Gemini ao mesmo tempo).
+    console.log(
+      "[webhook-wasender] mensagem roteada para renovacao-confirmar",
+      JSON.stringify({ id }),
+    );
+    await encaminharParaRenovacaoConfirmar(
+      roteamentoRenovacao.telefone,
+      roteamentoRenovacao.buttonReplyId,
+    );
+    return;
+  }
+
+  if (roteamentoRenovacao.outcome === "apresentar_opcoes") {
+    // 2+ renovacoes pendentes, cliente demonstrou intencao (ACEITO/
+    // CANCELAR isolado) mas nao disse qual -- apresenta a lista e as
+    // instrucoes de resposta composta. Envio SEMPRE via wasender_client.ts
+    // (nunca Meta). Nenhum estado novo e' criado -- a mensagem so'
+    // instrui o formato "<numero> <ACEITO|CANCELAR>", resolvido do zero
+    // na proxima mensagem pelo mesmo adaptador. Early return: resposta ja
+    // completa, nao repassa ao Orquestrador.
+    console.log(
+      "[webhook-wasender] 2+ renovacoes pendentes -- apresentando opcoes",
+      JSON.stringify({ id }),
+    );
+    const envioOpcoes = await enviarMensagemWhatsApp(
+      roteamentoRenovacao.telefone,
+      roteamentoRenovacao.mensagem,
+    );
+    if (envioOpcoes.outcome !== "success") {
+      console.log(
+        "[webhook-wasender] falha ao enviar mensagem de opcoes de renovacao",
+        JSON.stringify({ id }),
+      );
+    }
+    return;
+  }
+
+  // sem_pendencia / resposta_nao_reconhecida / posicao_invalida --
+  // comportamento INALTERADO: nenhum tratamento novo, segue exatamente
+  // como antes desta integracao, pro Orquestrador.
 
   // pushName defensivo -- [NAO CONFIRMADO] pela doc. So passa se vier.
   const nomeContato =
