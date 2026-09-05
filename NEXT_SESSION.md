@@ -1,5 +1,22 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-05 (continuação) — `renovacao-sigma-watchdog`
+> MIGRADO PARA WASENDER, ÚLTIMOS 3 ENVIOS DIRETOS VIA META ELIMINADOS.**
+> Os 3 pontos que ainda usavam `whatsapp_client.ts` diretamente dentro
+> do próprio watchdog (mensagem consolidada de lote travado por timeout;
+> `MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO`, individual e em lote, sem
+> pagamento) foram migrados para `wasender_client.ts` — troca de import
+> de 1 linha, contrato idêntico, nenhuma regra/estado/cron/critério de
+> expiração/transferência/mensagem/destinatário alterado.
+> `_shared/notificacao_transferencia.ts` (usado pelo watchdog para o
+> aviso de transferência humana) já havia sido migrado na etapa
+> anterior desta mesma sessão. **O watchdog não possui mais nenhum
+> envio direto pelo Meta.** Deploy só de `renovacao-sigma-watchdog`
+> (v29, `ACTIVE`, `verify_jwt=false`, bundle sem `whatsapp_client.ts`).
+> A renovação automática principal (ChannelTV, R$35, pagamento real)
+> segue validada de ponta a ponta, ver checkpoint logo abaixo. Antes
+> disso:**
+>
 > **✅ CHECKPOINT 2026-09-05 — RENOVAÇÃO REAL VIA WASENDER (ChannelTV,
 > R$35) DE PONTA A PONTA, COM DINHEIRO REAL. Duas causas raiz reais
 > encontradas e corrigidas na mesma sessão: (1) Account Protection da
@@ -21,13 +38,12 @@
 > versionamento). Detalhe completo na seção **"SESSÃO 2026-09-05 —
 > RENOVAÇÃO REAL VIA WASENDER + ESCLARECIMENTO + MIGRAÇÃO META→WASENDER"**
 > logo abaixo. **Pendências:** Base Mestra TOPE TV não promovida;
-> `renovacao-sigma-watchdog` ainda tem 3 envios diretos ao cliente via
-> `whatsapp_client.ts` (Meta) para os próprios textos do watchdog
-> (timeout/expiração/lote) — fora do escopo desta migração; outros
-> módulos Meta identificados (ver tabela na seção) permanecem fora
-> desta etapa; comportamento de "Oi" populando `esclarecimento_pendente`
-> registrado para revisão futura, não investigado nesta sessão. Antes
-> disso:**
+> outros módulos Meta identificados (ver tabela na seção) permanecem
+> fora desta etapa; comportamento de "Oi" populando
+> `esclarecimento_pendente` registrado para revisão futura, não
+> investigado nesta sessão. **`renovacao-sigma-watchdog` — migrado
+> para Wasender em etapa seguinte da mesma sessão, ver checkpoint
+> acima.** Antes disso:**
 >
 > **✅ CHECKPOINT 2026-09-04 — CANAL DE ENTRADA WASENDER: COMANDOS DE
 > OPERADOR `#humano` / `#ia` EM PRODUÇÃO.** `webhook-wasender` v6 → **v7
@@ -124,7 +140,7 @@ renovação com dinheiro de verdade.**
 | `webhook-wasender` | v8 | v12, `sha256 60a7d2abc202ab7bb036a8776713d07f0df9d4adef2110d44b9a38bce7496817` (mesma nota acima) |
 | `renovacao-confirmar` | v28 | v28, `sha256 205bdaf38d42e04fb773fb7b455497e4cce3c672faf858c57b077b78296e1e15` |
 | `renovacao-sigma-resultado` | v28 | v28, `sha256 b30d810dcba28627aa7fb54a71b8ccfa52f16b4e2f30a4cdffdd901be7082524` |
-| `renovacao-sigma-watchdog` | v28 | v28, `sha256 7a0e2d0c87867fc5948bd35e5c3adb471babd227b8c2a3a0dd52cbe02252b2c6` — **bundle atualizado** (herda `_shared/notificacao_transferencia.ts` corrigido), **arquivo-fonte do watchdog não alterado** |
+| `renovacao-sigma-watchdog` | v28 → **v29** (etapa seguinte, mesma sessão) | v29, `sha256 674d6484b7a68d2a6f33d0434644a320d02c7fc00f7ed560ac66b70b110d0523` — **arquivo-fonte agora também migrado**: os 3 envios diretos que ainda usavam `whatsapp_client.ts` (Meta) foram trocados para `wasender_client.ts` (import de 1 linha, contrato idêntico, nenhuma regra/estado/cron/critério de expiração/transferência/mensagem/destinatário alterado). Bundle confirmado sem `whatsapp_client.ts`. |
 
 `_shared/notificacao_transferencia.ts` migrado para `wasender_client.ts`
 (era `whatsapp_client.ts`/Meta) — afeta as 3 funções acima que o
@@ -188,14 +204,12 @@ regra de negócio foi alterada.
   indicação, cancelamento, institucional) segue só no LAB
   (`inovatv-wasender-lab`), não incorporado à
   `conhecimento_institucional` de produção.
-- **`renovacao-sigma-watchdog/index.ts` ainda tem 3 envios diretos ao
-  cliente via `whatsapp_client.ts` (Meta)** para textos próprios do
-  watchdog (mensagem consolidada de lote travado, expiração sem
-  pagamento — 2x). Diferente da `notificacao_transferencia.ts` (já
-  migrada), estes 3 são chamadas diretas dentro do próprio arquivo do
-  watchdog, que **não foi alterado nesta etapa** (decisão explícita).
-  Só afeta cenários de falha/timeout do watchdog (backstop, não o
-  caminho principal) — nunca exercitado no teste real acima.
+- ~~`renovacao-sigma-watchdog/index.ts` ainda tem 3 envios diretos ao
+  cliente via `whatsapp_client.ts` (Meta)`~~ — **[RESOLVIDO na etapa
+  seguinte da mesma sessão]**: os 3 pontos (mensagem consolidada de
+  lote travado, expiração sem pagamento — 2x) migrados para
+  `wasender_client.ts`. O watchdog não possui mais nenhum envio direto
+  pelo Meta. Ver checkpoint no topo do arquivo e deploy `v29`.
 - **Outros módulos que ainda usam `whatsapp_client.ts` (Meta)**,
   identificados mas fora do escopo desta etapa:
   `confirmacao-renovacao/index.ts` (fallback de links antigos, lógica

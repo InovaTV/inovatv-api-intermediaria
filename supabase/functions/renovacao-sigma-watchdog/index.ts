@@ -53,7 +53,7 @@ import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { montarMensagemResultadoLote, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO } from "../_shared/mensagens_fixas.ts";
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 // Peca 3 (2026-08-29) -- reconciliacao de pagamento (reusa as primitivas CAS do openpix-webhook)
 import { reconciliarPagamentoRenovacao, reconciliarSePago } from "../_shared/reconciliacao_renovacao.ts";
 import { buscarCobrancaPorOperacaoId, marcarCobrancaComoPaga, expirarCobrancaPendente } from "../_shared/cobrancas_pix.ts";

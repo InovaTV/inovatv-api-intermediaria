@@ -18,6 +18,7 @@ const MAPA = {
   "notificacao_transferencia.ts": "fake_notificacao_transferencia.mjs",
   "mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
   "whatsapp_client.ts": "fake_whatsapp_client.mjs",
+  "wasender_client.ts": "fake_whatsapp_client.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {
