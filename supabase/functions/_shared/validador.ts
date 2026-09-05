@@ -402,7 +402,12 @@ function validarPropostaRenovacao(
 // --- Formato/schema (guarda de entrada, pedido explicito do usuario) ---
 
 type FormatoValidado =
-  | { valido: true; tipo: "responder" | "transferir" | "propor_renovacao"; texto: string }
+  | {
+      valido: true;
+      tipo: "responder" | "transferir" | "propor_renovacao";
+      texto: string;
+      esclarecimento: boolean;
+    }
   | { valido: false; motivo: string };
 
 function validarFormato(saidaGemini: unknown): FormatoValidado {
@@ -421,8 +426,15 @@ function validarFormato(saidaGemini: unknown): FormatoValidado {
   if (typeof obj.texto !== "string" || obj.texto.trim().length === 0) {
     return { valido: false, motivo: "formato:texto_vazio_ou_invalido" };
   }
+  // Aditivo (2026-09-04, caso Elias) -- segunda validacao independente
+  // do mesmo campo ja exigido em gemini_client.ts::RESPONSE_SCHEMA
+  // (defesa em profundidade, mesmo padrao ja usado para tipo/texto
+  // nesta funcao).
+  if (typeof obj.esclarecimento !== "boolean") {
+    return { valido: false, motivo: "formato:esclarecimento_invalido" };
+  }
 
-  return { valido: true, tipo: obj.tipo, texto: obj.texto };
+  return { valido: true, tipo: obj.tipo, texto: obj.texto, esclarecimento: obj.esclarecimento };
 }
 
 // --- Entrada publica ---

@@ -101,6 +101,46 @@ Existe uma terceira opção, "propor_renovacao", usada especificamente
 quando o cliente demonstra intenção real de renovar o acesso —
 descrita em detalhe na seção PROPOSTA DE RENOVAÇÃO, logo abaixo.
 
+PERGUNTAS AMPLAS OU AMBÍGUAS
+Quando a pergunta do cliente for ampla ou não deixar claro o que ele
+quer saber — porque a própria pergunta é vaga, não porque falta um
+dado no cadastro —, e você não tiver como determinar com segurança o
+que responder, faça UMA pergunta objetiva de esclarecimento (mesmo
+"responder" de sempre, com esclarecimento=true), em vez de transferir.
+Isso nunca autoriza inventar uma resposta, nem presumir qual assunto o
+cliente quis dizer (preço, instalação, compatibilidade, ou qualquer
+outro) sem que a própria mensagem dele sugira isso — ofereça as
+opções reais que fazem sentido para o que a InovaTV oferece, sem
+tratar nenhuma delas como certa.
+
+Esclarecimento não é a mesma coisa que ausência de dado. Se a pergunta
+já estiver clara e específica, e mesmo assim você não encontrar
+informação documentada para respondê-la, a regra de transferência
+acima continua valendo normalmente — não peça esclarecimento onde não
+há ambiguidade real, só porque faltou o dado.
+
+Peça esclarecimento no máximo uma vez sobre o mesmo assunto. Se, depois
+da resposta do cliente, você ainda não tiver como responder com
+segurança, transfira — não repita a pergunta nem insista.
+
+Se os dados conectados indicarem que você já pediu esclarecimento
+sobre alguma pergunta nesta conversa, trate a mensagem atual do
+cliente como uma possível resposta a isso — a menos que ela claramente
+não tenha relação, caso em que deve ser tratada como uma pergunta nova.
+
+Um pedido explícito de atendente humano nunca é afetado por esta
+seção — continua sendo transferência direta, como já descrito acima.
+
+CAMPO "esclarecimento"
+Toda resposta sua inclui um campo esclarecimento (true ou false).
+Use esclarecimento=true SOMENTE quando o texto que você está enviando
+for, de fato, uma pergunta pedindo ao cliente para especificar melhor
+um assunto ambíguo, conforme a seção acima — nunca para uma resposta
+que já responde algo e apenas termina com uma pergunta de cortesia
+(ex.: "Posso ajudar com mais alguma coisa?"). Nesses casos, e em
+qualquer resposta normal, use esclarecimento=false. Em "transferir" e
+"propor_renovacao", esclarecimento é sempre false.
+
 PROPOSTA DE RENOVAÇÃO
 Quando o cliente demonstrar intenção real de renovar o acesso —
 mesmo sem usar a palavra "renovar" (ex.: "meu plano venceu, quero
@@ -167,8 +207,12 @@ const RESPONSE_SCHEMA = {
   properties: {
     tipo: { type: "STRING", enum: ["responder", "transferir", "propor_renovacao"] },
     texto: { type: "STRING" },
+    // Aditivo (2026-09-04, caso Elias) -- ver GeminiOutput em types.ts.
+    // Obrigatorio: schema invalido sem ele vira "unavailable", mesma
+    // disciplina ja usada pra tipo/texto ausentes/invalidos.
+    esclarecimento: { type: "BOOLEAN" },
   },
-  required: ["tipo", "texto"],
+  required: ["tipo", "texto", "esclarecimento"],
 };
 
 export type GeminiResult =
@@ -285,13 +329,17 @@ async function chamarUmaVez(
       (parsed?.tipo !== "responder" &&
         parsed?.tipo !== "transferir" &&
         parsed?.tipo !== "propor_renovacao") ||
-      typeof parsed?.texto !== "string"
+      typeof parsed?.texto !== "string" ||
+      typeof parsed?.esclarecimento !== "boolean"
     ) {
       logIndisponivel("schema invalido no JSON parseado", { tipoRecebido: parsed?.tipo });
       return { outcome: "unavailable" };
     }
 
-    return { outcome: "success", data: { tipo: parsed.tipo, texto: parsed.texto } };
+    return {
+      outcome: "success",
+      data: { tipo: parsed.tipo, texto: parsed.texto, esclarecimento: parsed.esclarecimento },
+    };
   } catch (erro) {
     const nome = erro instanceof Error ? erro.name : typeof erro;
     const mensagem = erro instanceof Error ? erro.message : String(erro);

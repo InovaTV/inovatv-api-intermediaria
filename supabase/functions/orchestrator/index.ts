@@ -1274,6 +1274,7 @@ Deno.serve(async (req: Request) => {
   const contextoConversa = montarContextoConversa(
     acessoSelecionadoServidor,
     intencaoRenovacaoEstabelecida,
+    conversa.esclarecimento_pendente,
   );
 
   // "Regra de ouro" (secao 7 do levantamento): contextoCompleto e' o
@@ -1292,6 +1293,13 @@ Deno.serve(async (req: Request) => {
   let transferenciaResultado: { acionada: boolean; motivo: string } | undefined;
   let envioResultado: { enviado: boolean } | undefined;
   let avisoJoseResultado: { enviado: boolean } | undefined;
+  // Esclarecimento (2026-09-04, caso Elias) -- true SOMENTE quando o
+  // Validador aprovou, tipo === "responder" e o proprio Gemini marcou
+  // esclarecimento=true (nunca heuristica de texto/pontuacao, decisao
+  // explicita do usuario). Default false cobre todos os outros
+  // desfechos (transferir, propor_renovacao, reprovado, Gemini
+  // indisponivel) sem precisar tocar em nenhum desses branches.
+  let foiEsclarecimento = false;
   // Etapa 1 (propor_renovacao) -- so' diagnostico, nunca enviado ao
   // cliente. acessoResolvido null quando o Validador aprovou mas a
   // resolucao por rotulo nao achou exatamente 1 correspondencia (nao
@@ -1317,6 +1325,8 @@ Deno.serve(async (req: Request) => {
     geminiSaida = validacao.aprovado
       ? geminiData
       : { outcome: "bloqueado" };
+    foiEsclarecimento =
+      validacao.aprovado && geminiData.tipo === "responder" && geminiData.esclarecimento === true;
 
     // Etapa 1 (propor_renovacao): so' entra aqui quando o Validador
     // APROVOU e o tipo e' propor_renovacao -- reprovado cai direto em
@@ -1391,6 +1401,16 @@ Deno.serve(async (req: Request) => {
     //   - tipo === "responder" e Validador aprovou;
     //   - NAO e' contexto de renovacao (ehContextoRenovacao);
     //   - NAO e' o interceptor de lista de renovacao (C3);
+    //   - NAO foi um pedido de esclarecimento (foiEsclarecimento) --
+    //     investigacao real 2026-09-04 (caso Js Informatica Rp, 4
+    //     acessos): o Gemini pode citar 2+ servidores DENTRO da propria
+    //     pergunta de esclarecimento (tentando ajudar o cliente a
+    //     escolher), o que disparava geminiApresentaLista e substituia a
+    //     pergunta pelo bloco generico de lista -- perdendo a pergunta
+    //     de esclarecimento de vista. Guard adicionado ANTES de
+    //     qualquer outra checagem desta secao: quando o proprio Gemini
+    //     marcou esclarecimento=true (e o Validador aprovou), a resposta
+    //     nunca e' tocada por este bloco, em nenhuma hipotese;
     //   - a mensagem do CLIENTE e' um pedido de dados de acesso
     //     (REGEX_PEDIDO_DADOS_ACESSO) -- opcao (a). Excecao: com 2+
     //     acessos e nenhum selecionado, tambem entra quando a PROSA do
@@ -1406,7 +1426,8 @@ Deno.serve(async (req: Request) => {
         !validacao.aprovado ||
         geminiData.tipo !== "responder" ||
         ehContextoRenovacao ||
-        interceptarListaMultiplosAcessos
+        interceptarListaMultiplosAcessos ||
+        foiEsclarecimento
       ) {
         return geminiData.texto;
       }
@@ -1851,11 +1872,21 @@ Deno.serve(async (req: Request) => {
         const envio = await enviarMensagemWhatsApp(telefone, textoRespostaCliente);
         envioResultado = { enviado: envio.outcome === "success" };
         if (envioResultado.enviado) {
-          await gravarAcessoSelecionadoSeCitado(
-            conversa.conversation_id,
-            textoRespostaCliente,
-            statusResults,
-          );
+          // Esclarecimento (2026-09-04, achado da revisao pos-guard de
+          // textoRespostaCliente): uma pergunta de esclarecimento pode
+          // citar exatamente 1 servidor como CANDIDATO ("e' sobre o
+          // BLAZE ou outro acesso?"), nao como fato ja estabelecido --
+          // gravarAcessoSelecionadoSeCitado nao distingue pergunta de
+          // afirmacao, so' conta citacoes literais. Nunca deve virar
+          // selecao silenciosa nesse caso. So' grava fora dele -- unico
+          // call site desta funcao em todo o repositorio.
+          if (!foiEsclarecimento) {
+            await gravarAcessoSelecionadoSeCitado(
+              conversa.conversation_id,
+              textoRespostaCliente,
+              statusResults,
+            );
+          }
           // Memoria de sessao (extensao 2026-08-23): a mensagem que
           // demonstra intencao e' a do CLIENTE (conteudo), nunca a
           // resposta do Gemini -- e' a intencao dele que precisa ser
@@ -2074,6 +2105,18 @@ Deno.serve(async (req: Request) => {
       }
     }
   }
+
+  // Esclarecimento (2026-09-04, caso Elias) -- escrita UNICA e
+  // INCONDICIONAL, cobrindo todo desfecho desta mensagem (responder
+  // normal, esclarecimento, transferir, propor_renovacao, multiplos
+  // acessos, Gemini indisponivel): grava a mensagem atual quando foi
+  // pedido esclarecimento agora, senao limpa (null) o que houvesse de
+  // antes -- garante o desenho "one-shot" por codigo, nao so por
+  // instrucao de prompt. Best-effort, mesmo padrao das outras escritas
+  // de memoria de sessao.
+  await atualizarSessao(conversa.conversation_id, {
+    esclarecimentoPendente: foiEsclarecimento ? conteudo : null,
+  }).catch(() => {});
 
   return jsonResponse({
     outcome: "normal",

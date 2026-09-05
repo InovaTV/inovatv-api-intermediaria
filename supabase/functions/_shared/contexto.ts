@@ -101,11 +101,26 @@ export function montarContextoCliente(
 // (ex.: "quero renovar meu plano", com 2+ acessos, ainda sem saber
 // qual) e a mensagem atual so' resolve QUAL acesso (ex.: "2"), sem
 // repetir a intencao.
+// assuntoEsclarecimentoPendente (2026-09-04, caso Elias): 3o sinal de
+// continuidade, mesma disciplina dos outros dois -- nunca fonte de
+// fato, so' ajuda a resolver referencia. Guarda a MENSAGEM LITERAL do
+// cliente que gerou o ultimo pedido de esclarecimento (nunca uma
+// interpretacao da IA) -- ver esclarecimento_pendente em types.ts/
+// migration 20260904200000_esclarecimento_pendente.sql. One-shot: o
+// chamador (Orquestrador) e' quem garante que isto so' chega aqui
+// preenchido pra' EXATAMENTE a mensagem seguinte ao pedido.
 export function montarContextoConversa(
   servidorMencionadoAnteriormente: string | null,
   intencaoRenovacaoEstabelecida: boolean,
+  assuntoEsclarecimentoPendente: string | null,
 ): string | null {
-  if (!servidorMencionadoAnteriormente && !intencaoRenovacaoEstabelecida) return null;
+  if (
+    !servidorMencionadoAnteriormente &&
+    !intencaoRenovacaoEstabelecida &&
+    !assuntoEsclarecimentoPendente
+  ) {
+    return null;
+  }
 
   const linhas = ["[CONTEXTO DA CONVERSA]"];
 
@@ -117,6 +132,15 @@ export function montarContextoConversa(
   if (servidorMencionadoAnteriormente) {
     linhas.push(
       `Nesta conversa, o cliente mencionou anteriormente o acesso: Servidor ${servidorMencionadoAnteriormente}.`,
+    );
+  }
+  if (assuntoEsclarecimentoPendente) {
+    linhas.push(
+      `Na mensagem anterior, você pediu esclarecimento sobre esta pergunta do cliente, ` +
+        `que era ampla ou ambígua: "${assuntoEsclarecimentoPendente}". Se a mensagem atual ` +
+        `do cliente parecer uma resposta a isso, use-a para entender melhor o que ele quer ` +
+        `— mas só se fizer sentido; se a mensagem atual claramente não tiver relação, ` +
+        `ignore isto e trate como uma pergunta nova.`,
     );
   }
 

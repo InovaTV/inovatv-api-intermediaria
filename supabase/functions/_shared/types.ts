@@ -29,6 +29,15 @@ export interface ConversaEstado {
   // conversacional de curto prazo, sujeito ao mesmo TTL/invalidacao
   // (sessao_atividade_em). Unico valor usado hoje: "renovacao".
   intencao_atual: string | null;
+  // Memoria de sessao (extensao 2026-09-04, migration
+  // 20260904200000_esclarecimento_pendente.sql) -- mesma disciplina de
+  // acesso_selecionado/intencao_atual: nunca fonte de fato, sujeito ao
+  // mesmo TTL/invalidacao (sessao_atividade_em). Guarda a MENSAGEM
+  // LITERAL do cliente que gerou o ultimo pedido de esclarecimento da
+  // IA (tipo="responder" + esclarecimento=true) -- nunca uma
+  // paráfrase/interpretacao. One-shot: reescrito a cada mensagem pelo
+  // Orquestrador (valor novo ou null), nunca acumulado.
+  esclarecimento_pendente: string | null;
   // Painel de Atendimento -- previa da lista, Fatia 1 (2026-08-18).
   // Mantido por trigger (mensagens_conversa), nunca escrito por
   // codigo TypeScript -- ver atualizar_conversa_ao_inserir_mensagem.
@@ -78,7 +87,17 @@ export interface MensagemAtendimento {
 // automatica (docs/propor_renovacao/LEVANTAMENTO_ETAPA1.md, secao 2.1
 // -- Lacuna 2, Opcao A: terceiro valor de tipo, sem campo booleano
 // oculto). Nesta etapa e' so' diagnostico -- ver orchestrator/index.ts.
+//
+// esclarecimento (2026-09-04, investigacao do caso Elias): campo
+// booleano ADITIVO, obrigatorio -- decisao explicita de NAO criar um
+// 4o valor de "tipo" pra pedido de esclarecimento (mesmo criterio ja
+// usado quando propor_renovacao foi decidido "terceiro tipo, nao
+// booleano oculto" -- aqui a escolha foi a oposta, e' um sinal
+// ortogonal ao tipo, nao uma categoria de acao nova). true somente
+// quando tipo="responder" E o texto e' uma pergunta de esclarecimento
+// sobre um assunto ambiguo (nunca em "transferir"/"propor_renovacao").
 export interface GeminiOutput {
   tipo: "responder" | "transferir" | "propor_renovacao";
   texto: string;
+  esclarecimento: boolean;
 }

@@ -327,6 +327,7 @@ export async function atualizarSessao(
     acessoSelecionado?: string | null;
     sessaoAtividadeEm?: string;
     intencaoAtual?: string | null;
+    esclarecimentoPendente?: string | null;
   },
 ): Promise<void> {
   const client = getServiceClient();
@@ -340,6 +341,12 @@ export async function atualizarSessao(
   }
   if ("intencaoAtual" in patch) {
     update.intencao_atual = patch.intencaoAtual ?? null;
+  }
+  // Esclarecimento (2026-09-04, caso Elias) -- mesmo padrao dos 3
+  // campos acima, so' atualiza quando explicitamente presente em
+  // patch.
+  if ("esclarecimentoPendente" in patch) {
+    update.esclarecimento_pendente = patch.esclarecimentoPendente ?? null;
   }
 
   const { error } = await client
@@ -376,6 +383,10 @@ export async function expirarSessaoAtomicamente(
     .update({
       acesso_selecionado: null,
       intencao_atual: null,
+      // Esclarecimento (2026-09-04, caso Elias) -- mesmo TTL de sessao
+      // ja existente, sem mecanismo novo: zerado no mesmo evento de
+      // expiracao que ja zera acesso_selecionado/intencao_atual.
+      esclarecimento_pendente: null,
       sessao_atividade_em: new Date().toISOString(),
     })
     .eq("conversation_id", conversationId)
