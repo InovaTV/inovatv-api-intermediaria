@@ -12,7 +12,7 @@
 
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { getServiceClient } from "../_shared/supabase_client.ts";
-import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarTemplateWhatsApp } from "../_shared/wasender_client.ts";
 import { outcomePermitidoNoCanal, processarResultado } from "../_shared/autocura_resultado.ts";
 import { resolverContaUnitv } from "../_shared/unitv_conta.ts";
 
