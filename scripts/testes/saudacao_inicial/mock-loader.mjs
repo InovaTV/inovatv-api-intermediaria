@@ -12,7 +12,6 @@ const OUTRO = new URL("../orchestrator_multiplos_acessos/", import.meta.url);
 const LOCAIS = {
   "_shared/conversas_estado.ts": "fake_conversas_estado.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
-  "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
 };
 
 const HERDADOS = {

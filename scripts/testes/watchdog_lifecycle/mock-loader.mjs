@@ -17,7 +17,6 @@ const MAPA = {
   "conversas_estado.ts": "fake_conversas_estado.mjs",
   "notificacao_transferencia.ts": "fake_notificacao_transferencia.mjs",
   "mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
-  "whatsapp_client.ts": "fake_whatsapp_client.mjs",
   "wasender_client.ts": "fake_whatsapp_client.mjs",
 };
 

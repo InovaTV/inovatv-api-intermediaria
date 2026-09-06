@@ -13,7 +13,6 @@ const MAPA = {
   "_shared/rocket_intermediaria.ts": "fake_rocket_intermediaria.mjs",
   "_shared/conhecimento.ts": "fake_conhecimento.mjs",
   "_shared/gemini_client.ts": "fake_gemini_client.mjs",
-  "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
   // Achado real (2026-09-05, investigacao do "achado D"): o orchestrator
   // ja importa de wasender_client.ts, nao mais whatsapp_client.ts -- sem
   // esta entrada, o cliente REAL do Wasender carregava sem mock (sem

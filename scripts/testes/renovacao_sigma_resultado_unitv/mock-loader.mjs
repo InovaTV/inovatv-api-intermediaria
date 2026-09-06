@@ -7,7 +7,6 @@ const MAPA = {
   "_shared/conversas_estado.ts": "fake_conversas_estado.mjs",
   "_shared/notificacao_transferencia.ts": "fake_notificacao_transferencia.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
-  "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
   "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
 };
 export async function resolve(specifier, context, nextResolve) {

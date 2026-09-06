@@ -1,9 +1,10 @@
 // painel-atendimento-responder (Componente 5 §10/§12, inovatv_central,
 // Plano de Execucao, Bloco 3). Reaproveita enviarMensagemWhatsApp() de
-// _shared/whatsapp_client.ts, ja existente e testado -- ZERO codigo
-// novo de envio (mesmo caminho de saida do Orquestrador, Componente 1
-// §15). So funciona se a conversa estiver realmente aguardando_humano
-// -- nao deixa o operador responder por cima do fluxo normal so-IA.
+// _shared/wasender_client.ts (migrado da Cloud API/Meta para Wasender,
+// Etapa 5 da migracao Meta->Wasender) -- ZERO codigo novo de envio
+// (mesmo caminho de saida do Orquestrador, Componente 1 §15). So
+// funciona se a conversa estiver realmente aguardando_humano -- nao
+// deixa o operador responder por cima do fluxo normal so-IA.
 
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
 import { buscarConversaPorId } from "../_shared/conversas_estado.ts";
