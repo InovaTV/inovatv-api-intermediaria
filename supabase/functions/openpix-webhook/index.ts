@@ -61,7 +61,7 @@ import {
 import { reivindicarInicioRenovacao } from "../_shared/tokens_renovacao.ts";
 import { reivindicarInicioRenovacaoLote } from "../_shared/renovacoes_lote.ts";
 import { dispararWorkflowRenovacaoSigma } from "../_shared/github_actions_dispatch.ts";
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { MENSAGEM_RENOVACAO_EM_ANDAMENTO } from "../_shared/mensagens_fixas.ts";
 

@@ -10,6 +10,7 @@ const MAPA = {
   "_shared/renovacoes_lote.ts": "fake_renovacoes_lote.mjs",
   "_shared/github_actions_dispatch.ts": "fake_github_actions_dispatch.mjs",
   "_shared/whatsapp_client.ts": "fake_whatsapp_client.mjs",
+  "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
 };
 export async function resolve(specifier, context, nextResolve) {
