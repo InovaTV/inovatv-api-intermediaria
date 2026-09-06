@@ -1,5 +1,29 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-06 (tarde) — SESSÃO DOCUMENTAL, SEM ALTERAÇÃO
+> FUNCIONAL.** Base Mestra V1 comercial **promovida para produção** (só
+> DADOS em `public.conhecimento_institucional`, projeto
+> `nduxsuxkopuvhwugdkqi`): **30 registros** (1 `catalogo_planos` + 3
+> `comercial` + 2 `institucional` + 24 `suporte_tecnico`); 4 entradas
+> novas/atualizadas (**Planos e preços** · **O que é a TOPE TV** ·
+> **Cancelamento e devolução de pagamento** · **Programa de indicação —
+> 1 mês grátis**). Transação única com guards / `GET DIAGNOSTICS` /
+> `RAISE EXCEPTION` / rollback; `md5(conteudo)` das 4 == conteúdo
+> aprovado do LAB; **migration `20260904190000` do LAB NÃO aplicada em
+> produção** (forma correta = 3 UPDATE + 1 INSERT); testes de lógica do
+> LAB 15/15; **zero mudança de código**. Caminho real auditado (só
+> leitura): `webhook-wasender → orchestrator →
+> buscarConhecimentoRelevante → contextoCompleto → Gemini + Validador
+> (mesma string) → Wasender` — íntegro; a Base Mestra já era consultada
+> pelo `orchestrator` em produção desde o Componente 2. **Risco R1**
+> registrado (validador de valor monetário pode reprovar se o Gemini
+> reformatar `R$ 35,00` etc.) — **NÃO corrigir**; o smoke real é a 1ª
+> validação ponta a ponta. **Smoke NÃO executado** (WhatsApp/Wasender
+> restrito). Pendências **#1 Matriz Mestre** (→ NÃO promover, alt. C) e
+> **#2 conversa duplicada** (→ JÁ RESOLVIDA em 31/08, sem migração)
+> investigadas só em leitura e fechadas sem ação. Detalhe: seção
+> **"SESSÃO 2026-09-06 (tarde)"** logo abaixo. Antes disso:
+>
 > **✅ SUPERADO em 2026-09-06 — migração Meta→Wasender CONCLUÍDA (as
 > pendências "fora do escopo" registradas no checkpoint 2026-09-05 logo
 > abaixo — `confirmacao-renovacao`, `painel-atendimento-responder`,
@@ -135,6 +159,213 @@
 > antes de qualquer ação. Decisões encerradas estão em **[FECHADO]**
 > ou na seção **"NÃO REABRIR / JÁ VALIDADO"** — não reabrir sem
 > evidência nova e concreta.
+
+---
+
+## SESSÃO 2026-09-06 (tarde) — BASE MESTRA PROMOVIDA + AUDITORIA DO CAMINHO + PENDÊNCIAS #1/#2 FECHADAS
+
+**Sessão documental / read-only.** A única alteração de produção foi a
+promoção de **dados** da Base Mestra (item 1). Nenhum código, secret,
+deploy, migration de schema, smoke pelo WhatsApp ou encerramento de
+atendimento. Este checkpoint toca apenas `NEXT_SESSION.md`.
+
+### 1. Base Mestra V1 comercial — PROMOVIDA para produção
+
+- Alvo: `public.conhecimento_institucional`, projeto Supabase de
+  produção `nduxsuxkopuvhwugdkqi`.
+- Método: **3 UPDATE + 1 INSERT** (adaptação — a tabela de produção já
+  tinha as 29 entradas V1; a migration `20260904190000_...` do LAB usa
+  4 INSERT só porque a tabela do LAB estava vazia). **A migration do
+  LAB NÃO foi aplicada em produção.** Não versionada como migration
+  (padrão desta tabela: SQL manual via `db query -f`, nunca migration).
+- Transação única (`DO $$…$$`) com `GET DIAGNOSTICS ... ROW_COUNT` (=1
+  por statement) + 10 conferências pré-commit, todas com `RAISE
+  EXCEPTION` → rollback automático. Concluiu sem erro → COMMIT
+  (`2026-09-06 18:52:20`).
+- **Estado final: 30 registros** — `catalogo_planos` 1 · `comercial` 3
+  · `institucional` 2 · `suporte_tecnico` 24. Títulos distintos = 30.
+- As 4 entradas: **Planos e preços** (`comercial`, substitui "Planos
+  disponíveis"), **O que é a TOPE TV** (`institucional`, substitui "O
+  que é a InovaTV"), **Cancelamento e devolução de pagamento**
+  (`comercial`, substitui "Reembolso"), **Programa de indicação — 1
+  mês grátis** (`comercial`, nova).
+- **Integridade de conteúdo:** `md5(conteudo)` das 4 lido da tabela
+  viva == `md5` do conteúdo aprovado na migration do LAB
+  (LF-normalizado) — `0a64de71…` / `bdfc3d71…` / `27b2a598…` /
+  `34d729cd…`. Keywords idênticas ao LAB. Emoji `🗓️` e em-dash
+  preservados (provado pelo md5).
+- **Preservação:** 26 linhas com `atualizado_em` original
+  (`2026-08-22 08:20:45`); exatamente 4 modificadas hoje. As 24
+  `suporte_tecnico` + "Teste grátis" + "Atendimento e horário"
+  conferidas nome a nome, intactas. Nenhum keyword órfão das 3
+  entradas removidas.
+- Testes de lógica de conhecimento (LAB, `scripts/testes/conhecimento/
+  teste.mjs`, roda o módulo real em memória contra 26 V1 + 4 novas):
+  **15/15**.
+- **Zero alteração de código.**
+
+### 2. Auditoria do caminho real em produção (só leitura)
+
+```
+mensagem → webhook-wasender (v13) → orchestrator (v81, sha cc7272ef…)
+  → buscarConhecimentoRelevante(conteudo)              [_shared/conhecimento.ts; index.ts L1010]
+  → contextoConhecimento = "[CONHECIMENTO INSTITUCIONAL - <titulo>]\n<conteudo>" | null   [L1011]
+  → partesContexto → contextoCompleto (join "\n\n")     [L1284-1287]
+  → chamarGemini(conteudo, contextoCompleto)             [L1289]  — conhecimento vai no user turn
+  → validarResposta(geminiData, contextoCompleto, …)     [L1321]  — MESMA string ("regra de ouro")
+  → aprovado + tipo "responder" → enviarMensagemWhatsApp (= Wasender)  [L1864-1900]
+```
+
+- `buscarConhecimentoRelevante` roda em **toda** mensagem `estado='normal'`
+  (após os early-returns de aguardando_humano / sessão expirada /
+  primeiro contato). Independe de match de cliente. `categoria` não é
+  lida — a mudança de categoria da promoção é organizacional.
+- A Base Mestra já era consultada pelo `orchestrator` em produção
+  **desde a integração do Componente 2** (orchestrator v30, 2026-08-22).
+  A promoção de hoje só trocou os dados que esse código já lê ao vivo —
+  **não é conteúdo só de teste**.
+- `nada_encontrado` / `unavailable` → `contextoConhecimento = null` →
+  filtrado de `partesContexto` → IA responde só com o SYSTEM_PROMPT
+  (regra "NUNCA INVENTAR"). Comportamento correto.
+- **LAB × PROD nos módulos do caminho do conhecimento:**
+  `_shared/conhecimento.ts`, `gemini_client.ts`, `validador.ts`,
+  `contexto.ts`, `wasender_client.ts` (código), `webhook-wasender/
+  index.ts` — **idênticos**. Única diferença no `orchestrator`:
+  `REGEX_SAUDACAO_PURA` (guard do "Oi" → esclarecimento) existe no LAB,
+  não em PROD — **fora do caminho do conhecimento**.
+- Sem cobertura automatizada end-to-end (Gemini real + Validador real)
+  do conteúdo Base Mestra; as Rodadas 3/4 que congelaram o prompt
+  usaram o conteúdo antigo. Detalhe menor: `fake_conhecimento.mjs` das
+  suítes de PROD retorna `"nao_encontrado"` (grafia divergente do real
+  `"nada_encontrado"`) — **inócuo** (orchestrator só trata
+  `"encontrado"` como positivo).
+
+**R1 — REGISTRADO, NÃO CORRIGIR AGORA.** `validarValorMonetario`
+(`validador.ts`) faz match exato de substring de `R$\s?[\d.,]+` do
+texto do Gemini contra `contextoCompleto`. A entrada "Planos e preços"
+guarda `R$ 35,00` / `R$ 90,00` / `R$ 180,00` / `R$ 300,00`. Se o Gemini
+reproduzir verbatim → passa. Se reformatar (`R$35`, `R$ 300` sem
+centavos, `R$ 35,00.` com ponto final) → substring não encontrada →
+**Validador reprova → resposta vira transferência para humano**.
+Model-dependente; o smoke real é a 1ª chance de observar. Relacionado
+ao quirk pré-existente do `REGEX_VALOR` (pontuação de fim de frase) já
+anotado no `inovatv_central/CLAUDE.md`.
+
+### 3. Smoke real — NÃO executado (WhatsApp/Wasender restrito)
+
+Roteiro preparado, **um por vez, começando pelo primeiro**:
+1. **"Quais são os planos e preços?"** — alvo do R1. Esperado:
+   `conhecimento outcome=encontrado`, `titulo="Planos e preços"`,
+   resposta com os 4 valores entregue ao cliente. ⚠️ se virar
+   transferência → R1 confirmado; anotar o texto que o Gemini gerou.
+2. "Tem reembolso?" / "Como faço pra cancelar?" → "Cancelamento e
+   devolução de pagamento".
+3. "Como funciona a indicação de amigo?" → "Programa de indicação — 1
+   mês grátis".
+4. "O que é a TOPE TV?" → institucional nova (observar mistura
+   "InovaTV"/"TOPE TV" — cosmético, SYSTEM_PROMPT ainda diz "InovaTV").
+5. **Só depois:** "quero cancelar meu plano" e "meus canais estão
+   travando" — colisões conhecidas → `nada_encontrado` (fail-safe,
+   aceito em 04/09). Confirmar que **não** dá resposta errada.
+
+Capturar por caso: texto recebido · `outcome` de `conhecimento` no
+payload · `titulo` · texto gerado pelo Gemini · houve transferência? ·
+motivo · comportamento do Validador · `supabase functions logs`.
+
+### 4. Telefone do smoke
+
+**NÃO usar `5517981625486` automaticamente** — está `aguardando_humano`
+com episódio aberto `c016ecb0` (conversa
+`43fcff07-80e5-4d0a-b814-62323ef6c3a9`, `origem='ia'`,
+`motivo='renovacao:unitv_conta_indisponivel'`, desde 2026-09-05 14:35).
+O Passo 0 do Orquestrador faz short-circuit nesse estado → a mensagem
+não chega ao Gemini. **NÃO encerrar esse episódio agora** só para o
+smoke. Escolher outro telefone (ou decidir encerrar) quando o WhatsApp
+liberar.
+
+### 5. Pendência #1 — Matriz Mestre de Instalação → NÃO PROMOVER (alternativa C)
+
+- Investigada só em leitura. `docs/conhecimento_institucional/
+  MATRIZ_MESTRE_INSTALACAO_V1.md` permanece **documentação oficial** —
+  não vira conteúdo de `conhecimento_institucional` agora.
+- Motivo: seções 2–4 são uma matriz servidor × aplicativo × dispositivo
+  (lookup 2-D); `buscarConhecimentoRelevante` é match 1-D de keyword →
+  um bloco, com "empate → `nada_encontrado`". Promover a matriz cria
+  risco de super-recuperação, colisão e contexto excessivo.
+- A regra UniTV/Android (seção 1) foi avaliada como *potencialmente*
+  promovível (campo de keyword limpo — nenhuma das 30 entradas usa
+  `unitv` ou nome de dispositivo) mas **decidido NÃO promover** — ganho
+  imediato pequeno (parte já coberta por "Teste grátis"/"Cancelamento")
+  e a etapa de procedimentos/tutoriais não começou.
+- **Reabrir quando começarem os procedimentos/tutoriais de instalação**
+  (seção 7 do próprio documento).
+
+### 6. Pendência #2 — Conversa duplicada / Bug 3 → JÁ RESOLVIDA
+
+- Investigada só em leitura. A conversa
+  `89797986-1eed-4df4-bdc1-6e5daf7e9c5f` (telefone histórico
+  `17981625486`) **não existe mais** — removida no reset de histórico
+  do Painel de **31/08** (ver "SESSÃO 2026-08-31 — MIGRAÇÃO DO CANAL
+  WHATSAPP", seção 2: "limpeza geral … 8 conversas sem dado operacional
+  removidas por completo"). Não tinha filhos em `cobrancas_pix` /
+  `tokens_renovacao` / `renovacoes_lote` → apagada inteira. **Nunca
+  precisou de "fusão".**
+- Verificado em produção: nenhuma linha de `conversas_estado` para
+  `89797986…` nem para telefone de 11 dígitos · 0 referências residuais
+  nas 5 tabelas filhas · 0 órfãos · 0 `episodio_atual_id` pendente ·
+  nenhuma duplicata atual por telefone normalizado (11 linhas, todas
+  13 dígitos canônico).
+- Bug 3 corrigido e deployado: `normalizarTelefone` (`_shared/
+  telefone.ts`) aplicado no topo do `orchestrator` (L767) e no
+  `webhook-wasender`; `conversas_estado.telefone` é `NOT NULL UNIQUE`
+  → recorrência estruturalmente impossível.
+- **Não há migração de dados pendente.**
+- **Pendente só documental:** o `inovatv_central/CLAUDE.md` ainda
+  descreve essa pendência como "Não iniciada" — atualizar para
+  "resolvida" numa próxima sessão. **NÃO alterado nesta sessão**
+  (instrução explícita: registrar aqui, não tocar o CLAUDE.md).
+
+### 7. Outras observações (NÃO tratar como bug, NÃO agir)
+
+- **5 conversas em `aguardando_humano` com episódio aberto**, a mais
+  antiga "Mary" (`5517992770172`) desde 2026-09-01 (~5 dias); as
+  outras: "O mix da cozinha", "Nair Moura", "Gilbert Henrique Amaral",
+  e a de teste `5517981625486`. São transferências para humano nunca
+  `/encerrar`adas no Painel. Backlog operacional, não defeito.
+- `5f96d721` (`5517981563170`, 0 msgs, `estado=normal`) — casca
+  mantida na "limpeza direcionada" de 31/08 por ter 1 `cobrancas_pix` +
+  1 `tokens_renovacao`. Inócua.
+- Mapa completo de FKs para `conversas_estado.conversation_id` (para
+  qualquer mexida futura): `mensagens_conversa`, `conversas_episodios`,
+  `cobrancas_pix`, `tokens_renovacao`, `renovacoes_lote` (todas
+  `ON DELETE NO ACTION`) + ponteiro `conversas_estado.episodio_atual_id
+  → conversas_episodios.id`. Nenhuma outra tabela tem coluna
+  `conversation_id`.
+
+### 8. Ao retomar — NÃO assumir autorização para
+
+Corrigir R1 · promover a Matriz · alterar keywords · alterar o
+SYSTEM_PROMPT · alterar o Validador · encerrar episódios · fazer smoke
+com o WhatsApp restrito · fazer deploy · alterar banco. Tudo continua
+exigindo autorização explícita.
+
+### 9. Próximo passo oficial
+
+1. Verificar se a restrição do WhatsApp/Wasender terminou e o canal
+   está operacional.
+2. Escolher um telefone que **não** esteja em `aguardando_humano`.
+3. Executar **UM** smoke: **"Quais são os planos e preços?"** —
+   observar o que está listado na seção 3.
+4. Só depois decidir os próximos testes ou qualquer correção.
+
+### 10. Git ao encerrar
+
+`inovatv_central` `fc170f2` · `inovatv-api-intermediaria` `<commit
+deste checkpoint>` · `inovatv_painel` `ccb31be` · `inovatv-wasender-lab`
+`b1500b8` — todos `HEAD == origin/main`, working tree limpo. **Zero
+alteração funcional nesta sessão.** A única mudança de produção foi a
+promoção de dados da Base Mestra (item 1), aplicada direto no Supabase,
+não versionável. Este commit toca **apenas `NEXT_SESSION.md`**.
 
 ---
 
