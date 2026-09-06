@@ -15,7 +15,7 @@
 import { errorResponse, jsonResponse } from "../_shared/http.ts";
 import { getServiceClient } from "../_shared/supabase_client.ts";
 import { diagnosticarTokenUnitv } from "../_shared/unitv_token_diag.ts";
-import { enviarTemplateWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarTemplateWhatsApp } from "../_shared/wasender_client.ts";
 import { executarTickMonitor } from "../_shared/autocura_monitor.ts";
 
 Deno.serve(async (req: Request) => {

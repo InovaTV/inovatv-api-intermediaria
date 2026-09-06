@@ -42,7 +42,7 @@
 import { resolverContaUnitv } from "./unitv_conta.ts";
 import { getServiceClient } from "./supabase_client.ts";
 import { obterDealerToken as obterDealerTokenPadrao } from "./unitv_dealer_token.ts";
-import { enviarTemplateWhatsApp } from "./whatsapp_client.ts";
+import { enviarTemplateWhatsApp } from "./wasender_client.ts";
 import {
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
