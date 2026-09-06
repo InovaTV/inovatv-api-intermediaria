@@ -8,7 +8,7 @@
 import { verificarOperador, respostaNaoAutorizado } from "../_shared/auth_painel.ts";
 import { buscarConversaPorId } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import { jsonResponse, errorResponse, corsResponse, conversationIdValido } from "../_shared/http.ts";
 
 Deno.serve(async (req: Request) => {
