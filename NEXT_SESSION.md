@@ -1,5 +1,19 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ SUPERADO em 2026-09-06 — migração Meta→Wasender CONCLUÍDA (as
+> pendências "fora do escopo" registradas no checkpoint 2026-09-05 logo
+> abaixo — `confirmacao-renovacao`, `painel-atendimento-responder`,
+> `autocura-unitv-monitor`, `autocura-unitv-resultado`,
+> `poc-confirmacao-renovacao` — foram todas fechadas nesta data).**
+> `_shared/whatsapp_client.ts` foi **removido** (commit `3aa71b1`).
+> `poc-confirmacao-renovacao` foi **removido** (legado/POC nunca
+> implantado). A função `webhook` (Meta Cloud API, receptora) **segue
+> ACTIVE deliberadamente** — decisão de removê-la (e os secrets
+> `WHATSAPP_*`) fica para depois, não decidida ainda. Resumo completo,
+> canônico: `inovatv_central/CLAUDE.md`, seções "Migração Meta →
+> Wasender — concluída em 2026-09-06" e "Migração do painel de
+> atendimento no LAB — 2026-09-06". Não duplicado aqui. Antes disso:
+>
 > **✅ CHECKPOINT 2026-09-05 (continuação) — `renovacao-sigma-watchdog`
 > MIGRADO PARA WASENDER, ÚLTIMOS 3 ENVIOS DIRETOS VIA META ELIMINADOS.**
 > Os 3 pontos que ainda usavam `whatsapp_client.ts` diretamente dentro
