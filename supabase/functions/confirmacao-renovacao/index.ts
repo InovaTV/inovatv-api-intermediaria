@@ -24,7 +24,7 @@ import {
 } from "../_shared/tokens_renovacao.ts";
 import { criarCobrancaOpenPix } from "../_shared/openpix_client.ts";
 import { criarCobrancaPixRegistro } from "../_shared/cobrancas_pix.ts";
-import { enviarMensagemWhatsApp } from "../_shared/whatsapp_client.ts";
+import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import {
