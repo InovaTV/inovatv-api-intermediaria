@@ -21,6 +21,7 @@ export function _seed(lista) {
     renovacao_iniciada_em: t.renovacao_iniciada_em ?? null,
     renovacao_concluida_em: t.renovacao_concluida_em ?? null,
     motivo_falha: t.motivo_falha ?? null,
+    cobranca_ausente_em: t.cobranca_ausente_em ?? null,
   }));
 }
 export function _all() {
@@ -92,6 +93,27 @@ export async function reivindicarInicioRenovacao(operacaoId) {
   if (!t) return null; // CAS estado='autorizada'
   t.estado = "renovacao_em_andamento";
   t.renovacao_iniciada_em = new Date().toISOString();
+  return { ...t };
+}
+
+// Janela de 5min ponta a ponta (2026-09-07) -- cobranca inexistente (404)
+export async function marcarCobrancaAusenteDetectada(id) {
+  const t = tokens.find((x) => x.id === id);
+  if (!t || t.estado !== "autorizada" || t.cobranca_ausente_em) return null; // CAS duplo
+  t.cobranca_ausente_em = new Date().toISOString();
+  return { ...t };
+}
+export async function limparCobrancaAusente(id) {
+  const t = tokens.find((x) => x.id === id);
+  if (!t || t.estado !== "autorizada") return null; // CAS
+  t.cobranca_ausente_em = null;
+  return { ...t };
+}
+export async function marcarAutorizacaoIndeterminada(id, motivo) {
+  const t = tokens.find((x) => x.id === id);
+  if (!t || t.estado !== "autorizada") return null; // CAS
+  t.estado = "renovacao_indeterminada";
+  t.motivo_falha = motivo;
   return { ...t };
 }
 

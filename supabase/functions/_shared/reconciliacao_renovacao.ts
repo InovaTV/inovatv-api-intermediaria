@@ -21,6 +21,23 @@ import { reivindicarInicioRenovacao } from "./tokens_renovacao.ts";
 import { reivindicarInicioRenovacaoLote } from "./renovacoes_lote.ts";
 import { dispararWorkflowRenovacaoSigma } from "./github_actions_dispatch.ts";
 
+// Split EXPIRED/ACTIVE (2026-09-07). Estados da cobranca que a Woovi
+// confirma como TERMINAIS sem pagamento -- a cobranca morreu e nunca
+// mais sera' paga. SO' estes liberam a autorizacao (Caso C do watchdog).
+// Um status desconhecido/novo NAO entra aqui -- fail-safe: e' tratado
+// como 'cobranca_ativa' (ainda pode ser paga), nunca como terminal.
+// Comparacao case-insensitive. `EXPIRED` e' o unico status terminal que
+// a OpenPix/Woovi documenta para cobranca hoje; os demais sao defensivos
+// (se a Woovi um dia emitir um cancelamento/estorno explicito de
+// cobranca, ainda assim e' inequivocamente "morta sem pagamento").
+const STATUS_WOOVI_TERMINAIS_SEM_PAGAMENTO = new Set([
+  "EXPIRED",
+  "CANCELLED",
+  "CANCELED",
+  "REFUNDED",
+  "REFUND",
+]);
+
 export type ResultadoReconciliacao =
   // Woovi confirmou COMPLETED e este chamador reivindicou o inicio da
   // renovacao com sucesso -> workflow disparado (ou tentado).
@@ -31,17 +48,37 @@ export type ResultadoReconciliacao =
   // renovacao ja esta' em andamento -> nada a fazer, pagamento NAO
   // perdido.
   | { outcome: "ja_em_andamento" }
-  // Woovi diz que a cobranca ainda NAO foi paga (ACTIVE/EXPIRED/...).
-  // O chamador deve seguir com a expiracao (Caso C).
+  // Split EXPIRED/ACTIVE (2026-09-07): a Woovi confirmou um status
+  // TERMINAL sem pagamento (EXPIRED, e demais estados explicitamente
+  // mortos -- ver STATUS_WOOVI_TERMINAIS_SEM_PAGAMENTO). A cobranca
+  // NUNCA mais sera' paga -> o chamador segue com a expiracao (Caso C).
   | { outcome: "nao_pago"; statusWoovi: string | null }
+  // Split EXPIRED/ACTIVE (2026-09-07): a cobranca ainda esta' ACTIVE /
+  // pendente / em um status nao reconhecido APOS o expira_em do token.
+  // NAO e' prova de "nao pago" -- pode estar sendo paga agora, ou a
+  // Woovi ainda nao virou o status (o relogio interno de 5min nao
+  // decide isso, so' o status efetivo da Woovi). O chamador NAO encerra:
+  // reconsulta no proximo ciclo. Backstop no watchdog: se seguir ACTIVE
+  // alem da validade real da cobranca Woovi (24h desde criado_em), e'
+  // anomalia -> encerramento seguro + transferencia humana.
+  | { outcome: "cobranca_ativa"; statusWoovi: string | null }
   // Woovi confirmou COMPLETED com valor divergente do esperado. A
   // cobranca foi marcada 'valor_divergente'; o chamador transfere pra
   // humano e libera o acesso (Caso E). NUNCA marca 'pago' por
   // aproximacao.
   | { outcome: "valor_divergente" }
-  // Nao deu pra falar com a Woovi, ou nao ha' registro local da
-  // cobranca. Nao faz nada -- tenta de novo no proximo ciclo do
-  // watchdog.
+  // Janela de 5min ponta a ponta (2026-09-07): a Woovi respondeu que a
+  // cobranca NAO EXISTE (HTTP 404 / resposta sem `charge`). E' um
+  // resultado DEFINITIVO da Woovi (nao transitorio), distinto de
+  // "indisponivel". O chamador (watchdog) exige DUAS confirmacoes em
+  // ciclos diferentes antes de liberar a autorizacao. Cenario tipico:
+  // cobranca criada e depois deletada manualmente no painel Woovi
+  // ("renovacao presa" -- inovatv_central/CLAUDE.md, msg 11).
+  | { outcome: "cobranca_inexistente" }
+  // Nao deu pra FALAR com a Woovi (rede/timeout/5xx), ou nao ha'
+  // registro local da cobranca. TRANSITORIO -- nao faz nada, tenta de
+  // novo no proximo ciclo do watchdog. NUNCA libera nada (o backstop de
+  // 24h do watchdog cobre a Woovi irresoluvel por muito tempo).
   | { outcome: "indefinido" };
 
 export async function reconciliarPagamentoRenovacao(params: {
@@ -51,10 +88,22 @@ export async function reconciliarPagamentoRenovacao(params: {
   // 1) Fonte da verdade: a Woovi, nunca o payload de um webhook (que
   //    aqui nem existe -- e' o watchdog chamando).
   const consulta = await consultarCobrancaOpenPix(params.operacaoId);
+  // 404 / resposta sem `charge` = a cobranca NAO EXISTE na Woovi.
+  // Resultado definitivo -> o chamador aplica a regra de dupla
+  // confirmacao antes de liberar. NUNCA confundir com "indisponivel".
+  if (consulta.outcome === "not_found") return { outcome: "cobranca_inexistente" };
+  // Qualquer outra falha de comunicacao (unavailable) = transitorio.
   if (consulta.outcome !== "success") return { outcome: "indefinido" };
 
   if (consulta.status !== "COMPLETED") {
-    return { outcome: "nao_pago", statusWoovi: consulta.status };
+    // Split EXPIRED/ACTIVE (2026-09-07): so' um status TERMINAL confirmado
+    // pela Woovi libera a autorizacao (Caso C). ACTIVE / pendente /
+    // status desconhecido -> a cobranca ainda pode ser paga: NAO encerra.
+    const statusNorm = (consulta.status ?? "").toUpperCase();
+    if (STATUS_WOOVI_TERMINAIS_SEM_PAGAMENTO.has(statusNorm)) {
+      return { outcome: "nao_pago", statusWoovi: consulta.status };
+    }
+    return { outcome: "cobranca_ativa", statusWoovi: consulta.status };
   }
 
   const registro = await buscarCobrancaPorOperacaoId(params.operacaoId);
@@ -94,9 +143,17 @@ export type ResultadoReconciliacaoSePago =
     };
 
 // CAMADA 3 (2026-08-29) -- reconciliacao ANTECIPADA, chamada pelo watchdog para
-// uma cobranca 'autorizada' + vinculada AINDA DENTRO da janela de 2h (criada ha'
-// >= 5min). Objetivo unico: se o webhook OPENPIX:CHARGE_COMPLETED se perdeu,
-// recuperar em ~minutos em vez de esperar as 2h do sweep de expira_em.
+// uma cobranca 'autorizada' + vinculada AINDA DENTRO da janela de expira_em
+// (criada ha' >= 5min). Objetivo original: se o webhook OPENPIX:CHARGE_COMPLETED
+// se perdeu, recuperar em ~minutos em vez de esperar as 2h do sweep de expira_em.
+//
+// NOTA (janela de 5min ponta a ponta, 2026-09-07): com expira_em = criado_em +
+// 5min, a condicao "expira_em >= agora E criado_em < agora - 5min" e'
+// contraditoria -> buscarAutorizacoesVinculadasAindaNaJanela devolve conjunto
+// VAZIO e esta funcao deixa de ser exercida na pratica. Mantida intacta como
+// defesa em profundidade caso a janela volte a ser alargada. O sweep de
+// expira_em (reconciliarPagamentoRenovacao, CASOS B/C/E) ja roda a cada ciclo
+// */5 assim que os 5min passam, cobrindo o mesmo objetivo.
 //
 // REGRA ESTRITA: COMPLETED + valor exato -> recupera pelo MESMO nucleo do fluxo
 // normal (executarRecuperacao, identico ao openpix-webhook). QUALQUER outro

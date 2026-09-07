@@ -132,6 +132,19 @@ function checarPix(rotulo, valor, linhaPacote, link) {
   ok(iRotulo !== -1 && linhas[iRotulo + 1] === link, `${rotulo}: link vem imediatamente apos o rotulo, em linha propria`);
   ok(linhas.indexOf("✅ Não é necessário enviar o comprovante.") > iRotulo, `${rotulo}: dispensa de comprovante vem DEPOIS do link`);
 
+  // Janela de 5min ponta a ponta (2026-09-07): aviso do prazo entre o
+  // link e a dispensa de comprovante.
+  const iPrazo = linhas.findIndex((l) => l.includes("⏱️") && l.includes("*5 minutos*"));
+  ok(iPrazo !== -1, `${rotulo}: aviso de "5 minutos" presente`);
+  ok(
+    iPrazo > iRotulo + 1 && iPrazo < linhas.indexOf("✅ Não é necessário enviar o comprovante."),
+    `${rotulo}: aviso de prazo fica entre o link e a dispensa de comprovante`,
+  );
+  ok(
+    linhas[iPrazo].includes("expira automaticamente") && linhas[iPrazo].includes("nova renovação"),
+    `${rotulo}: aviso de prazo explica o que acontece apos os 5 minutos`,
+  );
+
   // NUNCA BR Code / bloco de codigo / QR no corpo.
   ok(!texto.includes("```"), `${rotulo}: sem bloco de codigo (tres crases)`);
   ok(!/br\.gov\.bcb\.pix/i.test(texto), `${rotulo}: sem marcador de BR Code`);

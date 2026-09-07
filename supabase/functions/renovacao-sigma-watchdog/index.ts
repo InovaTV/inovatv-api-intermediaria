@@ -31,6 +31,11 @@ import {
   expirarSeVencido,
   // Camada 3 (2026-08-29) -- reconciliacao ANTECIPADA (dentro da janela de 2h)
   buscarAutorizacoesVinculadasAindaNaJanela,
+  // Janela de 5min ponta a ponta (2026-09-07) -- cobranca inexistente (dupla
+  // confirmacao) + backstop de 24h para Woovi irresoluvel
+  marcarCobrancaAusenteDetectada,
+  limparCobrancaAusente,
+  marcarAutorizacaoIndeterminada,
 } from "../_shared/tokens_renovacao.ts";
 import {
   buscarLotesEmAndamentoAntigos,
@@ -48,6 +53,9 @@ import {
   expirarLoteSeVencido,
   // Camada 3 (2026-08-29) -- reconciliacao ANTECIPADA (dentro da janela de 2h)
   buscarLotesAutorizadosVinculadosAindaNaJanela,
+  // Janela de 5min ponta a ponta (2026-09-07)
+  marcarLoteCobrancaAusenteDetectada,
+  limparLoteCobrancaAusente,
 } from "../_shared/renovacoes_lote.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
@@ -62,12 +70,24 @@ import { consultarCobrancaOpenPix } from "../_shared/openpix_client.ts";
 const JANELA_MINUTOS = 15;
 
 // CAMADA 3 (2026-08-29) -- piso de idade da cobranca antes da 1a reconsulta
-// antecipada. 5min: acima da latencia real de um Pix (o cliente costuma pagar em
-// segundos-a-minutos), entao uma cobranca ainda 'pendente' passados 5min ou o
-// cliente nao pagou (reconsulta barata, no-op) ou o webhook se perdeu
-// (recupera). Casado com a cadencia do cron (*/5) -> recuperacao em ~10min, no
-// lugar das 2h do sweep de expira_em.
+// antecipada. NOTA (janela de 5min, 2026-09-07): com expira_em = criado_em +
+// 5min, a query buscar*VinculadasAindaNaJanela nunca devolve nada (ver
+// reconciliacao_renovacao.ts) -- este valor ficou inerte; mantido junto do
+// codigo da Camada 3, que segue presente como defesa em profundidade.
 const JANELA_RECONCILIACAO_ANTECIPADA_MINUTOS = 5;
+
+// Janela de 5min ponta a ponta (2026-09-07). Backstop de "cobranca Woovi
+// irresoluvel": a conta Woovi expira cobrancas em 1 dia; so' depois desse
+// prazo, contado da CRIACAO da cobranca (cobrancas_pix.criado_em), uma
+// autorizacao 'autorizada' cuja Woovi segue 'indisponivel' vira
+// 'renovacao_indeterminada' + transferencia humana -- nunca 'expirada' em
+// silencio (pode haver pagamento nao verificado).
+const CARENCIA_HOUSEKEEPING_MS = 24 * 60 * 60 * 1000;
+
+// Cobranca inexistente (404 na Woovi): intervalo minimo entre a 1a e a 2a
+// deteccao para liberar a autorizacao. 4min < 5min do cron (*/5) -> um ciclo
+// seguinte sempre satisfaz; o MESMO ciclo (deteccao recem-gravada) nunca.
+const CONFIRMACAO_NOT_FOUND_GAP_MS = 4 * 60 * 1000;
 
 Deno.serve(async (req: Request) => {
   const tokenInterno = Deno.env.get("RENOVACAO_SIGMA_WATCHDOG_TOKEN");
@@ -454,6 +474,54 @@ Deno.serve(async (req: Request) => {
       tipo: "individual",
     });
 
+    // ===== COBRANCA INEXISTENTE (404 na Woovi) -- dupla confirmacao =====
+    // Cenario tipico: cobranca criada e depois DELETADA no painel Woovi
+    // -> a autorizacao ficaria presa em 'autorizada' para sempre
+    // (indice unico bloqueia todo novo "quero renovar" do acesso).
+    // So' libera apos confirmar o 404 em DOIS ciclos diferentes.
+    if (recon.outcome === "cobranca_inexistente") {
+      if (!token.cobranca_ausente_em) {
+        // 1a deteccao neste ciclo -> grava marcador, NAO libera.
+        await marcarCobrancaAusenteDetectada(token.id).catch(() => {});
+        await inserirMensagem(
+          token.conversation_id,
+          "sistema",
+          "Watchdog: cobranca nao encontrada na Woovi (1a deteccao) -- aguardando confirmacao no proximo ciclo antes de liberar.",
+          null,
+        ).catch(() => {});
+        continue;
+      }
+      const gapMs = Date.now() - new Date(token.cobranca_ausente_em).getTime();
+      if (gapMs < CONFIRMACAO_NOT_FOUND_GAP_MS) {
+        // Marcador recem-gravado (mesmo ciclo / cedo demais) -> espera o proximo.
+        continue;
+      }
+      // 2a confirmacao, em ciclo diferente -> libera o acesso. NAO ha'
+      // dinheiro (a cobranca nao existe), entao NAO transfere: so' avisa
+      // o cliente com a mesma mensagem do CASO C.
+      const liberado = await expirarAutorizacaoVinculada(
+        token.id,
+        "watchdog: cobranca inexistente na Woovi confirmada em 2 ciclos",
+      );
+      if (!liberado) continue; // corrida -> token ja avancou
+      await inserirMensagem(
+        token.conversation_id,
+        "sistema",
+        "Watchdog: cobranca inexistente na Woovi confirmada em 2 ciclos -- solicitacao expirada, acesso liberado para nova solicitacao.",
+        null,
+      ).catch(() => {});
+      await enviarMensagemWhatsApp(token.telefone, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).catch(() => {});
+      vinculadasProcessadas.push(token.id);
+      continue;
+    }
+
+    // Qualquer outro resultado da Woovi -> se havia marcador de "cobranca
+    // ausente", o 404 anterior era transitorio: limpa (a contagem de
+    // dupla confirmacao recomeca do zero se voltar a acontecer).
+    if (token.cobranca_ausente_em) {
+      await limparCobrancaAusente(token.id).catch(() => {});
+    }
+
     if (
       recon.outcome === "recuperado_disparado" ||
       recon.outcome === "recuperado_dispatch_falhou" ||
@@ -497,32 +565,118 @@ Deno.serve(async (req: Request) => {
     }
 
     if (recon.outcome === "nao_pago") {
-      // CASO C -- Woovi confirma NAO pago. Expira o TOKEN (libera o
-      // acesso). NAO expira a cobranca -- fica 'pendente' pro Caso D
-      // conciliar (garantia de nunca perder um pagamento concluido de
-      // verdade). NAO transfere.
+      // CASO C -- a Woovi confirmou um status TERMINAL sem pagamento
+      // (EXPIRED / cancelada / estornada). A cobranca NUNCA mais sera'
+      // paga -> expira o TOKEN (libera o acesso). NAO expira a cobranca
+      // (fica 'pendente' pro Caso D conciliar -- garantia de nunca
+      // perder um pagamento concluido de verdade). NAO transfere.
       const expirado = await expirarAutorizacaoVinculada(
         token.id,
-        `watchdog: autorizada sem pagamento apos expira_em (Woovi: ${recon.statusWoovi ?? "?"})`,
+        `watchdog: Woovi confirmou cobranca terminal sem pagamento apos expira_em (Woovi: ${recon.statusWoovi ?? "?"})`,
       );
       if (!expirado) continue; // corrida (webhook ganhou) -> ABORTA sem tocar em nada
       await inserirMensagem(
         token.conversation_id,
         "sistema",
-        "Watchdog: solicitacao de renovacao expirou sem pagamento -- acesso liberado para nova solicitacao.",
+        `Watchdog: Woovi confirmou a cobranca como ${recon.statusWoovi ?? "terminal"} (sem pagamento) -- acesso liberado para nova solicitacao.`,
         null,
       ).catch(() => {});
       await enviarMensagemWhatsApp(token.telefone, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).catch(() => {});
       vinculadasProcessadas.push(token.id);
       continue;
     }
-    // recon.outcome === "indefinido" -> nao deu pra decidir com seguranca; proximo ciclo tenta de novo.
+
+    if (recon.outcome === "cobranca_ativa") {
+      // Split EXPIRED/ACTIVE (2026-09-07): a cobranca ainda esta' ACTIVE /
+      // pendente / em status nao reconhecido APOS o expira_em de 5min.
+      // NAO e' prova de "nao pago" -- o cliente pode estar pagando agora,
+      // ou a Woovi ainda nao virou o status. NUNCA encerra pelo relogio
+      // interno: aguarda o proximo ciclo do watchdog (*/5) e reconsulta.
+      // Sem nota / sem mensagem ao cliente aqui (evita spam a cada 5min).
+      // Unico limite: se seguir ACTIVE alem da validade real da cobranca
+      // Woovi (24h desde criado_em) -> anomalia -> encerramento SEGURO
+      // (renovacao_indeterminada) + transferencia humana, NUNCA expiracao
+      // silenciosa. Mesmo backstop do ramo 'indefinido', motivo distinto.
+      const cobAtiva = await buscarCobrancaPorOperacaoId(token.operacao_id);
+      if (cobAtiva && Date.now() > new Date(cobAtiva.criado_em).getTime() + CARENCIA_HOUSEKEEPING_MS) {
+        const marcado = await marcarAutorizacaoIndeterminada(
+          token.id,
+          `watchdog: cobranca Woovi ainda ${recon.statusWoovi ?? "ATIVA"} por mais de 24h -- encerrada com transferencia`,
+        );
+        if (marcado) {
+          await inserirMensagem(
+            token.conversation_id,
+            "sistema",
+            "Watchdog: a cobranca segue ativa na Woovi ha' mais de 24h sem pagamento -- marcada como indeterminada, atendente precisa verificar.",
+            null,
+          ).catch(() => {});
+          await transferirEAvisar(token.conversation_id, token.telefone, "renovacao:cobranca_ativa_prolongada");
+          vinculadasProcessadas.push(token.id);
+        }
+      }
+      continue;
+    }
+
+    // recon.outcome === "indefinido" -> Woovi INDISPONIVEL (rede/timeout/5xx).
+    // NAO libera nada -- proximo ciclo tenta de novo. Backstop: se a
+    // cobranca foi criada ha' mais de 24h (validade real da Woovi) e ela
+    // segue irresoluvel, marca 'renovacao_indeterminada' + transfere pra
+    // humano (NUNCA expira em silencio -- pode haver pagamento nao
+    // verificado). Ancorado em cobrancas_pix.criado_em, nao em expira_em.
+    const cobIndef = await buscarCobrancaPorOperacaoId(token.operacao_id);
+    if (cobIndef && Date.now() > new Date(cobIndef.criado_em).getTime() + CARENCIA_HOUSEKEEPING_MS) {
+      const marcado = await marcarAutorizacaoIndeterminada(
+        token.id,
+        "watchdog: Woovi irresoluvel por mais de 24h -- pagamento nao verificavel",
+      );
+      if (marcado) {
+        await inserirMensagem(
+          token.conversation_id,
+          "sistema",
+          "Watchdog: nao foi possivel verificar o pagamento na Woovi por mais de 24h -- marcada como indeterminada, atendente precisa verificar.",
+          null,
+        ).catch(() => {});
+        await transferirEAvisar(token.conversation_id, token.telefone, "renovacao:pagamento_nao_verificavel");
+        vinculadasProcessadas.push(token.id);
+      }
+    }
   }
 
   const lotesVinculadosProcessados: string[] = [];
   for (const lote of lotesVinculados) {
     if (!lote.operacao_id) continue;
     const recon = await reconciliarPagamentoRenovacao({ operacaoId: lote.operacao_id, tipo: "lote" });
+
+    // ===== COBRANCA INEXISTENTE (404 na Woovi) -- dupla confirmacao =====
+    if (recon.outcome === "cobranca_inexistente") {
+      if (!lote.cobranca_ausente_em) {
+        await marcarLoteCobrancaAusenteDetectada(lote.grupo_id).catch(() => {});
+        await inserirMensagem(
+          lote.conversation_id,
+          "sistema",
+          "Watchdog: cobranca do lote nao encontrada na Woovi (1a deteccao) -- aguardando confirmacao no proximo ciclo antes de liberar.",
+          null,
+        ).catch(() => {});
+        continue;
+      }
+      const gapMs = Date.now() - new Date(lote.cobranca_ausente_em).getTime();
+      if (gapMs < CONFIRMACAO_NOT_FOUND_GAP_MS) continue;
+      const liberado = await expirarLoteAutorizado(lote.operacao_id);
+      if (!liberado) continue;
+      await inserirMensagem(
+        lote.conversation_id,
+        "sistema",
+        "Watchdog: cobranca do lote inexistente na Woovi confirmada em 2 ciclos -- lote expirado, acessos liberados para nova solicitacao.",
+        null,
+      ).catch(() => {});
+      await enviarMensagemWhatsApp(lote.telefone, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).catch(() => {});
+      lotesVinculadosProcessados.push(lote.grupo_id);
+      continue;
+    }
+
+    if (lote.cobranca_ausente_em) {
+      await limparLoteCobrancaAusente(lote.grupo_id).catch(() => {});
+    }
 
     if (
       recon.outcome === "recuperado_disparado" ||
@@ -556,17 +710,65 @@ Deno.serve(async (req: Request) => {
     }
 
     if (recon.outcome === "nao_pago") {
+      // CASO C -- Woovi confirmou status TERMINAL sem pagamento (EXPIRED/...).
       const expirado = await expirarLoteAutorizado(lote.operacao_id);
       if (!expirado) continue; // corrida -> ABORTA sem tocar em nada
       await inserirMensagem(
         lote.conversation_id,
         "sistema",
-        "Watchdog: renovacao em lote expirou sem pagamento -- acessos liberados para nova solicitacao.",
+        `Watchdog: Woovi confirmou a cobranca do lote como ${recon.statusWoovi ?? "terminal"} (sem pagamento) -- acessos liberados para nova solicitacao.`,
         null,
       ).catch(() => {});
       await enviarMensagemWhatsApp(lote.telefone, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).catch(() => {});
       lotesVinculadosProcessados.push(lote.grupo_id);
       continue;
+    }
+
+    if (recon.outcome === "cobranca_ativa") {
+      // Split EXPIRED/ACTIVE (2026-09-07) -- espelho lote. Cobranca ainda
+      // ACTIVE/pendente apos o expira_em de 5min -> NAO encerra, aguarda o
+      // proximo ciclo. Backstop: ACTIVE alem de 24h desde criado_em ->
+      // 'falhou' + transferencia humana (nunca expiracao silenciosa).
+      const cobAtivaLote = await buscarCobrancaPorOperacaoId(lote.operacao_id);
+      if (cobAtivaLote && Date.now() > new Date(cobAtivaLote.criado_em).getTime() + CARENCIA_HOUSEKEEPING_MS) {
+        const marcado = await marcarLoteComoFalha(
+          lote.grupo_id,
+          `watchdog: cobranca do lote ainda ${recon.statusWoovi ?? "ATIVA"} por mais de 24h -- encerrada com transferencia`,
+        );
+        if (marcado) {
+          await inserirMensagem(
+            lote.conversation_id,
+            "sistema",
+            "Watchdog: a cobranca do lote segue ativa na Woovi ha' mais de 24h sem pagamento -- marcado como falha, atendente precisa verificar.",
+            null,
+          ).catch(() => {});
+          await transferirEAvisar(lote.conversation_id, lote.telefone, "renovacao_lote:cobranca_ativa_prolongada");
+          lotesVinculadosProcessados.push(lote.grupo_id);
+        }
+      }
+      continue;
+    }
+
+    // recon.outcome === "indefinido" -> Woovi INDISPONIVEL. Backstop de
+    // 24h (ancorado em cobrancas_pix.criado_em): lote 'autorizada' cuja
+    // Woovi segue irresoluvel apos a validade real da cobranca vira
+    // 'falhou' (+ filhos 'renovacao_falhou') + transferencia humana.
+    const cobIndefLote = await buscarCobrancaPorOperacaoId(lote.operacao_id);
+    if (cobIndefLote && Date.now() > new Date(cobIndefLote.criado_em).getTime() + CARENCIA_HOUSEKEEPING_MS) {
+      const marcado = await marcarLoteComoFalha(
+        lote.grupo_id,
+        "watchdog: Woovi irresoluvel por mais de 24h -- pagamento do lote nao verificavel",
+      );
+      if (marcado) {
+        await inserirMensagem(
+          lote.conversation_id,
+          "sistema",
+          "Watchdog: nao foi possivel verificar o pagamento do lote na Woovi por mais de 24h -- marcado como falha, atendente precisa verificar.",
+          null,
+        ).catch(() => {});
+        await transferirEAvisar(lote.conversation_id, lote.telefone, "renovacao_lote:pagamento_nao_verificavel");
+        lotesVinculadosProcessados.push(lote.grupo_id);
+      }
     }
   }
 
@@ -575,7 +777,7 @@ Deno.serve(async (req: Request) => {
   // encerrado. Cobre a janela de milissegundos entre a reconsulta do
   // Caso C e o write, e qualquer pagamento feito na Woovi depois da
   // expiracao. Criterio: NUNCA perder um pagamento COMPLETED.
-  const CARENCIA_HOUSEKEEPING_MS = 24 * 60 * 60 * 1000; // expira_em + 24h
+  // (CARENCIA_HOUSEKEEPING_MS agora e' constante de modulo -- 2026-09-07.)
   const conciliadas: string[] = [];
 
   const itensConciliar: Array<{

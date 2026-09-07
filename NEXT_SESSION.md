@@ -315,6 +315,92 @@
 
 ---
 
+## SESSÃO 2026-09-07 — JANELA 5 MIN PONTA A PONTA + SPLIT EXPIRED/ACTIVE (código pronto, migration APLICADA, deploy PENDENTE)
+
+**Frente: Renovação Automática (Sigma + UniTV, individual + lote).**
+Objetivo: comprimir a janela de renovação de 2 h para **5 min ponta a
+ponta**, matando o bug histórico da "renovação presa" (cobrança Woovi
+morta/deletada, mas o sistema seguia dizendo "renovação em andamento"
+por horas). Duas auditorias read-only precederam o código — a 2ª barrou
+a 1ª implementação e forçou o **split EXPIRED/ACTIVE** (não transformar
+`ACTIVE` da Woovi em "não pago" pelo relógio interno de 5 min).
+
+### Estado
+
+- **Código:** pronto, testado, **NÃO deployado**. `origin/main` avança
+  para o commit desta sessão (ver `git log`).
+- **Migration `20260907120000_cobranca_ausente_em.sql`:** **APLICADA em
+  produção** (`nduxsuxkopuvhwugdkqi`) via `supabase db query --linked`.
+  Só `ADD COLUMN IF NOT EXISTS cobranca_ausente_em timestamptz null`
+  + `COMMENT` em `tokens_renovacao` e `renovacoes_lote`. Verificação
+  antes/depois: `tokens_renovacao` 23→24 colunas, `renovacoes_lote`
+  13→14; tipo `timestamptz` / nullable / sem default; RLS `true` e
+  contagem de índices (6 / 4) e constraints (8 / 5) **intactas**.
+- **Deploy: NÃO feito.** Nenhuma Edge Function redeployada.
+
+### Mudanças de código
+
+| Arquivo | Mudança |
+|---|---|
+| `_shared/openpix_client.ts` | `+expiresIn: 300` no `POST /api/v1/charge` (const `EXPIRACAO_COBRANCA_SEGUNDOS`). |
+| `_shared/tokens_renovacao.ts` / `_shared/renovacoes_lote.ts` | `JANELA_EXPIRACAO_MS` 2 h → **5 min**; `+cobranca_ausente_em` no tipo; helpers `marcarCobrancaAusenteDetectada` / `limparCobrancaAusente` / `marcarAutorizacaoIndeterminada` (+ espelhos de lote). |
+| `_shared/reconciliacao_renovacao.ts` | **Split EXPIRED/ACTIVE.** `COMPLETED` inalterado. `EXPIRED` + allowlist `STATUS_WOOVI_TERMINAIS_SEM_PAGAMENTO` (`EXPIRED`/`CANCELLED`/`CANCELED`/`REFUNDED`/`REFUND`, case-insensitive) → `nao_pago` → CASO C. `ACTIVE` / pendente / **status desconhecido** → novo outcome `cobranca_ativa` (**NÃO encerra**, fail-safe). `not_found` (404) → `cobranca_inexistente`. `unavailable` → `indefinido`. CAMADA 3 (`reconciliarSePago`) fica inerte com a janela de 5 min — mantida como defesa em profundidade. |
+| `renovacao-sigma-watchdog/index.ts` | Ramos novos em ambos os loops (individual + lote): `cobranca_inexistente` (dupla confirmação via `cobranca_ausente_em`, gap ≥ 4 min entre ciclos antes de liberar; libera com `MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO`, sem transferência) e `cobranca_ativa` (**aguarda o próximo ciclo**, sem nota/mensagem; backstop de 24 h ancorado em `cobrancas_pix.criado_em` = validade real da Woovi → se seguir ACTIVE além de 24 h → `renovacao_indeterminada`/`falhou` + **transferência humana**, motivo `renovacao:cobranca_ativa_prolongada` / `renovacao_lote:cobranca_ativa_prolongada`, **nunca expiração silenciosa**). Backstop simétrico para `indefinido` (motivo `renovacao:pagamento_nao_verificavel`). `CARENCIA_HOUSEKEEPING_MS` içado para escopo de módulo. Nota de sistema do CASO C passou a nomear o status Woovi. |
+| `_shared/mensagens_fixas.ts` | `montarMensagemPixRenovacao` +2 linhas: "⏱️ Você tem *5 minutos* para pagar. Depois desse prazo a cobrança expira automaticamente e será preciso pedir uma nova renovação." (individual E lote). **Nenhum outro texto alterado.** |
+
+### Verificação do contrato `expiresIn: 300` (doc oficial OpenPix/Woovi, sem cobrança real)
+
+- Campo de **request** válido no `POST /api/v1/charge`: `type: number`,
+  descrição verbatim *"Expires the charge in seconds (minimum is 5
+  minutes)"*, opcional.
+- Unidade = **segundos** (confirmado: default de 1 dia = `expiresIn: 86400`
+  na resposta). `300` = 5 min = **exatamente o mínimo documentado**.
+- Ajuste da conta ("Tempo de Expiração", padrão 1 dia) é o *default*
+  usado quando o campo é **omitido** — sem mecanismo documentado de
+  override/cap de um `expiresIn` explícito.
+- **Não fechável por doc:** leitura byte a byte de uma cobrança Sandbox
+  real com `expiresIn:300` (`GET /charge`). Recomendado como 1º passo
+  do checkpoint de deploy, antes de qualquer cobrança de produção.
+
+### Testes
+
+- `scripts/testes/watchdog_lifecycle/teste.mjs` reescrito/estendido +
+  fakes (`fake_tokens_renovacao.mjs`, `fake_renovacoes_lote.mjs`).
+  Casos: `ACTIVE` após expiração não libera; `ACTIVE` em ciclos
+  seguintes continua aguardando; `ACTIVE→EXPIRED` libera;
+  `ACTIVE→COMPLETED` renova normal; `ACTIVE` + webhook `COMPLETED` após
+  reconciliação não perde a renovação; `ACTIVE` > 24 h → só backstop +
+  humano; `not_found` dupla confirmação (1º/2º ciclo/cedo demais/
+  marcador limpo); `unavailable` backstop 24 h; allowlist de estados
+  terminais; concorrência/idempotência. Espelhos de lote.
+- `scripts/testes/openpix_paymentlink/teste.mjs` +assert `expiresIn === 300`.
+- `scripts/testes/mensagens_renovacao_apresentacao/teste.mjs` +assert da
+  linha ⏱️.
+- **Regressão completa: 38/40 suítes passam.** Única falha =
+  `saudacao_inicial` — comprovadamente **pré-existente** (`git stash`
+  no tree limpo `d5f3916` produz a mesma falha de 13 asserts).
+
+### PENDENTE (checkpoint próprio — mexe em pagamento real)
+
+1. *(recomendado)* 1 cobrança Sandbox com `expiresIn:300` + `GET /charge`
+   confirmando o valor gravado.
+2. **Deploy** das Edge Functions que importam os `_shared` alterados —
+   reconfirmar a lista contra os imports no momento:
+   `renovacao-sigma-watchdog`, `orchestrator`, `openpix-webhook`,
+   `renovacao-confirmar`, `confirmacao-renovacao`,
+   `renovacao-sigma-resultado`.
+3. Sem teste de renovação real até autorização explícita.
+
+### NÃO REABRIR / JÁ VALIDADO
+
+- Split EXPIRED/ACTIVE aprovado pelo usuário após a 2ª auditoria.
+- Opção (b) — reancorar `expira_em` no ACEITO — **descartada** (opção
+  (a), split, é suficiente e mantém escopo controlado).
+- `SESSAO_TTL_MS` (1 h, memória de sessão da IA) — **intocado**, por
+  decisão explícita.
+
+---
+
 ## SESSÃO 2026-09-07 — CORREÇÃO DE DUPLICIDADE ROCKETZAP×WASENDER + PREPARAÇÃO (NÃO EXECUÇÃO) DA RECONEXÃO DO WASENDER
 
 **Encerramento de sessão a pedido do usuário (troca/reinício de

@@ -122,6 +122,8 @@ const LINK = "https://woovi-sandbox.com/pay/op-teste-1";
   await criarCobrancaOpenPix("op-especifico-7", 3500, "desc");
   ok(corpoEnviado?.correlationID === "op-especifico-7", "C7: correlationID no corpo = operacaoId (inalterado)");
   ok(corpoEnviado?.value === 3500, "C7: value em centavos inalterado");
+  // Janela de 5min ponta a ponta (2026-09-07): expiresIn fixo em 300s.
+  ok(corpoEnviado?.expiresIn === 300, "C7: expiresIn=300 (5min) no corpo do POST /charge");
 }
 
 console.log(`\nResultado: ${total - falhas}/${total} passando`);

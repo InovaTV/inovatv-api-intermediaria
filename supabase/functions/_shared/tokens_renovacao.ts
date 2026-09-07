@@ -61,9 +61,20 @@ export interface TokenRenovacao {
   tipo: "sigma" | "unitv";
   unitv_sn: string | null;
   unitv_id: number | null;
+  // Janela de 5min ponta a ponta (2026-09-07): marcador de "cobranca
+  // nao encontrada na Woovi" (HTTP 404 / resposta sem `charge`). O
+  // watchdog so' libera uma autorizacao por cobranca inexistente depois
+  // de confirmar o 404 em DOIS ciclos diferentes -- este timestamp e' a
+  // 1a deteccao. NULL = nunca detectado / ja limpo.
+  cobranca_ausente_em: string | null;
 }
 
-const JANELA_EXPIRACAO_MS = 2 * 60 * 60 * 1000; // 2h, decisao aprovada
+// Janela de pagamento ponta a ponta (2026-09-07, inovatv_central/CLAUDE.md,
+// antes 2h). O token nasce em 'aguardando_confirmacao' com expira_em =
+// agora + 5min; o watchdog (cron */5) reconsulta a Woovi assim que
+// expira_em passa, em vez de esperar 2h. NAO tem relacao com
+// SESSAO_TTL_MS (1h, memoria de sessao da IA -- inalterada).
+const JANELA_EXPIRACAO_MS = 5 * 60 * 1000;
 
 export async function hashToken(tokenBruto: string): Promise<string> {
   const dados = new TextEncoder().encode(tokenBruto);
@@ -541,6 +552,74 @@ export async function marcarCicloRenovacaoEncerrado(
     .update({ renovacao_concluida_em: new Date().toISOString(), motivo_falha: motivo })
     .eq("id", id)
     .is("renovacao_concluida_em", null)
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as TokenRenovacao) ?? null;
+}
+
+// ---------------------------------------------------------------------
+// Janela de 5min ponta a ponta (2026-09-07) -- cobranca inexistente na
+// Woovi (404 / resposta sem `charge`). Distinta de "Woovi indisponivel"
+// (rede/timeout/5xx), que NUNCA libera nada. Regra: so' libera uma
+// autorizacao por cobranca inexistente apos confirmar o 404 em DOIS
+// ciclos diferentes do watchdog (cron */5) -- protege contra um 404
+// transitorio da Woovi virar liberacao indevida.
+// ---------------------------------------------------------------------
+
+// 1a deteccao: grava o timestamp SO' se ainda estiver 'autorizada' e
+// sem marcador (CAS duplo). Retorna a linha marcada, ou null (ja tinha
+// marcador / ja avancou de 'autorizada').
+export async function marcarCobrancaAusenteDetectada(id: string): Promise<TokenRenovacao | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .update({ cobranca_ausente_em: new Date().toISOString() })
+    .eq("id", id)
+    .eq("estado", "autorizada")
+    .is("cobranca_ausente_em", null)
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as TokenRenovacao) ?? null;
+}
+
+// Limpa o marcador quando um ciclo posterior NAO confirma o 404 (o
+// resultado foi COMPLETED / nao_pago / valor_divergente / indefinido) --
+// era um 404 transitorio. CAS 'autorizada': no-op se ja avancou.
+export async function limparCobrancaAusente(id: string): Promise<TokenRenovacao | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .update({ cobranca_ausente_em: null })
+    .eq("id", id)
+    .eq("estado", "autorizada")
+    .select("*")
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as TokenRenovacao) ?? null;
+}
+
+// Backstop de 24h (ancorado na validade real de 1 dia da cobranca
+// Woovi): quando a Woovi fica IRRESOLUVEL (indisponivel) por mais de
+// 24h desde a criacao da cobranca, a autorizacao 'autorizada' vira
+// 'renovacao_indeterminada' -- NUNCA 'expirada' em silencio, porque
+// pode haver pagamento nao verificado. Sem renovacao_concluida_em, pra
+// o CASO D (rede de seguranca de dinheiro) continuar varrendo o item.
+// CAS 'autorizada': no-op se ja avancou.
+export async function marcarAutorizacaoIndeterminada(
+  id: string,
+  motivo: string,
+): Promise<TokenRenovacao | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .update({ estado: "renovacao_indeterminada", motivo_falha: motivo })
+    .eq("id", id)
+    .eq("estado", "autorizada")
     .select("*")
     .maybeSingle();
 

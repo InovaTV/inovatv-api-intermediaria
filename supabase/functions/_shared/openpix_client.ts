@@ -29,6 +29,14 @@
 const OPENPIX_BASE_URL = Deno.env.get("OPENPIX_BASE_URL") ?? "https://api.woovi-sandbox.com";
 const TIMEOUT_MS = 15000;
 
+// Janela de pagamento ponta a ponta (2026-09-07, inovatv_central/CLAUDE.md).
+// A conta Woovi tem expiracao PADRAO de 1 dia; aqui forcamos 5min por
+// cobranca (`expiresIn`, em segundos) para casar com a janela de 5min do
+// token/lote de renovacao -- se o cliente nao pagar nesse prazo a cobranca
+// vira EXPIRED sozinha e a tentativa e' liberada no ciclo seguinte do
+// watchdog, sem esperar horas.
+const EXPIRACAO_COBRANCA_SEGUNDOS = 300;
+
 function authHeader(): Record<string, string> | null {
   const appId = Deno.env.get("OPENPIX_APPID");
   if (!appId) return null;
@@ -64,6 +72,7 @@ export async function criarCobrancaOpenPix(
         correlationID: operacaoId,
         value: valorCentavos,
         comment: comentario,
+        expiresIn: EXPIRACAO_COBRANCA_SEGUNDOS,
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

@@ -149,40 +149,54 @@ async function casoB_webhookJaMarcouPago() {
 }
 
 // ---------------------------------------------------------------------
-// CASO C -- 'autorizada' + cobranca vinculada + venceu + Woovi NAO COMPLETED
-//           => EXPIRAR token + LIBERAR acesso, cobranca fica 'pendente'
+// CASO C -- 'autorizada' + cobranca vinculada + venceu + Woovi confirmou
+//           status TERMINAL sem pagamento (EXPIRED)
+//           => EXPIRAR token + LIBERAR acesso, cobranca fica 'pendente'.
+//   (Split EXPIRED/ACTIVE 2026-09-07: SO' EXPIRED chega aqui. ACTIVE ->
+//    ramo 'cobranca_ativa', mais abaixo -- NAO libera.)
 // ---------------------------------------------------------------------
 async function casoC_naoPago() {
   resetarTudo();
   T._seed([{ id: "tk-C", estado: "autorizada", operacao_id: "op-C", expira_em: H_ATRAS }]);
   C._seed([{ operacao_id: "op-C", status: "pendente", valor_esperado_centavos: 3500 }]);
-  OP._definir("op-C", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+  OP._definir("op-C", { outcome: "success", status: "EXPIRED", amountCentavos: null });
 
   await run();
 
-  ok(T._all().find((t) => t.id === "tk-C").estado === "expirada", "C: token 'autorizada' -> 'expirada' (acesso liberado)");
-  ok(C._all().find((c) => c.operacao_id === "op-C").status === "pendente", "C: cobranca NAO e' expirada (fica 'pendente' pro Caso D)");
-  ok(CV.acionamentos().length === 0, "C: NAO transfere (nao bloqueia o proximo 'quero renovar' do cliente)");
+  ok(T._all().find((t) => t.id === "tk-C").estado === "expirada", "C (EXPIRED): token 'autorizada' -> 'expirada' (acesso liberado)");
+  ok(C._all().find((c) => c.operacao_id === "op-C").status === "pendente", "C (EXPIRED): cobranca NAO e' expirada (fica 'pendente' pro Caso D)");
+  ok(CV.acionamentos().length === 0, "C (EXPIRED): NAO transfere (nao bloqueia o proximo 'quero renovar' do cliente)");
   ok(
     WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
-    "C: cliente avisado 1x com a mensagem fixa de expiracao",
+    "C (EXPIRED): cliente avisado 1x com a mensagem fixa de expiracao",
   );
-  ok(GH.disparosRegistrados().length === 0, "C: nenhum workflow disparado");
+  ok(GH.disparosRegistrados().length === 0, "C (EXPIRED): nenhum workflow disparado");
 }
 async function casoC_concorrencia() {
   resetarTudo();
   T._seed([{ id: "tk-Cc", estado: "autorizada", operacao_id: "op-Cc", expira_em: H_ATRAS }]);
   C._seed([{ operacao_id: "op-Cc", status: "pendente", valor_esperado_centavos: 3500 }]);
-  OP._definir("op-Cc", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+  OP._definir("op-Cc", { outcome: "success", status: "EXPIRED", amountCentavos: null });
 
   await Promise.all([run(), run()]);
 
-  ok(T._all().find((t) => t.id === "tk-Cc").estado === "expirada", "C concorrencia: token 'expirada' (consistente)");
-  ok(C._all().find((c) => c.operacao_id === "op-Cc").status === "pendente", "C concorrencia: cobranca intocada");
+  ok(T._all().find((t) => t.id === "tk-Cc").estado === "expirada", "C concorrencia (EXPIRED): token 'expirada' (consistente)");
+  ok(C._all().find((c) => c.operacao_id === "op-Cc").status === "pendente", "C concorrencia (EXPIRED): cobranca intocada");
   ok(
     WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
-    "C concorrencia: cliente avisado EXATAMENTE 1x",
+    "C concorrencia (EXPIRED): cliente avisado EXATAMENTE 1x",
   );
+}
+async function casoC_status_terminal_variantes() {
+  // Outros estados explicitamente terminais tambem liberam (allowlist).
+  for (const st of ["expired", "CANCELLED", "REFUNDED"]) {
+    resetarTudo();
+    T._seed([{ id: "tk-Cv", estado: "autorizada", operacao_id: "op-Cv", expira_em: H_ATRAS }]);
+    C._seed([{ operacao_id: "op-Cv", status: "pendente", valor_esperado_centavos: 3500 }]);
+    OP._definir("op-Cv", { outcome: "success", status: st, amountCentavos: null });
+    await run();
+    ok(T._all().find((t) => t.id === "tk-Cv").estado === "expirada", `C terminal '${st}': token liberado ('expirada')`);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -291,15 +305,15 @@ async function lote_C_naoPago() {
   resetarTudo();
   L._seed([{ grupo_id: "gp-C", estado: "autorizada", operacao_id: "op-LC", expira_em: H_ATRAS }]);
   C._seed([{ operacao_id: "op-LC", status: "pendente", valor_esperado_centavos: 7000 }]);
-  OP._definir("op-LC", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+  OP._definir("op-LC", { outcome: "success", status: "EXPIRED", amountCentavos: null });
 
   await run();
-  ok(L._all().find((l) => l.grupo_id === "gp-C").estado === "expirada", "lote C: lote -> 'expirada' (acessos liberados)");
-  ok(C._all().find((c) => c.operacao_id === "op-LC").status === "pendente", "lote C: cobranca intocada");
-  ok(CV.acionamentos().length === 0, "lote C: nao transfere");
+  ok(L._all().find((l) => l.grupo_id === "gp-C").estado === "expirada", "lote C (EXPIRED): lote -> 'expirada' (acessos liberados)");
+  ok(C._all().find((c) => c.operacao_id === "op-LC").status === "pendente", "lote C (EXPIRED): cobranca intocada");
+  ok(CV.acionamentos().length === 0, "lote C (EXPIRED): nao transfere");
   ok(
     WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
-    "lote C: cliente avisado 1x",
+    "lote C (EXPIRED): cliente avisado 1x",
   );
 }
 
@@ -470,6 +484,312 @@ async function c3_woovi_indisponivel() {
 }
 
 // ---------------------------------------------------------------------
+// JANELA DE 5 MIN PONTA A PONTA (2026-09-07)
+//   cobranca inexistente (404 na Woovi) -> dupla confirmacao antes de liberar
+//   Woovi indisponivel (unavailable)     -> NUNCA libera; backstop de 24h
+//   EXPIRED                               -> CASO C (libera)
+// ---------------------------------------------------------------------
+const MIN1_ATRAS = new Date(Date.now() - 60 * 1000).toISOString(); // < gap de 4min
+
+async function nf_1o_ciclo_marca_sem_liberar() {
+  resetarTudo();
+  T._seed([{ id: "tk-NF1", estado: "autorizada", operacao_id: "op-NF1", expira_em: H_ATRAS }]);
+  OP._definir("op-NF1", { outcome: "not_found" });
+
+  await run();
+
+  const t = T._all().find((x) => x.id === "tk-NF1");
+  ok(t.estado === "autorizada", "NF 1o ciclo: token INTOCADO ('autorizada') -- nao libera na 1a deteccao");
+  ok(t.cobranca_ausente_em !== null, "NF 1o ciclo: marcador cobranca_ausente_em gravado");
+  ok(WA.mensagensEnviadas().length === 0, "NF 1o ciclo: nenhuma mensagem ao cliente");
+  ok(CV.acionamentos().length === 0, "NF 1o ciclo: nenhuma transferencia");
+  ok(GH.disparosRegistrados().length === 0, "NF 1o ciclo: nenhum workflow");
+  ok(MA.mensagens().filter((m) => m.origem === "sistema").length === 1, "NF 1o ciclo: 1 nota de sistema (1a deteccao)");
+}
+
+async function nf_2o_ciclo_libera() {
+  resetarTudo();
+  T._seed([
+    { id: "tk-NF2", estado: "autorizada", operacao_id: "op-NF2", expira_em: H_ATRAS, cobranca_ausente_em: MIN10_ATRAS },
+  ]);
+  OP._definir("op-NF2", { outcome: "not_found" });
+
+  await run();
+
+  ok(T._all().find((x) => x.id === "tk-NF2").estado === "expirada", "NF 2o ciclo: token 'autorizada' -> 'expirada' (acesso liberado)");
+  ok(
+    WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
+    "NF 2o ciclo: cliente avisado 1x com a mensagem fixa de expiracao",
+  );
+  ok(CV.acionamentos().length === 0, "NF 2o ciclo: NAO transfere (nao ha' dinheiro -- a cobranca nao existe)");
+  ok(GH.disparosRegistrados().length === 0, "NF 2o ciclo: nenhum workflow");
+
+  await run(); // idempotencia
+  ok(
+    WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
+    "NF 2o ciclo: 2a execucao e' no-op (token nao esta mais 'autorizada')",
+  );
+}
+
+async function nf_2o_ciclo_cedo_demais_nao_libera() {
+  resetarTudo();
+  T._seed([
+    { id: "tk-NF3", estado: "autorizada", operacao_id: "op-NF3", expira_em: H_ATRAS, cobranca_ausente_em: MIN1_ATRAS },
+  ]);
+  OP._definir("op-NF3", { outcome: "not_found" });
+
+  await run();
+
+  ok(T._all().find((x) => x.id === "tk-NF3").estado === "autorizada", "NF cedo demais: marcador recente (< 4min) -> NAO libera ainda");
+  ok(WA.mensagensEnviadas().length === 0, "NF cedo demais: nenhuma mensagem ao cliente");
+}
+
+async function nf_marcador_limpo_por_outro_resultado() {
+  resetarTudo();
+  // Tinha marcador (404 anterior), mas agora a Woovi diz 'unavailable'
+  // DENTRO da carencia de 24h -> o 404 era transitorio: limpa o marcador,
+  // nada e' liberado, sem backstop.
+  T._seed([
+    { id: "tk-NF4", estado: "autorizada", operacao_id: "op-NF4", expira_em: H_ATRAS, cobranca_ausente_em: MIN10_ATRAS },
+  ]);
+  C._seed([{ operacao_id: "op-NF4", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-NF4", { outcome: "unavailable" });
+
+  await run();
+
+  const t = T._all().find((x) => x.id === "tk-NF4");
+  ok(t.estado === "autorizada", "NF marcador limpo: token INTOCADO (unavailable nunca libera)");
+  ok(t.cobranca_ausente_em === null, "NF marcador limpo: cobranca_ausente_em zerado (404 anterior era transitorio)");
+  ok(CV.acionamentos().length === 0, "NF marcador limpo: nenhuma transferencia (dentro da carencia de 24h)");
+}
+
+async function indefinido_dentro_24h_noop() {
+  resetarTudo();
+  T._seed([{ id: "tk-IN1", estado: "autorizada", operacao_id: "op-IN1", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-IN1", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-IN1", { outcome: "unavailable" });
+
+  await run();
+
+  ok(T._all().find((x) => x.id === "tk-IN1").estado === "autorizada", "indefinido < 24h: token INTOCADO -- Woovi indisponivel NUNCA libera");
+  ok(CV.acionamentos().length === 0, "indefinido < 24h: nenhuma transferencia");
+  ok(MA.mensagens().length === 0, "indefinido < 24h: nenhuma nota de sistema");
+  ok(WA.mensagensEnviadas().length === 0, "indefinido < 24h: nenhuma mensagem ao cliente");
+}
+
+async function indefinido_apos_24h_backstop() {
+  resetarTudo();
+  T._seed([{ id: "tk-IN2", estado: "autorizada", operacao_id: "op-IN2", expira_em: DIAS2_ATRAS }]);
+  C._seed([{ operacao_id: "op-IN2", status: "pendente", valor_esperado_centavos: 3500, criado_em: DIAS2_ATRAS }]);
+  OP._definir("op-IN2", { outcome: "unavailable" });
+
+  await run();
+
+  ok(
+    T._all().find((x) => x.id === "tk-IN2").estado === "renovacao_indeterminada",
+    "backstop 24h: token 'autorizada' -> 'renovacao_indeterminada' (NUNCA 'expirada' em silencio)",
+  );
+  ok(
+    CV.acionamentos().length === 1 && CV.acionamentos()[0].motivo === "renovacao:pagamento_nao_verificavel",
+    "backstop 24h: transferencia humana acionada (pagamento nao verificavel)",
+  );
+  ok(NT.notificacoes().length === 1, "backstop 24h: Jose avisado 1x");
+  ok(GH.disparosRegistrados().length === 0, "backstop 24h: nenhum workflow");
+
+  await run(); // idempotencia
+  ok(CV.acionamentos().length === 1, "backstop 24h: 2a execucao NAO transfere de novo");
+}
+
+// ---------------------------------------------------------------------
+// SPLIT EXPIRED / ACTIVE (2026-09-07)
+//   A janela de 5min NUNCA e' prova de que a cobranca Woovi expirou -- so'
+//   o STATUS efetivo da Woovi decide. ACTIVE apos o expira_em do token NAO
+//   libera; aguarda o proximo ciclo. Backstop de 24h (criado_em) so' em
+//   anomalia (ACTIVE prolongado) -> encerra + transfere, nunca em silencio.
+// ---------------------------------------------------------------------
+async function active_apos_expiracao_nao_libera() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC1", estado: "autorizada", operacao_id: "op-AC1", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC1", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-AC1", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+
+  ok(T._all().find((t) => t.id === "tk-AC1").estado === "autorizada", "ACTIVE apos expiracao: token INTOCADO ('autorizada') -- NAO vira 'nao pago'");
+  ok(C._all().find((c) => c.operacao_id === "op-AC1").status === "pendente", "ACTIVE apos expiracao: cobranca intocada");
+  ok(WA.mensagensEnviadas().length === 0, "ACTIVE apos expiracao: nenhuma mensagem ao cliente");
+  ok(CV.acionamentos().length === 0, "ACTIVE apos expiracao: nenhuma transferencia");
+  ok(MA.mensagens().length === 0, "ACTIVE apos expiracao: nenhuma nota de sistema (sem spam)");
+  ok(GH.disparosRegistrados().length === 0, "ACTIVE apos expiracao: nenhum workflow");
+}
+
+async function active_ciclo_seguinte_continua_aguardando() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC2", estado: "autorizada", operacao_id: "op-AC2", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC2", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-AC2", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+  await run();
+  await run(); // varios ciclos, Woovi segue ACTIVE
+
+  ok(T._all().find((t) => t.id === "tk-AC2").estado === "autorizada", "ACTIVE ciclo seguinte: token segue 'autorizada' apos 3 ciclos");
+  ok(C._all().find((c) => c.operacao_id === "op-AC2").status === "pendente", "ACTIVE ciclo seguinte: cobranca segue 'pendente'");
+  ok(CV.acionamentos().length === 0, "ACTIVE ciclo seguinte: nenhuma transferencia acumulada");
+  ok(MA.mensagens().length === 0, "ACTIVE ciclo seguinte: nenhuma nota de sistema acumulada");
+}
+
+async function active_depois_expired_libera() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC3", estado: "autorizada", operacao_id: "op-AC3", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC3", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-AC3", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+  ok(T._all().find((t) => t.id === "tk-AC3").estado === "autorizada", "ACTIVE->EXPIRED: 1o ciclo (ACTIVE) NAO libera");
+
+  OP._definir("op-AC3", { outcome: "success", status: "EXPIRED", amountCentavos: null }); // Woovi virou o status
+  await run();
+
+  ok(T._all().find((t) => t.id === "tk-AC3").estado === "expirada", "ACTIVE->EXPIRED: 2o ciclo (EXPIRED) libera (CASO C)");
+  ok(
+    WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
+    "ACTIVE->EXPIRED: cliente avisado 1x, so' quando a Woovi confirmou EXPIRED",
+  );
+  ok(CV.acionamentos().length === 0, "ACTIVE->EXPIRED: nao transfere");
+}
+
+async function active_depois_completed_renova_normal() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC4", estado: "autorizada", operacao_id: "op-AC4", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC4", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-AC4", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+  ok(T._all().find((t) => t.id === "tk-AC4").estado === "autorizada", "ACTIVE->COMPLETED: 1o ciclo (ACTIVE) NAO libera nem toca a cobranca");
+  ok(C._all().find((c) => c.operacao_id === "op-AC4").status === "pendente", "ACTIVE->COMPLETED: 1o ciclo -- cobranca ainda 'pendente'");
+
+  OP._definir("op-AC4", { outcome: "success", status: "COMPLETED", amountCentavos: 3500 }); // pagou
+  await run();
+
+  ok(C._all().find((c) => c.operacao_id === "op-AC4").status === "pago", "ACTIVE->COMPLETED: cobranca 'pendente' -> 'pago'");
+  ok(T._all().find((t) => t.id === "tk-AC4").estado === "renovacao_em_andamento", "ACTIVE->COMPLETED: token -> 'renovacao_em_andamento' (CASO B, renovacao segue normal)");
+  ok(GH.disparosRegistrados().length === 1 && GH.disparosRegistrados()[0] === "op-AC4", "ACTIVE->COMPLETED: workflow disparado exatamente 1x");
+  ok(CV.acionamentos().length === 0, "ACTIVE->COMPLETED: nenhuma transferencia");
+}
+
+async function active_completed_via_webhook_nao_perde_renovacao() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC5", estado: "autorizada", operacao_id: "op-AC5", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC5", status: "pendente", valor_esperado_centavos: 3500, criado_em: H_ATRAS }]);
+  OP._definir("op-AC5", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run(); // watchdog viu ACTIVE, aguardou
+  ok(T._all().find((t) => t.id === "tk-AC5").estado === "autorizada", "ACTIVE+webhook: apos reconciliacao com ACTIVE, token segue 'autorizada'");
+
+  // Agora o WEBHOOK real chega com COMPLETED e avanca tudo (openpix-webhook):
+  await C.marcarCobrancaComoPaga("op-AC5");
+  await T.reivindicarInicioRenovacao("op-AC5");
+  await GH.dispararWorkflowRenovacaoSigma("op-AC5");
+
+  ok(T._all().find((t) => t.id === "tk-AC5").estado === "renovacao_em_andamento", "ACTIVE+webhook: webhook avancou o token");
+  ok(GH.disparosRegistrados().length === 1, "ACTIVE+webhook: workflow disparado 1x (pelo webhook)");
+
+  await run(); // watchdog roda de novo
+  ok(GH.disparosRegistrados().length === 1, "ACTIVE+webhook: watchdog NAO redispara (token nao esta mais 'autorizada')");
+  ok(C._all().find((c) => c.operacao_id === "op-AC5").status === "pago", "ACTIVE+webhook: pagamento preservado ('pago') -- renovacao nunca perdida");
+}
+
+async function active_persistente_somente_backstop_24h() {
+  resetarTudo();
+  T._seed([{ id: "tk-AC6", estado: "autorizada", operacao_id: "op-AC6", expira_em: DIAS2_ATRAS }]);
+  C._seed([{ operacao_id: "op-AC6", status: "pendente", valor_esperado_centavos: 3500, criado_em: DIAS2_ATRAS }]);
+  OP._definir("op-AC6", { outcome: "success", status: "ACTIVE", amountCentavos: null }); // ACTIVE ha' > 24h -- anomalia
+
+  await run();
+
+  ok(
+    T._all().find((t) => t.id === "tk-AC6").estado === "renovacao_indeterminada",
+    "ACTIVE persistente: apos 24h (criado_em) -> 'renovacao_indeterminada' (encerramento SEGURO, NUNCA 'expirada' em silencio)",
+  );
+  ok(
+    CV.acionamentos().length === 1 && CV.acionamentos()[0].motivo === "renovacao:cobranca_ativa_prolongada",
+    "ACTIVE persistente: transferencia humana acionada (motivo proprio 'cobranca_ativa_prolongada')",
+  );
+  ok(NT.notificacoes().length === 1, "ACTIVE persistente: Jose avisado 1x");
+  ok(GH.disparosRegistrados().length === 0, "ACTIVE persistente: nenhum workflow");
+  ok(
+    WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 0,
+    "ACTIVE persistente: cliente NAO recebe a mensagem de 'expirou sem pagamento' (foi pra humano)",
+  );
+
+  await run(); // idempotencia
+  ok(CV.acionamentos().length === 1, "ACTIVE persistente: 2a execucao NAO transfere de novo");
+}
+
+async function lote_active_apos_expiracao_nao_libera() {
+  resetarTudo();
+  L._seed([{ grupo_id: "gp-AC", estado: "autorizada", operacao_id: "op-LAC", expira_em: H_ATRAS }]);
+  C._seed([{ operacao_id: "op-LAC", status: "pendente", valor_esperado_centavos: 7000, criado_em: H_ATRAS }]);
+  OP._definir("op-LAC", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+
+  ok(L._all().find((l) => l.grupo_id === "gp-AC").estado === "autorizada", "lote ACTIVE apos expiracao: lote INTOCADO ('autorizada')");
+  ok(CV.acionamentos().length === 0, "lote ACTIVE apos expiracao: nenhuma transferencia");
+  ok(WA.mensagensEnviadas().length === 0, "lote ACTIVE apos expiracao: nenhuma mensagem ao cliente");
+}
+
+async function lote_active_persistente_backstop_24h() {
+  resetarTudo();
+  L._seed([{ grupo_id: "gp-ACb", estado: "autorizada", operacao_id: "op-LACb", expira_em: DIAS2_ATRAS }]);
+  C._seed([{ operacao_id: "op-LACb", status: "pendente", valor_esperado_centavos: 7000, criado_em: DIAS2_ATRAS }]);
+  OP._definir("op-LACb", { outcome: "success", status: "ACTIVE", amountCentavos: null });
+
+  await run();
+
+  ok(L._all().find((l) => l.grupo_id === "gp-ACb").estado === "falhou", "lote ACTIVE persistente: apos 24h -> 'falhou' (encerramento seguro)");
+  ok(
+    CV.acionamentos().length === 1 && CV.acionamentos()[0].motivo === "renovacao_lote:cobranca_ativa_prolongada",
+    "lote ACTIVE persistente: transferencia humana acionada",
+  );
+  ok(NT.notificacoes().length === 1, "lote ACTIVE persistente: Jose avisado 1x");
+}
+
+async function lote_nf_2o_ciclo_libera() {
+  resetarTudo();
+  L._seed([
+    { grupo_id: "gp-NF", estado: "autorizada", operacao_id: "op-LNF", expira_em: H_ATRAS, cobranca_ausente_em: MIN10_ATRAS },
+  ]);
+  OP._definir("op-LNF", { outcome: "not_found" });
+
+  await run();
+
+  ok(L._all().find((l) => l.grupo_id === "gp-NF").estado === "expirada", "lote NF 2o ciclo: lote -> 'expirada' (acessos liberados)");
+  ok(
+    WA.mensagensEnviadas().filter((m) => m.texto === MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO).length === 1,
+    "lote NF 2o ciclo: cliente avisado 1x",
+  );
+  ok(CV.acionamentos().length === 0, "lote NF 2o ciclo: nao transfere");
+}
+
+async function lote_indefinido_apos_24h_backstop() {
+  resetarTudo();
+  L._seed([{ grupo_id: "gp-IN", estado: "autorizada", operacao_id: "op-LIN", expira_em: DIAS2_ATRAS }]);
+  C._seed([{ operacao_id: "op-LIN", status: "pendente", valor_esperado_centavos: 7000, criado_em: DIAS2_ATRAS }]);
+  OP._definir("op-LIN", { outcome: "unavailable" });
+
+  await run();
+
+  ok(L._all().find((l) => l.grupo_id === "gp-IN").estado === "falhou", "lote backstop 24h: lote 'autorizada' -> 'falhou'");
+  ok(
+    CV.acionamentos().length === 1 && CV.acionamentos()[0].motivo === "renovacao_lote:pagamento_nao_verificavel",
+    "lote backstop 24h: transferencia humana acionada",
+  );
+  ok(NT.notificacoes().length === 1, "lote backstop 24h: Jose avisado 1x");
+}
+
+// ---------------------------------------------------------------------
 async function vazio() {
   resetarTudo();
   const resp = await run();
@@ -484,6 +804,7 @@ await casoB_concorrencia();
 await casoB_webhookJaMarcouPago();
 await casoC_naoPago();
 await casoC_concorrencia();
+await casoC_status_terminal_variantes();
 await casoE_divergente();
 await casoD_pagoOrfao();
 await casoD_webhookAtrasado();
@@ -502,6 +823,24 @@ await c3_valor_divergente_sem_efeito();
 await c3_concorrencia();
 await c3_corrida_com_webhook();
 await c3_woovi_indisponivel();
+// Janela de 5min ponta a ponta (2026-09-07)
+await nf_1o_ciclo_marca_sem_liberar();
+await nf_2o_ciclo_libera();
+await nf_2o_ciclo_cedo_demais_nao_libera();
+await nf_marcador_limpo_por_outro_resultado();
+await indefinido_dentro_24h_noop();
+await indefinido_apos_24h_backstop();
+await lote_nf_2o_ciclo_libera();
+await lote_indefinido_apos_24h_backstop();
+// Split EXPIRED / ACTIVE (2026-09-07)
+await active_apos_expiracao_nao_libera();
+await active_ciclo_seguinte_continua_aguardando();
+await active_depois_expired_libera();
+await active_depois_completed_renova_normal();
+await active_completed_via_webhook_nao_perde_renovacao();
+await active_persistente_somente_backstop_24h();
+await lote_active_apos_expiracao_nao_libera();
+await lote_active_persistente_backstop_24h();
 await vazio();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

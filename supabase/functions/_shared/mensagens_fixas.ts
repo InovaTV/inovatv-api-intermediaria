@@ -150,6 +150,8 @@ export function montarMensagemPixRenovacao(
     "🔗 PAGAR RENOVAÇÃO",
     linkPagamento,
     "",
+    "⏱️ Você tem *5 minutos* para pagar. Depois desse prazo a cobrança expira automaticamente e será preciso pedir uma nova renovação.",
+    "",
     "✅ Não é necessário enviar o comprovante.",
     "",
     "🔄 Após a confirmação do pagamento, sua renovação será processada automaticamente.",

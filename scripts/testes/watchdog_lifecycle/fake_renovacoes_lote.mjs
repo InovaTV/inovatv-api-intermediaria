@@ -16,6 +16,7 @@ export function _seed(lista) {
     criado_em: l.criado_em ?? null,
     expira_em: l.expira_em,
     renovacao_concluida_em: l.renovacao_concluida_em ?? null,
+    cobranca_ausente_em: l.cobranca_ausente_em ?? null,
   }));
 }
 export function _all() {
@@ -83,6 +84,20 @@ export async function reivindicarInicioRenovacaoLote(operacaoId) {
   return { ...l };
 }
 
+// Janela de 5min ponta a ponta (2026-09-07) -- espelho lote.
+export async function marcarLoteCobrancaAusenteDetectada(grupoId) {
+  const l = lotes.find((x) => x.grupo_id === grupoId);
+  if (!l || l.estado !== "autorizada" || l.cobranca_ausente_em) return null; // CAS duplo
+  l.cobranca_ausente_em = new Date().toISOString();
+  return { ...l };
+}
+export async function limparLoteCobrancaAusente(grupoId) {
+  const l = lotes.find((x) => x.grupo_id === grupoId);
+  if (!l || l.estado !== "autorizada") return null; // CAS
+  l.cobranca_ausente_em = null;
+  return { ...l };
+}
+
 export async function buscarFilhosDoLote() {
   return [];
 }
@@ -100,6 +115,13 @@ export async function marcarResultadoFilhoLote() {
 export async function marcarEstadoFinalLote() {
   return null;
 }
-export async function marcarLoteComoFalha() {
-  return null;
+// Backstop de 24h do lote (2026-09-07) -- CAS: 'autorizada' | 'renovacao_em_andamento' -> 'falhou'.
+export async function marcarLoteComoFalha(grupoId, motivo) {
+  const l = lotes.find(
+    (x) => x.grupo_id === grupoId && (x.estado === "autorizada" || x.estado === "renovacao_em_andamento"),
+  );
+  if (!l) return null;
+  l.estado = "falhou";
+  l.motivo_falha = motivo;
+  return { ...l };
 }

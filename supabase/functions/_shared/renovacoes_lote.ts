@@ -48,6 +48,11 @@ export interface RenovacaoLote {
   decidido_em: string | null;
   renovacao_iniciada_em: string | null;
   renovacao_concluida_em: string | null;
+  // Janela de 5min ponta a ponta (2026-09-07) -- espelho lote de
+  // tokens_renovacao.cobranca_ausente_em: 1a deteccao de cobranca
+  // inexistente na Woovi. O watchdog so' libera o lote apos confirmar
+  // o 404 em dois ciclos diferentes.
+  cobranca_ausente_em: string | null;
 }
 
 // Cada filho: um acesso do lote. Snapshot dos dados apresentados na
@@ -64,7 +69,9 @@ export interface FilhoLote {
   vencimentoAtual: string;
 }
 
-const JANELA_EXPIRACAO_MS = 2 * 60 * 60 * 1000; // 2h, mesma do token individual
+// Janela de pagamento ponta a ponta (2026-09-07) -- 5min, mesma do
+// token individual (antes 2h). Ver comentario em tokens_renovacao.ts.
+const JANELA_EXPIRACAO_MS = 5 * 60 * 1000;
 
 // Cria a "capa" do lote + os N filhos em tokens_renovacao, numa
 // sequencia (nao ha transacao no client REST -- a atomicidade que
@@ -474,6 +481,37 @@ export async function marcarLoteCicloRenovacaoEncerrado(grupoId: string): Promis
     .update({ renovacao_concluida_em: new Date().toISOString() })
     .eq("grupo_id", grupoId)
     .is("renovacao_concluida_em", null)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return (data as RenovacaoLote) ?? null;
+}
+
+// Janela de 5min ponta a ponta (2026-09-07) -- espelho lote de
+// marcarCobrancaAusenteDetectada / limparCobrancaAusente
+// (tokens_renovacao.ts). Cobranca inexistente na Woovi so' libera o
+// lote apos confirmacao em dois ciclos diferentes do watchdog.
+export async function marcarLoteCobrancaAusenteDetectada(grupoId: string): Promise<RenovacaoLote | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .update({ cobranca_ausente_em: new Date().toISOString() })
+    .eq("grupo_id", grupoId)
+    .eq("estado", "autorizada")
+    .is("cobranca_ausente_em", null)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return (data as RenovacaoLote) ?? null;
+}
+
+export async function limparLoteCobrancaAusente(grupoId: string): Promise<RenovacaoLote | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .update({ cobranca_ausente_em: null })
+    .eq("grupo_id", grupoId)
+    .eq("estado", "autorizada")
     .select("*")
     .maybeSingle();
   if (error) throw error;
