@@ -481,6 +481,22 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
   await renovarCheckbox.waitFor({ state: "visible", timeout: 10000 });
   await renovarCheckbox.check();
 
+  // Correcao de duplicidade de confirmacao (07/09/2026, auditoria de
+  // coexistencia RocketZap x Wasender): o RocketZap dispara sua propria
+  // mensagem de confirmacao como efeito colateral deste mesmo POST quando
+  // enviar_mensagem fica no default do modal (comprovado em teste real,
+  // 22/08/2026 -- POC enviar_mensagem=false silenciou o RocketZap sem
+  // afetar Sigma/Rocket). Desmarcado explicitamente aqui -- nunca deixado
+  // no default -- porque nossa propria infraestrutura ja envia a
+  // confirmacao (renovacao-sigma-resultado/autocura-unitv-resultado).
+  // NAO afeta os lembretes do RocketZap: esse campo pertence exclusivamente
+  // ao formulario de pagamento (evento pontual "Pagamento Confirmado"); os
+  // lembretes disparam por um motor de Cobranca automatica separado, sem
+  // relacao com esta submissao.
+  const enviarMensagemCheckbox = page.locator('input[name="enviar_mensagem"]');
+  await enviarMensagemCheckbox.waitFor({ state: "visible", timeout: 10000 });
+  await enviarMensagemCheckbox.uncheck();
+
   await page.waitForTimeout(3000);
 
   const selects = await page.locator("select:visible").all();

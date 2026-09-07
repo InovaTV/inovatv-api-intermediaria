@@ -75,6 +75,7 @@ function locatorFake(sel) {
   return {
     click: async () => ev("click", { sel }),
     check: async () => ev("check", { sel }),
+    uncheck: async () => ev("uncheck", { sel }),
     waitFor: async () => ev("waitFor", { sel }),
     all: async () => (sel === "select:visible" ? [selectLocatorFake()] : []),
     locator: (s) => locatorFake(`${sel} ${s}`),
