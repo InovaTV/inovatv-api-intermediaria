@@ -1,5 +1,81 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-07 — CORREÇÃO DE DUPLICIDADE ROCKETZAP×WASENDER
+> COMMITADA E ENVIADA (`e763572`); RECONEXÃO DO WASENDER E ATIVAÇÃO DA
+> "PROTEÇÃO DA CONTA" AINDA NÃO EXECUTADAS.** `scripts/renovacao-sigma-workflow.mjs`
+> passou a desmarcar explicitamente `enviar_mensagem` no formulário
+> "Add Pagamento" do Rocket (mantendo `renovar_painel=true`) — o
+> RocketZap não dispara mais sua própria confirmação de pagamento
+> duplicada, sem afetar a renovação real do Sigma nem os lembretes de
+> vencimento (motor "Cobrança automática" do Rocket, mecanismo
+> estruturalmente separado — evidência em
+> `docs/renovacao_automatica/levantamentos/2026-08-22_matriz_migracao_rocketzap.md`
+> §1.1 vs §1.3). `fake_playwright.mjs` de 2 suítes de teste ganhou
+> `.uncheck()` (infra de teste, não lógica de negócio). **Commit
+> `e763572`, push feito, `origin/main` == `e763572`, working tree
+> limpo, nenhum deploy adicional feito.** As 3 suítes relevantes
+> (`renovacao-sigma-workflow-leitura`, `renovacao_sigma_workflow_misto`,
+> `renovacao_sigma_workflow_unitv`) passam 100%. `.github/workflows/renovacao-sigma.yml`
+> usa `actions/checkout@v4` sem `ref:` fixo — a próxima execução real já
+> usará a correção automaticamente, sem precisar de deploy (é script de
+> GitHub Actions, não Edge Function).
+>
+> **Checagem somente-leitura, pré-reconexão, feita nos dois painéis
+> externos (Wasender e Rocket) — achado real: as duas sessões estão
+> desconectadas ao mesmo tempo.** Wasender: sessão "Tope Tv" `#117404`,
+> número `+5517996242415`, estado **Logged Out**; Webhook URL confirmado
+> apontando para produção (`https://nduxsuxkopuvhwugdkqi.supabase.co/functions/v1/webhook-wasender`),
+> nenhuma configuração para o LAB. RocketZap: sessão `inovatv`
+> (`RocketZap 2.0 BETA`) — **Desconectado/OFFLINE**, contrário à
+> expectativa inicial de que estaria ativa; achado incidental durante a
+> checagem (clique num ícone mal identificado como "Logs" abriu na
+> verdade o modal "Conectar via WhatsApp Web" — fechado imediatamente,
+> sem QR gerado, sem extensão instalada, sem nenhuma mudança de estado
+> confirmada depois). Nenhuma reconexão foi executada em nenhum dos
+> dois. Nenhuma alteração de configuração foi salva no Wasender (só a
+> tela de edição foi visualizada, não submetida).
+>
+> **Análise técnica de compatibilidade da opção "Ativar proteção da
+> conta" do Wasender com nossa arquitetura — concluída, classificação
+> 🟡 ATIVAR COM RESSALVAS.** Auditado (só leitura): `wasender_client.ts`
+> (timeout 10s, `AbortSignal.timeout`, **nenhum retry em nenhum ponto do
+> código**, qualquer falha vira `{outcome:"unavailable"}` genérico,
+> sem distinguir rate-limit de qualquer outro erro), `orchestrator`,
+> `renovacao_confirmacao.ts`, `openpix-webhook`, `renovacao-sigma-resultado`,
+> `webhook-wasender`. Confirmado: nenhum envio em paralelo em nenhum
+> ponto do código (`Promise.all` só é usado para leituras de dados,
+> nunca para envio de WhatsApp); todo envio é sequencial; os únicos
+> pontos onde 2 mensagens vão pro mesmo cliente sempre têm uma chamada
+> de rede real no meio (Rocket, OpenPix, ou o disparo do GitHub Actions
+> — gap de segundos a ~2min, nunca simultâneo). Risco real identificado:
+> se a proteção fizer a resposta do `POST /api/send-message` demorar
+> **mais de 10s**, nosso timeout aborta e registramos falso
+> "unavailable" mesmo que a mensagem seja entregue depois (sub-registro
+> no histórico do Painel, não duplicata, não erro visível ao cliente).
+> RocketZap confirmado isolado (é sessão/mecanismo diferente,
+> desconectado agora de qualquer forma). **Recomendação: pode ativar,
+> mas monitorar logs `[wasender_client] envio falhou`/`resposta 2xx sem
+> msgId util` nos primeiros dias** — nenhuma mudança de código
+> necessária agora. **Opção NÃO foi marcada, nada foi salvo.**
+>
+> **Nenhuma decisão de reconectar o Wasender nem de ativar a proteção
+> foi tomada nesta sessão — as duas ficam para o usuário decidir e
+> executar (ambas exigem ação manual dele: reconexão real pode
+> depender de escanear QR / re-parear a sessão; ativar a proteção é um
+> clique na tela de edição já localizada).** Checklist operacional
+> completo de pré-reconexão (10 pontos: git, deploy, secrets, código,
+> testes) já validado e aprovado antes desta checagem — ver
+> `inovatv_central/CLAUDE.md` para o relato completo desta frente
+> (mesma seção que documenta a correção + as duas checagens + a
+> análise de compatibilidade). **Correção de uma linha desatualizada
+> logo abaixo nesta mesma nota de topo (checkpoint 2026-09-06):** a
+> função `webhook` (Meta Cloud API) mencionada ali como "segue ACTIVE
+> deliberadamente" **não existe mais** — foi removida em 2026-09-07
+> (sessão separada, ver "Meta / WhatsApp Cloud API — aposentada em
+> definitivo" no `inovatv_central/CLAUDE.md`); confirmado nesta sessão
+> por `supabase functions list` não trazer mais `webhook` na lista.
+> Antes disso:
+>
 > **✅ CHECKPOINT 2026-09-06 (tarde) — SESSÃO DOCUMENTAL, SEM ALTERAÇÃO
 > FUNCIONAL.** Base Mestra V1 comercial **promovida para produção** (só
 > DADOS em `public.conhecimento_institucional`, projeto
@@ -161,6 +237,242 @@
 > evidência nova e concreta.
 
 ---
+
+## SESSÃO 2026-09-07 — CORREÇÃO DE DUPLICIDADE ROCKETZAP×WASENDER + PREPARAÇÃO (NÃO EXECUÇÃO) DA RECONEXÃO DO WASENDER
+
+**Encerramento de sessão a pedido do usuário (troca/reinício de
+máquina) — checkpoint de fechamento completo.** Três blocos de trabalho,
+nesta ordem: (1) correção de código já commitada e enviada; (2)
+verificação operacional somente-leitura antes de qualquer reconexão;
+(3) análise técnica de compatibilidade de uma opção do Wasender, também
+somente-leitura. **Nada foi deployado nesta sessão** (a correção do
+item 1 é um script de GitHub Actions, não uma Edge Function — não
+precisa de deploy, só precisa estar no `main`, e já está).
+
+### 1. Correção de duplicidade — CONCLUÍDA, commitada, enviada
+
+**Achado, auditado antes da implementação:** o RocketZap dispara sua
+própria mensagem de confirmação de pagamento ("Pagamento Confirmado")
+como efeito colateral do `POST /gerenciador/pagamento/add/` sempre que
+o campo `enviar_mensagem` do formulário fica no default do modal do
+Rocket (`true`) — mecanismo já comprovado por teste real em
+22/08/2026 (`docs/renovacao_automatica/levantamentos/2026-08-22_achado_separacao_renovar_painel_enviar_mensagem.md`,
+§8). Como nossa própria infraestrutura já envia essa confirmação
+(`renovacao-sigma-resultado`/`autocura-unitv-resultado`, via
+`enviarTemplateWhatsApp`), o cliente recebia a mensagem **duas vezes**.
+
+**Independência confirmada por auditoria de código/documentação (sem
+executar renovação real) antes de aplicar a correção:** o campo
+`enviar_mensagem` pertence exclusivamente à submissão do formulário
+"Add Pagamento" (mecanismo "Evento pontual" do Rocket) — não é estado
+persistente de cliente/conta, é um dos 14 campos HTML de uma única
+requisição POST. O motor de lembretes de vencimento (Vence Hoje, Vence
+em 3 Dias, Vencido a 3 Dias etc.) é o mecanismo **"Cobrança
+automática"**, estruturalmente separado — roda em agenda fixa
+(dia/horário configurados em `/gerenciador/cobrancas/`), sem qualquer
+leitura ou referência ao formulário de pagamento. Evidência completa:
+`docs/renovacao_automatica/levantamentos/2026-08-22_matriz_migracao_rocketzap.md`
+§1 (as 3 famílias de automação do Rocket, cada uma com gatilho
+independente) e
+`docs/renovacao_automatica/levantamentos/2026-08-22_inventario_substituicao_rocketzap.md`
+§6-A ("o Rocket não cria nada — é tudo criado por mim", citação
+literal do usuário registrada nesse documento, confirmando que os 3
+mecanismos de disparo nunca se misturam por design do próprio Rocket).
+
+**Correção aplicada:** `scripts/renovacao-sigma-workflow.mjs`,
+dentro de `executarCliqueAddPagamento` — depois de marcar
+`renovar_painel.check()`, o código agora localiza
+`input[name="enviar_mensagem"]` e chama `.uncheck()` explicitamente,
+nunca deixando esse campo no default do modal. `renovar_painel=true`
+continua sendo marcado exatamente como antes — nenhuma outra parte do
+fluxo de renovação foi tocada.
+
+**Testes:** os fakes `fake_playwright.mjs` de
+`scripts/testes/renovacao-sigma-workflow-leitura/` e
+`scripts/testes/renovacao_sigma_workflow_misto/` ganharam um método
+`.uncheck()` no locator simulado (mirror exato do `.check()` já
+existente) — sem essa adição, as suítes quebravam com `TypeError:
+uncheck is not a function`, não por a correção estar errada, mas
+porque o fake nunca precisou simular esse método antes. Confirmado via
+`git stash` que, sem a correção de produção, as suítes já passavam
+100% antes — ou seja, o fake era a única peça faltando para acompanhar
+a produção. Provado com asserções temporárias (aplicadas e revertidas
+na mesma sessão, nunca commitadas) que: `renovar_painel` é marcado
+ANTES de `enviar_mensagem` ser desmarcado, `renovar_painel` nunca é
+desmarcado, `enviar_mensagem` nunca é marcado. As 3 suítes relevantes
+(`renovacao-sigma-workflow-leitura`, `renovacao_sigma_workflow_misto`,
+`renovacao_sigma_workflow_unitv` — as únicas 3 que importam
+`renovacao-sigma-workflow.mjs`, confirmado por grep) passam 100%,
+reconfirmado múltiplas vezes ao longo da sessão, inclusive nesta
+verificação final de encerramento.
+
+**Commit `e763572b2757b1e3ac69ebf7717a608dfb572380`** — "fix: prevent
+duplicate RocketZap renewal confirmation", 3 arquivos, 18 inserções, 0
+remoções (`scripts/renovacao-sigma-workflow.mjs` +
+os 2 `fake_playwright.mjs`). **Push feito** para `origin/main` logo em
+seguida, com autorização explícita separada do commit (regra §0-B —
+`git push` sempre exige checkpoint próprio). `origin/main` ==
+`e763572`, confirmado por `git fetch` + `git rev-parse origin/main`
+nesta mesma sessão, mais de uma vez.
+
+`.github/workflows/renovacao-sigma.yml` usa `actions/checkout@v4` sem
+`ref:` fixo — a **próxima execução real do workflow via
+`workflow_dispatch` já vai usar a correção automaticamente**, sem
+precisar de nenhuma ação adicional (não é Edge Function, não precisa
+de `supabase functions deploy`).
+
+### 2. Verificação operacional somente-leitura, pré-reconexão do Wasender
+
+**Checklist de 10 pontos, todos confirmados antes de prosseguir para a
+checagem externa:**
+1. `origin/main` == `e763572` ✅
+2. Working tree limpo ✅
+3. Nenhum commit local pendente (`main...origin/main` sem
+   ahead/behind) ✅
+4. Nenhum deploy adicional desde a auditoria — deploy mais recente
+   entre todas as Edge Functions foi `painel-atendimento-responder` v40,
+   `2026-09-06T17:20:35Z` (sessão anterior, não desta) ✅
+5. Estado do Wasender — ver seção 3 abaixo (achado real, não o
+   esperado)
+6. Estado do RocketZap — ver seção 3 abaixo (achado real, não o
+   esperado)
+7. `WHATSAPP_JOSE_NUMERO` presente nos secrets (`updated_at:
+   2026-08-30T23:47:21Z`) ✅
+8. Correção `enviar_mensagem=false` presente em
+   `origin/main:scripts/renovacao-sigma-workflow.mjs` (confirmado por
+   `git show`) e será usada pela próxima execução real do workflow
+   (`checkout@v4` sem `ref:` fixo) ✅
+9. As 3 suítes relevantes passando ✅
+10. Nenhuma alteração pendente que pudesse entrar num deploy acidental
+    — working tree limpo ✅
+
+### 3. Checagem somente-leitura dos painéis externos (Wasender + Rocket)
+
+**Autorizado explicitamente pelo usuário, com lista específica do que
+NUNCA clicar** (conectar, desconectar, QR code, reiniciar sessão,
+enviar mensagem, qualquer botão que altere estado).
+
+**Wasender (`wasenderapi.com`, já autenticado como `José Antônio dos
+Sa...`):**
+- Sessão: **Tope Tv — #ID 117404**
+- Número: **+55 17 99624 2415**
+- Estado: **Logged Out** (confirmado no dashboard — "1 total", "Logged
+  Out: 1" — e no card da sessão individual)
+- Webhook (POST): `https://nduxsuxkopuvhwugdkqi.supabase.co/functions/v1/webhook-wasender`
+  — confirmado apontando para o projeto Supabase de **produção**
+  (`nduxsuxkopuvhwugdkqi`), lido na tela de edição da sessão **sem
+  salvar nada**. Nenhuma configuração alternativa para o LAB
+  encontrada.
+
+**Rocket/RocketZap (`app.rocketgestor.com`, já autenticado como "Jose
+Antonio"):**
+- Sessão: **`inovatv`** (tipo `RocketZap 2.0 (BETA)`, key
+  `inovatv_inovatv`)
+- Estado: **Desconectado / OFFLINE** — confirmado tanto em
+  `Configurações do Gerenciador` quanto na tela `Sessões WhatsApp`.
+  **Contrário à expectativa** do usuário ao pedir a checagem
+  ("confirme que a sessão inovatv está ativa/conectada") — não estava,
+  já assim antes de qualquer ação desta sessão.
+- Número associado: não confirmado diretamente na tela nesta checagem
+  (nenhum campo de número exposto nos modais consultados sem entrar no
+  fluxo de conexão) — referência histórica em
+  `docs/renovacao_automatica/levantamentos/2026-08-22_matriz_migracao_rocketzap.md`
+  associa essa sessão ao número oficial `5517996242415`, mas isso é
+  documentação anterior, não uma reconfirmação nova feita agora.
+
+**Incidente durante a checagem, registrado por transparência total —
+sem efeito real:** o ícone que a busca de elementos rotulou como
+"Logs" no card da sessão `inovatv` abriu, na verdade, o modal
+**"Conectar via WhatsApp Web — inovatv"** (rótulo real confirmado
+depois via tooltip: "Conectar via WhatsApp Web (requer extensão)"). O
+modal passou por "Verificando extensão..." e depois "Extensão não
+encontrada" (pedindo para baixar/instalar uma extensão do navegador) —
+**nunca gerou QR code, nunca chegou a oferecer pareamento, nenhuma
+extensão foi baixada/instalada**. Fechado imediatamente (2 cliques em
+"Fechar"/"X"). Confirmado depois: o card voltou exatamente ao mesmo
+estado de antes (Desconectado/OFFLINE) — nenhuma mudança real.
+
+**Anormalidade a ter em mente antes de decidir a ordem da
+reconexão:** as duas sessões (Wasender "Tope Tv" e RocketZap
+`inovatv`) parecem estar associadas historicamente ao mesmo número
+oficial (`+5517996242415`) e **as duas estão desconectadas ao mesmo
+tempo**, agora. Isso não foi causado por esta sessão — foi encontrado
+já assim. Vale considerar se a ordem/estratégia de reconexão (qual
+sessão reconectar primeiro, se as duas devem coexistir como
+dispositivos vinculados do mesmo número) precisa de decisão explícita
+antes de agir.
+
+### 4. Análise técnica — "Ativar proteção da conta" do Wasender
+
+**Pergunta do usuário:** essa opção, disponível na tela de edição da
+sessão, informa que controla a frequência de envio para ajudar a
+evitar restrições da conta. Antes de ativá-la, o usuário pediu uma
+análise específica de compatibilidade com nossa arquitetura — 10
+perguntas técnicas, respondidas por auditoria de código (somente
+leitura, nenhuma alteração).
+
+**Código auditado:** `_shared/wasender_client.ts`,
+`orchestrator/index.ts`, `_shared/renovacao_confirmacao.ts`,
+`openpix-webhook/index.ts`, `renovacao-sigma-resultado/index.ts`,
+`autocura-unitv-resultado/index.ts`, `renovacao-sigma-watchdog/index.ts`,
+`webhook-wasender/index.ts`.
+
+**Achados principais:**
+- **Nenhum retry automático existe em nenhum ponto do código** para
+  envio de WhatsApp — toda falha (`{outcome: "unavailable"}`) é ou
+  ignorada silenciosamente (best-effort) ou tratada sem tentar de
+  novo na mesma execução.
+- **Nenhum envio roda em paralelo** — todo `Promise.all` encontrado no
+  código é usado só para leituras de dados (`/status`, geração de
+  token hash), nunca para `enviarMensagemWhatsApp`/
+  `enviarTemplateWhatsApp`/`enviarMensagemInterativaWhatsApp`. Todo
+  envio é sequencial.
+- **Timeout de 10s** (`AbortSignal.timeout(10000)`) em toda chamada ao
+  Wasender — sem distinção de código de erro (rate-limit vira o mesmo
+  `unavailable` genérico de qualquer outra falha).
+- Os únicos pontos onde 2 mensagens vão para o mesmo cliente sempre
+  têm uma operação de rede real no meio (chamada à OpenPix, chamada ao
+  Rocket, disparo de GitHub Actions) — gap real de segundos a ~2
+  minutos, **nunca simultâneo**.
+- **Risco real identificado, não um erro, um comportamento a
+  monitorar:** se a proteção fizer a resposta do
+  `POST /api/send-message` demorar mais que os 10s do nosso timeout,
+  nosso `fetch` aborta e registramos falso "unavailable" — mesmo que a
+  mensagem tenha sido aceita e seja entregue depois. Isso é
+  sub-registro no nosso histórico (o Painel não saberia que o cliente
+  recebeu), não uma duplicata nem um erro visível para o cliente.
+- RocketZap confirmado tecnicamente isolado dessa configuração — é
+  uma opção da sessão do Wasender, sem relação com a sessão separada
+  do RocketZap (que, além disso, está desconectada agora).
+
+**Classificação final: 🟡 ATIVAR COM RESSALVAS.** Não é 🟢 direto
+porque não há documentação do próprio Wasender sobre o comportamento
+técnico exato da proteção (limite de mensagens/janela? delay síncrono
+antes de responder? fila assíncrona?) — isso é característica de um
+sistema externo, não confirmável só lendo nosso código. Recomendação:
+pode ativar; monitorar logs `[wasender_client] envio falhou`/
+`resposta 2xx sem msgId util` nos primeiros dias depois de ativar; se
+aparecerem com frequência anormal, considerar subir o `TIMEOUT_MS`
+(hoje 10000ms) — mudança pequena e isolada, não urgente agora, não
+feita nesta sessão.
+
+**A opção não foi marcada. Nada foi salvo nessa tela.**
+
+### 5. Estado ao encerrar — nada pendente de commit/push, duas decisões aguardando o usuário
+
+- `origin/main` == `e763572`, working tree limpo, nenhum commit local
+  pendente (reconfirmado no fechamento desta sessão).
+- **Reconexão do Wasender: NÃO executada.** Decisão e execução ficam
+  com o usuário (a reconexão real provavelmente depende de escanear
+  QR/re-parear, ação física que só ele pode fazer).
+- **Ativação da "proteção da conta" do Wasender: NÃO executada.**
+  Análise concluída (🟡 ativar com ressalvas), decisão de quando
+  ativar fica com o usuário.
+- **RocketZap: desconectado**, achado nesta sessão, não alterado por
+  ela.
+- Nenhum código, banco, secret, deploy ou configuração foi alterado
+  nas seções 2-4 desta sessão — só a seção 1 (correção já commitada e
+  enviada) mudou algo de fato.
 
 ## SESSÃO 2026-09-06 (tarde) — BASE MESTRA PROMOVIDA + AUDITORIA DO CAMINHO + PENDÊNCIAS #1/#2 FECHADAS
 
