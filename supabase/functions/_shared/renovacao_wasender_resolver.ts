@@ -77,7 +77,6 @@ import { getServiceClient } from "./supabase_client.ts";
 import { normalizarTelefone } from "./telefone.ts";
 import type { TokenRenovacao } from "./tokens_renovacao.ts";
 import { buscarFilhosDoLote, type RenovacaoLote } from "./renovacoes_lote.ts";
-import type { ConversaEstado } from "./types.ts";
 import { formatarValorBRL, formatarVencimentoConsulta } from "./mensagens_fixas.ts";
 
 // ---------------------------------------------------------------------
@@ -105,10 +104,11 @@ export function detectarRespostaConfirmacaoRenovacao(
 }
 
 // Verdadeiro so quando a resposta reconhecida veio de um DIGITO ("1"/"2"),
-// nunca de uma palavra ("aceito"/"cancelar") -- usado so' para decidir
-// quando a protecao extra de intencao_atual se aplica (regra 2 aprovada,
-// caso "candidato unico"). Palavra nao precisa dessa checagem (nunca
-// colide com o Orquestrador, que so reconhece digito puro).
+// nunca de uma palavra ("aceito"/"cancelar"). Usado SO' no caso de 2+
+// candidatos (regra 3): digito puro NAO intercepta ali (evita colisao
+// com a selecao numerica do Orquestrador quando ha' ambiguidade); so' a
+// PALAVRA aciona a apresentacao das opcoes. No caso "candidato unico"
+// (regra 2) o digito e' aceito diretamente desde 2026-09-07.
 function ehRespostaPorDigito(texto: string): boolean {
   const t = texto.trim().toLowerCase();
   return t === "1" || t === "2";
@@ -265,26 +265,6 @@ export async function resolverCandidatoPendente(telefoneBruto: string): Promise<
 }
 
 // ---------------------------------------------------------------------
-// Leitura de conversas_estado.intencao_atual -- protecao contra colisao
-// com a selecao numerica do Orquestrador, usada SOMENTE no caso
-// "candidato unico" + digito (regra 2, inalterada). O caminho de resposta
-// composta (2+ candidatos) NAO usa esta funcao -- nao precisa, porque a
-// resposta composta nunca e' uma string so' de digitos (protecao
-// estrutural, ver comentario no topo do arquivo). So' LEITURA -- nunca
-// escreve, nunca chama nenhuma RPC.
-// ---------------------------------------------------------------------
-async function intencaoAtualEhRenovacao(telefone: string): Promise<boolean> {
-  const client = getServiceClient();
-  const { data, error } = await client
-    .from("conversas_estado")
-    .select("*")
-    .eq("telefone", telefone);
-  if (error) throw error;
-  const linha = ((data as ConversaEstado[]) ?? [])[0];
-  return linha?.intencao_atual === "renovacao";
-}
-
-// ---------------------------------------------------------------------
 // Apresentacao de multiplas renovacoes pendentes -- FUNCAO NOVA, isolada
 // neste modulo (nao em _shared/mensagens_fixas.ts). Motivo, documentado
 // conforme exigido:
@@ -399,17 +379,21 @@ export async function resolverRoteamentoConfirmacaoRenovacao(
   // ── 0 candidatos (regra 1) ──────────────────────────────────────────
   if (resolucao.outcome === "sem_pendencia") return { outcome: "sem_pendencia" };
 
-  // ── exatamente 1 candidato (regra 2, inalterada) ────────────────────
+  // ── exatamente 1 candidato (regra 2, REVISADA 2026-09-07) ───────────
+  // Um unico token/lote 'aguardando_confirmacao' e' contexto INEQUIVOCO:
+  // "1" = ACEITO e "2" = CANCELAR sao aceitos direto, SEM exigir
+  // conversas_estado.intencao_atual === "renovacao". O gate de digito
+  // (ehRespostaPorDigito + intencao_atual) so' fazia sentido para evitar
+  // colisao com a selecao numerica do Orquestrador em cenario AMBIGUO --
+  // com exatamente 1 candidato pendente nao ha' ambiguidade. O gate
+  // permanece para 2+ candidatos (regra 3, abaixo, inalterada). Fluxo de
+  // PALAVRA ("aceito"/"cancelar") inalterado.
   if (resolucao.outcome === "candidato_unico") {
     if (acaoSimples === null) {
       // So' a forma composta bateu (ex.: "1 ACEITO") -- nao faz sentido
       // com 1 unico candidato (nenhuma lista foi apresentada), nao
       // intercepta.
       return { outcome: "resposta_nao_reconhecida" };
-    }
-    if (ehRespostaPorDigito(texto as string)) {
-      const confirmaIntencao = await intencaoAtualEhRenovacao(telefone);
-      if (!confirmaIntencao) return { outcome: "resposta_nao_reconhecida" };
     }
     return {
       outcome: "roteado",
