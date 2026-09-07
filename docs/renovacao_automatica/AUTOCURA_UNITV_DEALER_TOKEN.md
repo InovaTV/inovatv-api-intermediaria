@@ -1129,21 +1129,68 @@ Até a ativação, o único caminho para um ciclo `disparo` é o `INSERT` manual
 
 ---
 
-## 15. Fallback de emergência — recaptura manual (SOP)
+## 15. Recaptura manual do token (SOP)
 
 Enquanto a autocura estiver em modo observação (F2/F3), ou se ela entrar em
-hard-stop, ou a qualquer momento que o José preferir:
+hard-stop, ou a qualquer momento que o José preferir. Vale sempre que o status
+do token estiver 🔴 (renovações UniTV caindo em `renovacao:unitv_conta_indisponivel`).
 
-1. Subir `autocura_unitv_config.kill_switch = true` (evita corrida com o healer).
-2. Abrir a sessão logada do painel (`panel-web.revenda.site`, dealer
-   `inovatvstream2`).
-3. Captura passiva do `dealer_token` (interceptor read-only de headers
-   `token`/`Authorization` + 1 navegação de leitura), **sem login automatizado**.
-4. `select public.unitv_dealer_token_definir('<token>', 'recaptura_manual', 'jose');`
+### 15.1 Caminho primário — tela "Token UniTV" do Painel de Atendimento (desde 2026-09-07)
+
+A tela `.../unitv-token` (link 🔑 no topo do Painel) faz o fluxo obrigatório
+inteiro: **valida o formato → valida `/api/account` read-only com o token novo →
+só se válido grava o Vault (`unitv_dealer_token_definir`, origem
+`recaptura_manual`, `por` = e-mail do operador) → relê o Vault → revalida →
+mostra sucesso**. Se qualquer validação falhar, o token atual **não** é alterado.
+O valor colado nunca é exibido de volta, nunca vai para log.
+
+1. **Capturar** o `dealer_token` novo — o procedimento completo e numerado, mais
+   o **código de captura** (botão "Copiar código de captura"), estão embutidos na
+   própria tela `.../unitv-token` (seção "Como capturar um token novo"). Resumo:
+   - Abrir a sessão logada do painel (`panel-web.revenda.site`, dealer
+     `inovatvstream2`) e fazer uma consulta **"Consultar"** (somente leitura,
+     **sem renovar nem alterar nada**).
+   - F12 → Console → colar o código de captura da tela → Enter → clicar
+     "Consultar" de novo. O Console imprime o `dealer_token` (32 hex).
+   - **Método canônico:** interceptor **passivo** de `fetch`/`XHR` que decifra o
+     **corpo AES** do `POST /api/account` (AES-128-CBC, chave/IV fixos do bundle
+     do painel — os mesmos de `_shared/unitv_conta.ts`) e lê `dealer_token`. É o
+     valor que a automação de fato usa (campo do corpo) e é imune à divergência
+     registrada sobre o formato dos headers do painel (§4.6.1 vs. nota "Token
+     UniTV do dealer — RESTAURADO" no `NEXT_SESSION.md`: o header ora traz o
+     mesmo 32-hex, ora um valor de 34 chars separado). Sem login automatizado.
+     Não existia um snippet verbatim antes de 2026-09-07 — a tela agora carrega
+     o canônico.
+2. **Colar** esse valor no campo "Novo token" da tela e clicar **Atualizar
+   token**. Status vira 🟢 ao dar certo. Nunca enviar o token por WhatsApp,
+   e-mail ou chat.
+3. Se o resultado for **`revalidacao_falhou`** (crítico): a gravação ocorreu mas
+   o token não autentica — refazer a captura e atualizar de novo, com urgência.
+4. O botão **"Validar agora"** sonda o token atual do Vault a qualquer momento
+   (read-only) e atualiza "última validação".
+
+O monitor proativo (`autocura-unitv-monitor`, `*/15`) e o gatilho reativo de
+`renovacao-unitv-conta` continuam alertando o José por WhatsApp quando o token
+morre — a tela do Painel é onde ele **conserta**, não como ele **fica sabendo**.
+
+### 15.2 Caminho de contingência — SQL Editor (se o Painel estiver fora)
+
+1. Abrir a sessão logada do painel e capturar o `dealer_token` (passo 1 acima).
+2. `select public.unitv_dealer_token_definir('<token>', 'recaptura_manual', 'jose');`
    no SQL Editor — valor colado na hora, **nunca** em arquivo/chat/log; ponte via
    arquivo gitignored temporário apagado logo após.
-5. Verificação read-only: `unitv_dealer_token_ler` (indireta, via
+3. Verificação read-only: `unitv_dealer_token_ler` (indireta, via
    `renovacao-unitv-conta` `sn=<âncora>` → `resolvido`).
-6. Baixar o `kill_switch` de volta para `false`.
 
-Procedimento validado em 2026-08-30 (checkpoint Fase 2A).
+### 15.3 Kill-switch (só quando o healer F5 estiver ativo)
+
+Enquanto `autocura_unitv_config.healer_ativo = false` (estado atual), o healer
+nunca roda — **não há corrida a evitar**, nem no Painel nem no SQL Editor.
+Quando a F5 for ativada, subir `autocura_unitv_config.kill_switch = true` antes
+de qualquer recaptura manual (Painel ou SQL) e baixar depois — a tela do Painel
+deverá passar a fazer esse toggle automaticamente no fluxo `atualizar` (ainda
+**não** implementado, por o healer estar inerte).
+
+Procedimento validado em 2026-08-30 (checkpoint Fase 2A). Tela do Painel adicionada
+em 2026-09-07 (`painel-unitv-token-{status,validar,atualizar}` +
+`_shared/unitv_token_painel.ts` + `painel/app/unitv-token/`).

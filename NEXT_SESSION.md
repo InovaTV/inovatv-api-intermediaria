@@ -1,5 +1,82 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **⏸️ CHECKPOINT 2026-09-07 — TELA "TOKEN UNITV" NO PAINEL: DEPLOYADA
+> (3 Edge Functions v1 + Vercel prod), UX DO PROCEDIMENTO DE CAPTURA
+> ADICIONADA; COMMIT/PUSH AINDA PENDENTE (aguardando autorização + 1
+> verificação autenticada).** Decisão aprovada: tratar
+> `UNITV_DEALER_TOKEN` como sessão temporária e dar ao operador uma
+> função de **Atualizar e Validar Token UniTV** no Painel/Admin,
+> reaproveitando `unitv_dealer_token_definir` + a validação read-only
+> `/api/account` já existentes. **F4/F5 NÃO ativados, OCR não tocado,
+> login automático não implementado, lógica de renovação intocada.**
+>
+> **Deploy feito (autorizado):** `painel-unitv-token-status` /
+> `-validar` / `-atualizar` **v1 ACTIVE, `verify_jwt=false`**; frontend
+> `painel/` na Vercel (`dpl_2em6L9ehPMBXMVanex9bm9nz3tjj`, prod, READY;
+> alias `inovatv-api-intermediaria.vercel.app`). Nenhuma outra função
+> tocada (versões idênticas ao pré-deploy). Pós-deploy: os 3 endpoints
+> respondem **401** sem `Authorization` (`token_ausente`) e com JWT
+> inválido (`token_invalido`); método errado → 405; `/unitv-token` →
+> HTTP 200. **Falta:** verificação autenticada (login do Painel +
+> "Validar agora") — precisa de um `access_token` do usuário.
+>
+> **UX do procedimento de captura (2026-09-07, esta etapa):**
+> `painel/app/unitv-token/page.tsx` ganhou a seção "Como capturar um
+> token novo (procedimento completo)" — 10 passos numerados (painel
+> UniTV → "Consultar" só-leitura → F12/Console → colar o capturador →
+> ler o `dealer_token` de 32 hex → colar em "Novo token" → "Atualizar
+> token" → status 🟢), um `<details>` com o **código de captura
+> canônico** + botão "Copiar código de captura", bloco de avisos (não
+> renovar/alterar o painel UniTV na captura; nunca enviar o token por
+> WhatsApp/e-mail/chat) e a seção "O que acontece depois" (valida →
+> Vault → revalida). **Método canônico decidido pela investigação:**
+> interceptor **passivo** de `fetch`/`XHR` que decifra o **corpo AES**
+> do `POST /api/account` e lê `dealer_token` — é o valor que a
+> automação usa (campo do corpo) e é imune à divergência header×corpo
+> registrada no histórico. O snippet não altera requisições, não faz
+> rede própria, não usa localStorage, restaura `fetch`/`XHR`, só
+> exibe/copia o valor. Não existia snippet verbatim antes — este é o
+> primeiro. `globals.css` +4 classes (`.token-passos/.token-detalhes/`
+> `.token-code/.token-aviso`). Lógica de `atualizar`/`validar`
+> **intocada**.
+>
+> **Arquivos novos:** `supabase/functions/_shared/unitv_token_painel.ts`
+> (núcleo puro, deps injetadas — fluxo obrigatório: formato → `/api/account`
+> do token novo → só se válido grava Vault → relê → revalida → sucesso;
+> falha nunca altera o token atual; token nunca em retorno/log — I6);
+> `supabase/functions/painel-unitv-token-status/` (GET, só leitura:
+> `unitv_dealer_token_estado` + última linha de `unitv_token_diagnostico`
+> → badge 🟢/🔴/⚠️); `supabase/functions/painel-unitv-token-validar/`
+> (POST, sonda ao vivo o token do Vault, grava 1 diagnóstico
+> `painel:validar`); `supabase/functions/painel-unitv-token-atualizar/`
+> (POST `{token}`, o fluxo obrigatório; `origem='recaptura_manual'`,
+> `por` = e-mail do operador); `painel/app/unitv-token/page.tsx` (status
+> persistente + "Validar agora" + form de colar token + SOP de captura);
+> `scripts/testes/painel_unitv_token/teste.mjs` (**78/78 asserts
+> PASS**).
+> **Arquivos editados:** `painel/lib/api.ts` (3 wrappers +
+> tipos), `painel/app/globals.css` (classes `.token-*`),
+> `painel/app/conversas/layout.tsx` (link 🔑 no topo),
+> `docs/renovacao_automatica/AUTOCURA_UNITV_DEALER_TOKEN.md` (§15
+> reescrita: Painel = caminho primário, SQL Editor = contingência).
+>
+> **Sem migration** (reusa `unitv_dealer_token_{definir,ler,estado}` e
+> `unitv_token_diagnostico`, todos já em produção). **Sem secret novo**
+> (reusa `UNITV_DIAG_ANCHOR_SN`, `UNITV_DEALER_NAME`, `PAINEL_EMAIL_AUTORIZADO`).
+>
+> **Validação local:** esbuild transpile-check das 4 TS **OK**;
+> `next build` do `painel/` **limpo** (TypeScript pass, 7 rotas, inclui
+> `/unitv-token`); suíte nova **78/78**; suíte completa do repo
+> **38 pass / 1 fail** — a falha (`saudacao_inicial`) é **pré-existente**
+> (provado com `git stash` das edições), sem relação com esta frente.
+>
+> **Ainda NÃO feito (precisa de autorização do usuário):** deploy das 3
+> Edge Functions (`--no-verify-jwt`, mesmo padrão dos `painel-atendimento-*`);
+> deploy do frontend na Vercel; commit/push. Nenhum teste real contra
+> produção. O token UniTV de produção **segue morto desde 07/09 ~13:30
+> UTC** (`returnCode 300`) — recaptura manual (SOP §15) continua sendo a
+> única forma de restabelecer as renovações UniTV até esta tela ir ao ar.
+
 > **✅ CHECKPOINT 2026-09-07 — CORREÇÃO DE DUPLICIDADE ROCKETZAP×WASENDER
 > COMMITADA E ENVIADA (`e763572`); RECONEXÃO DO WASENDER E ATIVAÇÃO DA
 > "PROTEÇÃO DA CONTA" AINDA NÃO EXECUTADAS.** `scripts/renovacao-sigma-workflow.mjs`

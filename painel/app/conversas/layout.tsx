@@ -279,6 +279,21 @@ function ListaConversas({ conversationIdAtual }: { conversationIdAtual?: string 
           )}
         </h1>
         <div style={{ display: "flex", gap: 8 }}>
+          {/* Token UniTV (decisao 2026-09-07) -- status + atualizacao
+              manual do UNITV_DEALER_TOKEN, tela separada. */}
+          <Link
+            href="/unitv-token"
+            title="Status e atualizacao do token UniTV"
+            style={{
+              border: "1px solid #2a2e38",
+              color: "#8a8f9a",
+              borderRadius: 6,
+              padding: "6px 12px",
+              textDecoration: "none",
+            }}
+          >
+            🔑
+          </Link>
           <button
             onClick={alternarSom}
             title={somAtivo ? "Silenciar aviso sonoro" : "Ativar aviso sonoro"}

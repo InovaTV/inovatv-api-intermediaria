@@ -403,3 +403,152 @@ input, textarea {
     display: none;
   }
 }
+
+/* --- Tela "Token UniTV" (decisao 2026-09-07) ----------------------- */
+.token-secao {
+  border: 1px solid #2a2e38;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.token-badge {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 15px;
+}
+.token-badge-verde {
+  background: #12351f;
+  color: #6ee7a0;
+  border: 1px solid #1f5c37;
+}
+.token-badge-vermelho {
+  background: #3a1518;
+  color: #ff8a8a;
+  border: 1px solid #6b2328;
+}
+.token-badge-alerta {
+  background: #3a3312;
+  color: #f5d67a;
+  border: 1px solid #6b5e23;
+}
+.token-badge-sem_dado {
+  background: #23262e;
+  color: #8a8f9a;
+  border: 1px solid #2a2e38;
+}
+
+.token-meta {
+  margin: 16px 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  font-size: 13px;
+}
+.token-meta dt {
+  color: #8a8f9a;
+}
+.token-meta dd {
+  margin: 0;
+  color: #e6e6e6;
+}
+.token-meta-sub {
+  color: #8a8f9a;
+}
+
+.token-campo {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  padding: 10px;
+  background: #0f1115;
+  color: #e6e6e6;
+  border: 1px solid #2a2e38;
+  border-radius: 6px;
+}
+
+.token-btn {
+  background: none;
+  border: 1px solid #2a2e38;
+  color: #e6e6e6;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.token-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.token-btn-primario {
+  border-color: #3a6fd8;
+  color: #cfe0ff;
+}
+
+.token-msg-ok {
+  color: #6ee7a0;
+}
+.token-msg-erro {
+  color: #ff8a8a;
+}
+.token-msg-critico {
+  color: #fff;
+  background: #6b2328;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.token-passos {
+  color: #b6bac2;
+  padding-left: 20px;
+  line-height: 1.85;
+}
+.token-passos code {
+  color: #cfe0ff;
+}
+
+.token-detalhes {
+  margin-top: 14px;
+  border: 1px solid #2a2e38;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.token-detalhes summary {
+  cursor: pointer;
+  color: #cfe0ff;
+  font-size: 14px;
+  padding: 4px 0;
+}
+
+.token-code {
+  margin: 10px 0;
+  padding: 12px;
+  background: #0b0d10;
+  border: 1px solid #2a2e38;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b6bac2;
+  white-space: pre;
+  overflow: auto;
+  max-height: 340px;
+}
+
+.token-aviso {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: #3a3312;
+  border: 1px solid #6b5e23;
+  border-radius: 8px;
+  color: #f5d67a;
+  font-size: 13px;
+}
+.token-aviso ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}

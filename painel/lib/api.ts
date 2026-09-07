@@ -105,3 +105,89 @@ export function marcarVistoConversa(conversationId: string) {
     body: { conversation_id: conversationId },
   });
 }
+
+// --- Token UniTV (decisao 2026-09-07) ------------------------------------
+// UNITV_DEALER_TOKEN e' a sessao do painel de revenda usada pelas
+// renovacoes UniTV. Ela morre de tempos em tempos (returnCode 300
+// "Login information has been lost") e nao tem refresh -- o operador
+// captura uma nova e cola aqui. So' encanamento HTTP, igual ao resto.
+
+export type TokenUnitvBadge = "verde" | "vermelho" | "alerta" | "sem_dado";
+export type TokenUnitvVeredito =
+  | "token_vivo"
+  | "token_morto"
+  | "indeterminado_outage"
+  | "indeterminado";
+
+export interface TokenUnitvResumo {
+  badge: TokenUnitvBadge;
+  titulo: string;
+  detalhe: string;
+}
+
+export interface TokenUnitvStatusResposta {
+  outcome: string;
+  resumo: TokenUnitvResumo;
+  ultimaValidacao:
+    | {
+        veredito: string;
+        criado_em: string;
+        motivo_origem: string;
+        origem_return_code: number | null;
+      }
+    | null;
+  ultimaAtualizacaoManual:
+    | { origem: string; atualizado_em: string; atualizado_por: string | null }
+    | null;
+}
+
+export interface TokenUnitvValidarResposta {
+  outcome: string;
+  resultado:
+    | {
+        outcome: "validado";
+        veredito: TokenUnitvVeredito;
+        resumo: TokenUnitvResumo;
+        origem_return_code: number | null;
+        criado_em: string;
+      }
+    | { outcome: "sem_token"; resumo: TokenUnitvResumo };
+}
+
+export type TokenUnitvAtualizarResposta =
+  | {
+      outcome: "sucesso";
+      veredito: "token_vivo";
+      resumo: TokenUnitvResumo;
+      criado_em: string;
+    }
+  | { outcome: "formato_invalido" }
+  | {
+      outcome: "token_novo_invalido";
+      classe: "ok" | "auth_reject" | "transport_fail";
+      origem_return_code: number | null;
+    }
+  | { outcome: "erro_gravar" }
+  | {
+      outcome: "revalidacao_falhou";
+      motivo: "vault_diferente" | "api_account";
+      classe?: "ok" | "auth_reject" | "transport_fail";
+    };
+
+export function tokenUnitvStatus() {
+  return chamarFuncao<TokenUnitvStatusResposta>("painel-unitv-token-status");
+}
+
+export function tokenUnitvValidar() {
+  return chamarFuncao<TokenUnitvValidarResposta>("painel-unitv-token-validar", {
+    method: "POST",
+    body: {},
+  });
+}
+
+export function tokenUnitvAtualizar(token: string) {
+  return chamarFuncao<TokenUnitvAtualizarResposta>("painel-unitv-token-atualizar", {
+    method: "POST",
+    body: { token },
+  });
+}
