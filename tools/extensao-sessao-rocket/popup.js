@@ -135,7 +135,7 @@ $authEntrar.addEventListener("click", async () => {
   $authMsg.textContent = "";
   $authEntrar.disabled = true;
   try {
-    const r = await entrar($authEmail.value.trim(), $authSenha.value);
+    const r = await entrar($authEmail.value.trim(), $authSenha.value.trim());
     $authSenha.value = "";
     if (r.ok) {
       $authEmail.value = "";
