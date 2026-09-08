@@ -477,6 +477,18 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
   }
 }
 
+// Extrai a duracao do plano em meses (1, 3, 6 ou 12) de um texto de
+// pacote Sigma. Aceita "1 MES"/"1 MÊS", "3 MESES", "12 MESES" (com ou
+// sem acento -- o acento e' normalizado antes de casar). A quantidade
+// de telas NUNCA e' usada -- so' a duracao.
+function extrairDuracaoMeses(texto) {
+  const semAcento = String(texto ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+  const m = semAcento.match(/(\d+)\s*MES(?:ES)?\b/i);
+  return m ? Number(m[1]) : null;
+}
+
 // Sequencia de clique da renovacao no modal "Add Pagamento". Roda no
 // MAXIMO 1x por acesso (nunca repetida). Lanca se qualquer passo nao
 // completar (ex.: pacote nao encontrado no <select>) -- nesse caso o
@@ -517,28 +529,76 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
 
   await page.waitForTimeout(3000);
 
-  const selects = await page.locator("select:visible").all();
-  let pacoteSelecionado = null;
-  for (const sel of selects) {
-    const options = await sel.locator("option").allTextContents();
-    // Correcao de risco (2026-08-24, comprovada em
-    // scripts/poc-confirmar-expires-at-renovacao.mjs, dry-run real): o
-    // `<select>` real inclui um sufixo que o campo `package` do Sigma
-    // NAO tem (ex.: "1 MES - P2P & IPTV COM ADULTOS - 1 creditos - 1
-    // tela(s)" no select, contra "1 MES - P2P & IPTV COM ADULTOS" em
-    // pacoteAtualTexto) -- o match exato nunca encontrava a opcao contra
-    // dado real. Corrigido pra prefixo -- pacoteAtualTexto continua
-    // sendo a fonte de verdade (Sigma), nunca um texto fixo.
-    const match = options.find((o) => o.trim().startsWith(pacoteAtualTexto));
-    if (match) {
-      await sel.selectOption({ label: match });
-      pacoteSelecionado = match.trim();
+  // --- Selecao do pacote Sigma no <select> de renovacao.
+  //
+  // Correcao 2026-09-08 (comprovada em inspecao read-only do modal real,
+  // cliente BLAZE): o texto que o Sigma devolve em sigma/info.data.package
+  // (ex.: "PLANO COMPLETO 1 MÊS(3 TELAS)") NAO e' prefixo de nenhuma
+  // <option> do <select> de renovacao -- as opcoes usam "(1 TELA)" no
+  // nome do plano onde o sigma/info usa "(3 TELAS)"
+  // (ex.: "PLANO COMPLETO 1 MÊS(1 TELA) - 1 créditos - 3 tela(s)"). O
+  // antigo match por startsWith(pacoteAtualTexto) nunca achava a opcao.
+  //
+  // Nova regra: a opcao e' determinada por DURACAO (1/3/6/12 meses) +
+  // ADULTO (com adultos = SEM a expressao "SEM ADULTOS"; sem adultos =
+  // COM a expressao), ambos extraidos de pacoteAtualTexto. A quantidade
+  // de telas NUNCA entra na decisao -- e' caracteristica interna da
+  // opcao do Rocket. A selecao usa o `value` da propria <option>
+  // carregada pelo Rocket (fonte de verdade), nunca um id fixo.
+  //
+  // Escopo: exclusivamente #modal-add-pagamento > #id_sigma_package_id_select
+  // (o <select> real; o campo enviado no form e' o hidden
+  // #id_sigma_package_id, preenchido pelo proprio Rocket ao trocar a opcao).
+  const duracaoMeses = extrairDuracaoMeses(pacoteAtualTexto);
+  const pacoteSemAdultos = /sem\s+adultos/i.test(pacoteAtualTexto);
+  if (!duracaoMeses) {
+    throw new Error(`nao consegui extrair a duracao (meses) do pacote atual: "${pacoteAtualTexto}"`);
+  }
+
+  const selectPacote = modalAddPagamento.locator("#id_sigma_package_id_select");
+  await selectPacote.waitFor({ state: "visible", timeout: 10000 });
+
+  // Aguarda o GET .../gerenciador/cliente/sigma/packages/ popular as
+  // <option> de verdade -- em vez de confiar so' no waitForTimeout cego
+  // acima. Enquanto carrega, o <select> tem so' "Carregando pacotes..."
+  // (value vazio); quando pronto, tem opcoes com value preenchido.
+  const LIMITE_CARGA_PACOTES_MS = 20000;
+  const inicioCarga = Date.now();
+  let opcoesPacote = [];
+  while (Date.now() - inicioCarga < LIMITE_CARGA_PACOTES_MS) {
+    const optLocs = await selectPacote.locator("option").all();
+    const pares = await Promise.all(
+      optLocs.map(async (o) => ({
+        texto: (await o.textContent()) ?? "",
+        value: (await o.getAttribute("value")) ?? "",
+      })),
+    );
+    const aindaCarregando = pares.some((p) => /carregando/i.test(p.texto));
+    const comValue = pares.filter((p) => p.value.trim() !== "");
+    if (!aindaCarregando && comValue.length > 0) {
+      opcoesPacote = comValue;
       break;
     }
+    await page.waitForTimeout(500);
   }
-  if (!pacoteSelecionado) {
-    throw new Error(`pacote "${pacoteAtualTexto}" nao encontrado nas opcoes do select`);
+  if (opcoesPacote.length === 0) {
+    throw new Error("o <select> de pacote Sigma (#id_sigma_package_id_select) nao carregou nenhuma opcao");
   }
+
+  const opcaoAlvo = opcoesPacote.find(
+    (p) => extrairDuracaoMeses(p.texto) === duracaoMeses && /sem\s+adultos/i.test(p.texto) === pacoteSemAdultos,
+  );
+  if (!opcaoAlvo) {
+    throw new Error(
+      `nenhuma opcao do select casa com duracao=${duracaoMeses} mes(es) + ${pacoteSemAdultos ? "sem" : "com"} adultos ` +
+        `(pacote atual do Sigma: "${pacoteAtualTexto}")`,
+    );
+  }
+  await selectPacote.selectOption({ value: opcaoAlvo.value });
+  console.log(
+    `[renovacao-sigma-workflow] pacote selecionado: "${opcaoAlvo.texto.trim()}" (value=${opcaoAlvo.value}) ` +
+      `-- duracao=${duracaoMeses}m, ${pacoteSemAdultos ? "sem" : "com"} adultos`,
+  );
   await page.waitForTimeout(1500);
 
   // O clique submete o formulario Django (POST /pagamento/add/ ->

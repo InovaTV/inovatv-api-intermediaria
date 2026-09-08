@@ -64,10 +64,27 @@ function noFake(desc) {
   };
 }
 
-function selectLocatorFake() {
+function optionLocatorsFake() {
+  return (cfg.opcoesSelect || []).map((item, i) => {
+    const opt = typeof item === "string" ? { text: item, value: `fake-value-${i}` } : item;
+    return {
+      textContent: async () => opt.text ?? "",
+      getAttribute: async (name) => name === "value" ? (opt.value ?? "") : null,
+    };
+  });
+}
+
+function selectLocatorFake(sel = "select:visible") {
+  const isPacoteSigma = sel.includes("#id_sigma_package_id_select");
+  const options = isPacoteSigma ? optionLocatorsFake() : optionLocatorsFake();
   return {
-    locator: () => ({ allTextContents: async () => cfg.opcoesSelect }),
-    selectOption: async (o) => ev("selectOption", { label: o?.label ?? null }),
+    locator: (child) => child === "option"
+      ? { all: async () => options, allTextContents: async () => options.map(async o => (await o.textContent()) ?? "") }
+      : locatorFake(`${sel} ${child}`),
+    selectOption: async (o) => ev("selectOption", {
+      value: o?.value ?? null,
+      label: o?.label ?? null,
+    }),
   };
 }
 
@@ -77,10 +94,18 @@ function locatorFake(sel) {
     check: async () => ev("check", { sel }),
     uncheck: async () => ev("uncheck", { sel }),
     waitFor: async () => ev("waitFor", { sel }),
-    all: async () => (sel === "select:visible" ? [selectLocatorFake()] : []),
-    locator: (s) => locatorFake(`${sel} ${s}`),
+    all: async () => (sel === "select:visible" ? [selectLocatorFake(sel)] : []),
+    locator: (s) => {
+      if (s === "option" && sel.includes("#id_sigma_package_id_select")) {
+        return { all: async () => optionLocatorsFake() };
+      }
+      return locatorFake(`${sel} ${s}`);
+    },
     allTextContents: async () => [],
-    selectOption: async () => {},
+    selectOption: async (o) => ev("selectOption", {
+      value: o?.value ?? null,
+      label: o?.label ?? null,
+    }),
   };
 }
 
