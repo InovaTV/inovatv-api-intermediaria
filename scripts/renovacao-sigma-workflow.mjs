@@ -503,7 +503,15 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
   // ao formulario de pagamento (evento pontual "Pagamento Confirmado"); os
   // lembretes disparam por um motor de Cobranca automatica separado, sem
   // relacao com esta submissao.
-  const enviarMensagemCheckbox = page.locator('input[name="enviar_mensagem"]');
+  //
+  // Seletor ESCOPADO ao modal "ADD Pagamento" (#modal-add-pagamento): a
+  // pagina do Rocket passou a ter DOIS input[name="enviar_mensagem"] (o
+  // outro pertence ao modal "Adicionar Cliente"), entao o seletor global
+  // quebrava em strict mode violation ANTES da submissao (teste real
+  // 08/09/2026, operacao 69edd413-2528-433f-8c28-934b50955aee). O
+  // comportamento funcional continua identico: enviar_mensagem = false.
+  const modalAddPagamento = page.locator("#modal-add-pagamento");
+  const enviarMensagemCheckbox = modalAddPagamento.locator('input[name="enviar_mensagem"]');
   await enviarMensagemCheckbox.waitFor({ state: "visible", timeout: 10000 });
   await enviarMensagemCheckbox.uncheck();
 
