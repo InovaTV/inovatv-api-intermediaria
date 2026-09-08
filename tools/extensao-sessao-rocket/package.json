@@ -2,8 +2,8 @@
   "name": "extensao-sessao-rocket",
   "private": true,
   "type": "module",
-  "description": "Ferramenta local isolada -- nao faz parte de nenhuma Edge Function nem do app. Extensao Chrome MV3 para detectar (etapa 1) a presenca dos cookies de sessao do Rocket. Sem dependencias.",
+  "description": "Ferramenta local isolada -- nao faz parte de nenhuma Edge Function nem do app. Extensao Chrome MV3: deteccao dos cookies de sessao do Rocket + login do operador via Supabase Auth (anon key publica). Sem dependencias.",
   "scripts": {
-    "test": "node testes/teste.mjs"
+    "test": "node testes/teste.mjs && node testes/teste-auth.mjs"
   }
 }

@@ -2,7 +2,7 @@
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
-    <title>Detectar sessao Rocket</title>
+    <title>Sessao Rocket + login do operador</title>
     <style>
       body {
         font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
@@ -14,6 +14,15 @@
         font-size: 14px;
         margin: 0 0 10px;
       }
+      h2 {
+        font-size: 13px;
+        margin: 16px 0 8px;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid #d0d7de;
+        margin: 16px 0;
+      }
       button {
         font: inherit;
         padding: 8px 12px;
@@ -22,6 +31,18 @@
       button[disabled] {
         cursor: default;
         opacity: 0.6;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+      }
+      input[type="email"],
+      input[type="password"] {
+        font: inherit;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        margin-top: 2px;
       }
       #resultado {
         margin-top: 12px;
@@ -53,15 +74,53 @@
     </style>
   </head>
   <body>
-    <h1>Sessao do Rocket — deteccao (etapa 1)</h1>
+    <h1>Sessao do Rocket — etapa 2A</h1>
+
+    <h2>1. Deteccao local dos cookies</h2>
     <button id="detectar" type="button">Detectar cookies de sessao</button>
     <div id="resultado" aria-live="polite"></div>
     <p class="rodape">
-      Esta etapa apenas verifica se os cookies <code>sessionid</code> e
-      <code>csrftoken</code> de <code>app.rocketgestor.com</code> existem neste
-      navegador. Nao mostra valores, nao guarda nada e nao envia nada para
-      nenhum servidor.
+      Verifica se os cookies <code>sessionid</code> e <code>csrftoken</code> de
+      <code>app.rocketgestor.com</code> existem neste navegador. Nao mostra
+      valores, nao guarda nada e nao envia nada.
     </p>
+
+    <hr />
+
+    <h2>2. Operador (Supabase Auth)</h2>
+    <div id="auth-login" hidden>
+      <label>
+        E-mail
+        <input id="auth-email" type="email" autocomplete="username" />
+      </label>
+      <label>
+        Senha
+        <input id="auth-senha" type="password" autocomplete="current-password" />
+      </label>
+      <button id="auth-entrar" type="button">Entrar</button>
+    </div>
+    <div id="auth-logado" hidden>
+      <p id="auth-verdito" aria-live="polite"></p>
+      <button id="auth-sair" type="button">Sair</button>
+    </div>
+    <p id="auth-msg" class="rodape" aria-live="polite"></p>
+    <p class="rodape">
+      A sessao do operador fica so' em <code>chrome.storage.local</code> (para
+      renovar sozinha na proxima abertura). Nao exibe e-mail nem token. A
+      checagem definitiva de autorizacao e' feita no servidor.
+    </p>
+
+    <hr />
+
+    <h2>3. Enviar sessao para atualizar-sessao-rocket</h2>
+    <button id="enviar-rocket" type="button" disabled>
+      Enviar (desabilitado nesta etapa)
+    </button>
+    <p class="rodape">
+      Etapa 2A: preparacao apenas. Nada e' enviado; <code>sessionid</code> /
+      <code>csrftoken</code> nao sao lidos aqui.
+    </p>
+
     <script type="module" src="popup.js"></script>
   </body>
 </html>

@@ -1,11 +1,12 @@
-// Logica PURA da etapa 1 da extensao de captura de sessao do Rocket.
+// Logica PURA da extensao de captura de sessao do Rocket.
 //
-// Regras estruturais desta etapa (garantidas por este arquivo):
-// - Nunca recebe, le, guarda ou retorna VALOR de cookie -- so'
-//   presenca (booleano ESTRITO por nome).
+// Regras estruturais (garantidas por este arquivo):
+// - Deteccao de cookie: nunca recebe, le, guarda ou retorna VALOR de
+//   cookie -- so' presenca (booleano ESTRITO por nome).
+// - Logica de auth (etapa 2A): so' funcoes puras de ESTADO -- nao le
+//   token, nao faz rede, nao toca chrome.*, nao retorna e-mail.
 // - Sem dependencias, sem I/O, sem chrome.*, sem rede.
-// - Reutilizada tal e qual pelo popup (popup.js) e pelos testes
-//   (testes/teste.mjs).
+// - Reutilizada tal e qual pelo popup (popup.js) e pelos testes.
 
 // Dominio unico que esta extensao inspeciona.
 export const URL_ROCKET = "https://app.rocketgestor.com/";
@@ -56,4 +57,111 @@ export function avaliarSessaoRocket(presenca) {
   }
 
   return { completo, encontrados, faltando, mensagem };
+}
+
+// ===========================================================================
+// Etapa 2A -- logica PURA de estado da autenticacao do operador.
+//
+// Nada aqui le token, faz rede, toca chrome.* ou retorna e-mail. Recebe
+// so' o essencial ja' extraido pelo popup e devolve um veredito de UI.
+// ===========================================================================
+
+/**
+ * O access token esta expirado (ou perto disso)?
+ *
+ * @param {number} expiraEmEpochS  `expires_at` (epoch em SEGUNDOS).
+ * @param {number} agoraEpochS     agora, epoch em SEGUNDOS.
+ * @param {number} [margemS=60]    considera expirado se faltar <= margemS.
+ * @returns {boolean}  true tambem para entrada invalida (fail-safe).
+ */
+export function tokenExpirado(expiraEmEpochS, agoraEpochS, margemS = 60) {
+  if (typeof expiraEmEpochS !== "number" || !Number.isFinite(expiraEmEpochS)) {
+    return true;
+  }
+  if (typeof agoraEpochS !== "number" || !Number.isFinite(agoraEpochS)) {
+    return true;
+  }
+  return agoraEpochS >= expiraEmEpochS - margemS;
+}
+
+/**
+ * A sessao autenticada e' do operador autorizado?
+ *
+ * NAO retorna o e-mail -- so' o veredito. A checagem definitiva de
+ * autorizacao continua no servidor (PAINEL_EMAIL_AUTORIZADO dentro de
+ * atualizar-sessao-rocket); esta funcao so' antecipa o resultado na UI.
+ *
+ * @param {{email?: string} | null | undefined} sessao
+ * @param {string} emailAutorizado
+ * @returns {{ autenticado: boolean, autorizado: boolean, rotulo: string }}
+ */
+export function avaliarOperador(sessao, emailAutorizado) {
+  const emailSessao =
+    sessao && typeof sessao === "object" && typeof sessao.email === "string"
+      ? sessao.email.trim()
+      : "";
+
+  if (!emailSessao) {
+    return { autenticado: false, autorizado: false, rotulo: "Nao autenticado" };
+  }
+
+  const autorizado =
+    typeof emailAutorizado === "string" &&
+    emailSessao.toLowerCase() === emailAutorizado.trim().toLowerCase();
+
+  return {
+    autenticado: true,
+    autorizado,
+    rotulo: autorizado
+      ? "Operador autorizado"
+      : "Autenticado, mas NAO e' o operador autorizado",
+  };
+}
+
+/**
+ * Deriva o estado da UI de auth a partir da sessao lida do storage.
+ *
+ * @param {{
+ *   sessao?: {email?: string, expires_at?: number} | null,
+ *   agoraEpochS?: number,
+ *   margemS?: number
+ * }} entrada
+ * @param {string} emailAutorizado
+ * @returns {{
+ *   tela: "login" | "operador" | "nao_operador",
+ *   rotulo: string,
+ *   podeLogout: boolean,
+ *   precisaRenovar: boolean,
+ *   envioRocketHabilitado: boolean
+ * }}
+ */
+export function derivarEstadoAuth(entrada, emailAutorizado) {
+  const { sessao = null, agoraEpochS, margemS } = entrada ?? {};
+  const op = avaliarOperador(sessao, emailAutorizado);
+
+  if (!op.autenticado) {
+    return {
+      tela: "login",
+      rotulo: op.rotulo,
+      podeLogout: false,
+      precisaRenovar: false,
+      envioRocketHabilitado: false,
+    };
+  }
+
+  const precisaRenovar = tokenExpirado(
+    sessao && typeof sessao === "object" ? sessao.expires_at : undefined,
+    typeof agoraEpochS === "number" ? agoraEpochS : Math.floor(Date.now() / 1000),
+    typeof margemS === "number" ? margemS : 60,
+  );
+
+  return {
+    tela: op.autorizado ? "operador" : "nao_operador",
+    rotulo: op.rotulo,
+    podeLogout: true,
+    precisaRenovar,
+    // Etapa 2A: SEMPRE desabilitado -- inclusive para o operador
+    // autorizado. So' a etapa de integracao habilita isto.
+    envioRocketHabilitado: false,
+  };
 }
