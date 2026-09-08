@@ -63,6 +63,10 @@ export interface FilhoLote {
   unitvSn: string | null;
   unitvId: number | null;
   clienteNome: string;
+  // Usuario real do acesso (Sigma), ja identificado na montagem do lote
+  // pelo /match|/status da mesma requisicao. Opcional/aditivo -- filho
+  // UniTV ignora (usa unitvSn). So' exibicao na mensagem final.
+  usuario?: string | null;
   servidorNome: string;
   planoNome: string;
   valorEsperadoCentavos: number;
@@ -118,6 +122,8 @@ export async function criarRenovacaoLote(params: {
       public_id: f.publicId,
       unitv_sn: f.unitvSn,
       unitv_id: f.unitvId,
+      // Sigma: usuario ja identificado; UniTV: null (usa unitv_sn).
+      usuario: f.tipo === "unitv" ? null : (f.usuario ?? null),
       telefone: params.telefone,
       cliente_nome: f.clienteNome,
       servidor_nome: f.servidorNome,

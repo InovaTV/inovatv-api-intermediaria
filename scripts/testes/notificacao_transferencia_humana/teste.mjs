@@ -442,13 +442,16 @@ async function grupo3() {
       (m) =>
         m.conversationId === conv3b &&
         m.origem === "ia" &&
-        m.texto.startsWith("✅ Pagamento confirmado!") &&
-        m.texto.includes("Olá,Cliente Teste!"),
+        m.texto.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*") &&
+        m.texto.includes("👤 *Cliente:* Cliente Teste") &&
+        m.texto.includes("💰 *Valor:* R$ 35,00"),
     ),
-    "G3 (C4): texto de confirmacao de pagamento agora e' gravado no historico do Painel (bug corrigido)",
+    "G3 (C4): mensagem final (resumo completo) gravada no historico do Painel",
   );
   ok(
-    mensagensHistorico.filter((m) => m.origem === "ia" && m.texto.startsWith("✅ Pagamento confirmado!")).length === 1,
+    mensagensHistorico.filter(
+      (m) => m.origem === "ia" && m.texto.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*"),
+    ).length === 1,
     "G3 (C4): grava exatamente 1 linha de confirmacao (nao duplica)",
   );
 }
@@ -716,7 +719,7 @@ async function grupo7() {
       renovacao_concluida_em: null,
     });
     const ids = [];
-    for (const [pid, srv] of [["pubA", "BLAZE"], ["pubB", "NewOne"]]) {
+    for (const [pid, srv, usr] of [["pubA", "BLAZE", "cmxjkb"], ["pubB", "NewOne", "abc123"]]) {
       const id = crypto.randomUUID();
       ids.push(id);
       inserirDireto("tokens_renovacao", {
@@ -728,6 +731,7 @@ async function grupo7() {
         public_id: pid,
         unitv_sn: null,
         unitv_id: null,
+        usuario: usr,
         telefone: TELEFONE,
         operacao_id: null,
         cliente_nome: "Cliente Teste",
@@ -832,7 +836,19 @@ async function grupo7() {
   ok(body7b.outcome === "lote_concluida", "G7b: sucesso total -> 'lote_concluida'");
   ok(lerTabela("renovacoes_lote")[0]?.estado === "concluida", "G7b: lote -> 'concluida'");
   ok(mensagensEnviadas.length === 1, "G7b: EXATAMENTE 1 mensagem ao cliente");
-  ok(mensagensEnviadas[0].texto.includes("Suas renovações foram registradas com sucesso."), "G7b: consolidada com 'com sucesso'");
+  ok(
+    mensagensEnviadas[0].texto.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*") &&
+      mensagensEnviadas[0].texto.includes("Todos os seus acessos foram renovados e já estão atualizados."),
+    "G7b: consolidada com o cabecalho/frase de conclusao (todos renovaram)",
+  );
+  // 2026-09-07: cada bloco de acesso renovado mostra o `usuario` real
+  // persistido no filho do lote (Sigma) -- nunca "não informado".
+  ok(
+    mensagensEnviadas[0].texto.includes("🔑 Usuário: cmxjkb") &&
+      mensagensEnviadas[0].texto.includes("🔑 Usuário: abc123") &&
+      !mensagensEnviadas[0].texto.includes("🔑 Usuário: não informado"),
+    "G7b: consolidada mostra o usuario REAL de cada acesso (coluna `usuario` do filho)",
+  );
   ok(templatesEnviados.length === 0, "G7b: sucesso total -> NENHUMA transferencia (nenhum aviso ao Jose)");
 }
 

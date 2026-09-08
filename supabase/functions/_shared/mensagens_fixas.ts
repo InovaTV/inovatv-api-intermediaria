@@ -343,30 +343,56 @@ export function montarMensagemConfirmacaoLote(dados: {
 }
 
 // Renovacao em lote -- resultado UNICO consolidado apos o pagamento.
-// Cada item apresenta o SEU resultado: renovado -> "📅 Novo
-// vencimento"; falha/indeterminado/unitv pendente -> "⚠️ Um atendente
-// vai concluir...". "com sucesso" so' quando TODOS renovaram. Mesma
-// mensagem pra Sigma+Sigma e (futuro) Sigma+UniTV. Fora da janela de
-// 24h o envio pode falhar (mensagem livre) -- fallback por template
-// aprovado e' tarefa separada (NOME_TEMPLATE_RENOVACAO_LOTE_RESULTADO).
+// Cada acesso renovado apresenta o SEU resumo completo (usuario /
+// servidor / plano / valor / novo vencimento); um acesso que falhou/
+// ficou indeterminado -> "⚠️ Um atendente vai concluir...". Quando
+// TODOS renovaram, o cabecalho e' o mesmo da mensagem individual
+// (montarMensagemRenovacaoConcluida) -- os dois fluxos ficam
+// visualmente consistentes. Mesma mensagem pra Sigma+Sigma, Sigma+UniTV
+// e 2xUniTV. So' formata dado ja' pronto do chamador (sempre real) --
+// campo sem dado disponivel naquele fluxo vira "não informado", NUNCA
+// um valor inventado. Fora da janela de 24h o envio pode falhar
+// (mensagem livre) -- fallback por template aprovado e' tarefa separada
+// (NOME_TEMPLATE_RENOVACAO_LOTE_RESULTADO).
 export function montarMensagemResultadoLote(
-  itens: { nome: string; servidorNome: string; sucesso: boolean; vencimentoFormatado: string | null }[],
+  itens: {
+    nome: string;
+    usuario: string | null;
+    servidorNome: string;
+    planoNome: string;
+    valorFormatado: string | null;
+    sucesso: boolean;
+    vencimentoFormatado: string | null;
+  }[],
 ): string {
   const todosOk = itens.every((i) => i.sucesso);
-  const blocos = itens.map((item, indice) =>
-    [
-      `*${indice + 1}. ${item.nome}*`,
-      `🖥️ ${item.servidorNome}`,
-      item.sucesso && item.vencimentoFormatado
-        ? `📅 Novo vencimento: ${item.vencimentoFormatado}`
-        : "⚠️ Um atendente vai concluir esta renovação por aqui.",
-    ].join("\n"),
-  );
+  const blocos = itens.map((item, indice) => {
+    const cabecalho = `*${indice + 1}. ${item.nome}*`;
+    if (item.sucesso && item.vencimentoFormatado) {
+      const usuario = item.usuario && item.usuario.trim() ? item.usuario.trim() : "não informado";
+      const valor = item.valorFormatado && item.valorFormatado.trim()
+        ? `R$ ${item.valorFormatado.trim()}`
+        : "não informado";
+      return [
+        cabecalho,
+        `🔑 Usuário: ${usuario}`,
+        `🖥️ Servidor: ${item.servidorNome}`,
+        `📦 Plano: ${item.planoNome}`,
+        `💰 Valor: ${valor}`,
+        `📅 Novo vencimento: ${item.vencimentoFormatado}`,
+      ].join("\n");
+    }
+    return [
+      cabecalho,
+      `🖥️ Servidor: ${item.servidorNome}`,
+      "⚠️ Um atendente vai concluir esta renovação por aqui.",
+    ].join("\n");
+  });
   return [
-    "✅ *Pagamento confirmado!*",
+    todosOk ? "🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*" : "✅ *Pagamento confirmado!*",
     "",
     todosOk
-      ? "Suas renovações foram registradas com sucesso."
+      ? "Todos os seus acessos foram renovados e já estão atualizados."
       : "Suas renovações foram registradas.",
     "",
     blocos.join("\n\n"),
@@ -447,32 +473,44 @@ export function montarMensagemBotoesConfirmacaoRenovacao(dados: {
   ].join("\n");
 }
 
-// Molde do corpo do Message Template `pagamento_confirmado` (acima) com
-// os 4 parametros ja substituidos. NAO e' usado pra enviar nada -- o
-// envio real continua sendo enviarTemplateWhatsApp. Serve SO' pra
-// gravar no historico do Painel EXATAMENTE o texto que o cliente
-// recebeu (bug de historico, bloco de renovacao 2026-08-28, C4): hoje
-// a confirmacao chega no WhatsApp mas nao aparece na conversa do
-// Painel. Espelha o corpo aprovado pela Meta byte a byte -- inclusive
-// a ausencia de espaco depois de "Olá,", "Plano:", "Servidor:" e
-// "vencimento:", porque o objetivo e' registrar o que foi enviado, nao
-// corrigi-lo (polimento do texto = reenvio do template a Meta, trilha
-// separada). Se o template for reenviado/alterado, atualizar aqui
-// junto.
-export function montarTextoConfirmacaoPagamentoRenovacao(dados: {
+// Mensagem FINAL da renovacao individual concluida com sucesso --
+// resumo completo pro cliente. Enviada PELO NOSSO SISTEMA: apos a
+// aposentadoria da WhatsApp Cloud API, o template Meta
+// `pagamento_confirmado` ficou vestigial e o envio real e' texto
+// (wasender_client.enviarTemplateWhatsApp renderiza o corpo como
+// mensagem simples). Serve para Sigma E UniTV.
+//
+// Todos os dados vem prontos do chamador (renovacao-sigma-resultado) e
+// sao SEMPRE reais: cliente/servidor/plano/valor do snapshot do token
+// (tokens_renovacao), `usuario` do proprio cadastro (unitv_sn no fluxo
+// UniTV), e o novo vencimento JA' confirmado pela reconsulta real do
+// workflow. Este helper NAO busca nem confirma nada -- so' formata. Um
+// campo sem dado disponivel naquele fluxo vira "não informado", NUNCA
+// um valor inventado (mesma convencao de
+// montarMensagemBotoesConfirmacaoRenovacao).
+export function montarMensagemRenovacaoConcluida(dados: {
   clienteNome: string;
-  planoNome: string;
+  usuario: string | null;
   servidorNome: string;
+  planoNome: string;
+  valorFormatado: string | null;
   vencimentoFormatado: string;
 }): string {
+  const usuario = dados.usuario && dados.usuario.trim() ? dados.usuario.trim() : "não informado";
+  const valor = dados.valorFormatado && dados.valorFormatado.trim()
+    ? `R$ ${dados.valorFormatado.trim()}`
+    : "não informado";
   return [
-    "✅ Pagamento confirmado!",
+    "🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*",
     "",
-    `Olá,${dados.clienteNome}! Sua renovação foi registrada com sucesso.`,
+    `👤 *Cliente:* ${dados.clienteNome}`,
+    `🔑 *Usuário:* ${usuario}`,
+    `🖥️ *Servidor:* ${dados.servidorNome}`,
+    `📦 *Plano:* ${dados.planoNome}`,
+    `💰 *Valor:* ${valor}`,
+    `📅 *Novo vencimento:* ${dados.vencimentoFormatado}`,
     "",
-    `📋 Plano:${dados.planoNome}`,
-    `🖥️ Servidor:${dados.servidorNome}`,
-    `📅 Novo vencimento:${dados.vencimentoFormatado}`,
+    "✅ Sua renovação foi concluída com sucesso e seu acesso já está atualizado.",
     "",
     "Qualquer dúvida, estamos à disposição.",
     "InovaTV — Sempre pensando em você! 📺",

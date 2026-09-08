@@ -40,6 +40,7 @@ const BASE = {
   ok(insertsRegistrados()[0].table === "tokens_renovacao", "C1: insert em tokens_renovacao");
   ok(p.tipo === "sigma", "C1: default tipo='sigma'");
   ok(p.unitv_sn === null && p.unitv_id === null, "C1: unitv_sn/unitv_id null quando Sigma");
+  ok(p.usuario === null, "C1: usuario null quando nao passado (compat -- token pre-coluna)");
   ok(p.public_id === BASE.publicId, "C1: public_id preenchido");
   ok(p.estado === "aguardando_confirmacao", "C1: estado inicial aguardando_confirmacao");
   ok(p.token_hash && p.token_hash !== tokenBruto && /^[0-9a-f]{64}$/.test(p.token_hash), "C1: token_hash e' SHA-256 (nunca o bruto)");
@@ -50,13 +51,32 @@ const BASE = {
 // --- C2: token UniTV -> tipo='unitv', unitv_sn/unitv_id preenchidos, public_id MANTIDO ---
 {
   resetar();
-  await criarTokenRenovacao({ ...BASE, servidorNome: "UNITV", tipo: "unitv", unitvSn: "gcnv6v", unitvId: 3433363 });
+  await criarTokenRenovacao({ ...BASE, servidorNome: "UNITV", tipo: "unitv", unitvSn: "gcnv6v", unitvId: 3433363, usuario: "nao-deve-entrar" });
   const p = insertsRegistrados()[0].payload;
   ok(p.tipo === "unitv", "C2: tipo='unitv'");
   ok(p.unitv_sn === "gcnv6v", "C2: unitv_sn = sn resolvido");
   ok(p.unitv_id === 3433363, "C2: unitv_id = id resolvido do painel");
   ok(p.public_id === BASE.publicId, "C2: public_id MANTIDO no token UniTV (id do cliente no Rocket)");
   ok(p.servidor_nome === "UNITV", "C2: servidor_nome no snapshot");
+  ok(p.usuario === null, "C2: UniTV IGNORA `usuario` -- o usuario e' o unitv_sn (esta coluna fica null)");
+}
+
+// --- C5 (2026-09-07): Sigma com `usuario` -> persiste no snapshot para a mensagem final ---
+{
+  resetar();
+  await criarTokenRenovacao({ ...BASE, usuario: "cmxjkb" });
+  const p = insertsRegistrados()[0].payload;
+  ok(p.tipo === "sigma", "C5: tipo='sigma'");
+  ok(p.usuario === "cmxjkb", "C5: usuario real (ja identificado na proposta) persistido no token Sigma");
+  ok(p.unitv_sn === null, "C5: unitv_sn continua null no Sigma");
+  ok(p.plano_nome === "Mensal" && p.valor_esperado_centavos === 3500, "C5: resto do snapshot inalterado");
+}
+
+// --- C6: Sigma com usuario undefined/null -> grava null, nunca 'undefined' string ---
+{
+  resetar();
+  await criarTokenRenovacao({ ...BASE, usuario: null });
+  ok(insertsRegistrados()[0].payload.usuario === null, "C6: usuario null explicito -> grava null");
 }
 
 // --- C3: tipo='unitv' sem unitvSn ou sem unitvId -> lanca (guard antes do insert) ---

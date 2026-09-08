@@ -18,7 +18,7 @@ import {
   montarMensagemBotoesConfirmacaoRenovacao,
   montarMensagemPixRenovacao,
   montarMensagemMultiplosAcessosRenovacao,
-  montarTextoConfirmacaoPagamentoRenovacao,
+  montarMensagemRenovacaoConcluida,
   montarMensagemConfirmacaoLote,
   montarMensagemResultadoLote,
   MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
@@ -280,21 +280,69 @@ checarLista("C3(venc null)", [
 }
 
 // =====================================================================
-// C4 -- molde do texto de confirmacao (so' pra historico do Painel)
+// C4 -- mensagem FINAL da renovacao individual concluida (resumo
+// completo enviado pelo nosso sistema; serve Sigma e UniTV). Ajuste de
+// UX 2026-09-07: era so' os dados minimos (params do template Meta),
+// agora e' um resumo com os 6 campos + confirmacao clara.
 // =====================================================================
 {
-  const texto = montarTextoConfirmacaoPagamentoRenovacao({
-    clienteNome: "Meu Uso Testes",
+  const texto = montarMensagemRenovacaoConcluida({
+    clienteNome: "Karla Filha",
+    usuario: "3tnjsc",
+    servidorNome: "UNITV",
     planoNome: "Mensal",
-    servidorNome: "BLAZE",
-    vencimentoFormatado: "14/10/2026",
+    valorFormatado: "35,00",
+    vencimentoFormatado: "22/10/2026 20:09:00",
   });
-  ok(texto.startsWith("✅ Pagamento confirmado!"), "C4: comeca com o titulo aprovado");
-  ok(texto.includes("Olá,Meu Uso Testes!"), "C4: espelha o corpo aprovado byte a byte (sem espaco apos 'Olá,')");
-  ok(texto.includes("📋 Plano:Mensal"), "C4: espelha 'Plano:' sem espaco, como aprovado");
-  ok(texto.includes("🖥️ Servidor:BLAZE"), "C4: espelha 'Servidor:' sem espaco");
-  ok(texto.includes("📅 Novo vencimento:14/10/2026"), "C4: vencimento formatado no lugar certo");
+  const linhas = texto.split("\n");
+  ok(texto.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*"), "C4: cabecalho de conclusao");
+  ok(texto.includes("👤 *Cliente:* Karla Filha"), "C4: campo Cliente em negrito");
+  ok(texto.includes("🔑 *Usuário:* 3tnjsc"), "C4: campo Usuario (real, do fluxo UniTV)");
+  ok(texto.includes("🖥️ *Servidor:* UNITV"), "C4: campo Servidor");
+  ok(texto.includes("📦 *Plano:* Mensal"), "C4: campo Plano");
+  ok(texto.includes("💰 *Valor:* R$ 35,00"), "C4: campo Valor formatado em reais");
+  ok(texto.includes("📅 *Novo vencimento:* 22/10/2026 20:09:00"), "C4: campo Novo vencimento");
+  ok(
+    texto.includes("✅ Sua renovação foi concluída com sucesso e seu acesso já está atualizado."),
+    "C4: confirmacao clara de que a renovacao foi concluida",
+  );
   ok(texto.includes("InovaTV — Sempre pensando em você! 📺"), "C4: assinatura final presente");
+  // Os 6 campos, cada um em sua linha, na ordem pedida.
+  const idx = (r) => linhas.findIndex((l) => l.includes(r));
+  const [iC, iU, iS, iP, iV, iVenc] = ["*Cliente:*", "*Usuário:*", "*Servidor:*", "*Plano:*", "*Valor:*", "*Novo vencimento:*"].map(idx);
+  ok([iC, iU, iS, iP, iV, iVenc].every((i) => i !== -1), "C4: os 6 campos aparecem, um por linha");
+  ok(iC < iU && iU < iS && iS < iP && iP < iV && iV < iVenc, "C4: ordem Cliente, Usuario, Servidor, Plano, Valor, Novo vencimento");
+}
+
+// C4 -- fluxo Sigma: usuario nao existe no snapshot do token -> texto
+// honesto "não informado", NUNCA inventado / undefined / null.
+{
+  const texto = montarMensagemRenovacaoConcluida({
+    clienteNome: "Js Informática Rp",
+    usuario: null,
+    servidorNome: "NewOne",
+    planoNome: "Mensal",
+    valorFormatado: "35,00",
+    vencimentoFormatado: "08/12/2026 20:59:59",
+  });
+  ok(texto.includes("🔑 *Usuário:* não informado"), "C4(sigma): usuario ausente vira 'não informado'");
+  ok(!/\*Usuário:\*\s*(undefined|null|\[object)/.test(texto), "C4(sigma): nunca 'undefined'/'null'/ficticio no usuario");
+  ok(texto.includes("💰 *Valor:* R$ 35,00"), "C4(sigma): valor real ainda presente");
+}
+
+// C4 -- valor ausente -> "não informado" sem "R$" (nunca "R$ não informado")
+{
+  const texto = montarMensagemRenovacaoConcluida({
+    clienteNome: "X",
+    usuario: null,
+    servidorNome: "S",
+    planoNome: "Mensal",
+    valorFormatado: null,
+    vencimentoFormatado: "01/01/2027",
+  });
+  ok(texto.includes("💰 *Valor:* não informado"), "C4: valor null vira 'não informado'");
+  ok(!texto.includes("R$ não informado"), "C4: sem 'R$' quando o valor e' desconhecido");
+  ok(!/(undefined|null|\[object|NaN)/.test(texto), "C4: nunca undefined/null/NaN no texto");
 }
 
 // =====================================================================
@@ -352,26 +400,39 @@ checarLista("C3(venc null)", [
 }
 
 // =====================================================================
-// Etapa 1 -- montarMensagemResultadoLote (resultado consolidado, sem
-// nome no cabecalho; "com sucesso" so' quando TODOS renovaram)
+// Etapa 1 -- montarMensagemResultadoLote (resultado consolidado). Ajuste
+// de UX 2026-09-07: cada acesso renovado passa a ter o resumo completo
+// (Usuario/Servidor/Plano/Valor/Novo vencimento) e, quando TODOS
+// renovaram, o cabecalho fica igual ao da mensagem individual. Acesso
+// que falhou continua so' com o aviso de atendente.
 // =====================================================================
 {
   const todosOk = montarMensagemResultadoLote([
-    { nome: "Meu Uso Testes", servidorNome: "BLAZE", sucesso: true, vencimentoFormatado: "14/10/2026" },
-    { nome: "Js Informática Rp", servidorNome: "NewOne", sucesso: true, vencimentoFormatado: "08/12/2026" },
+    { nome: "Meu Uso Testes", usuario: "828667229", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", sucesso: true, vencimentoFormatado: "14/10/2026" },
+    { nome: "Js Informática Rp", usuario: null, servidorNome: "NewOne", planoNome: "Anual", valorFormatado: "300,00", sucesso: true, vencimentoFormatado: "08/12/2026" },
   ]);
-  ok(todosOk.startsWith("✅ *Pagamento confirmado!*"), "Lote-result: titulo");
-  ok(todosOk.includes("Suas renovações foram registradas com sucesso."), "Lote-result: 'com sucesso' quando todos ok");
+  ok(todosOk.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*"), "Lote-result: cabecalho de conclusao quando todos ok");
+  ok(todosOk.includes("Todos os seus acessos foram renovados e já estão atualizados."), "Lote-result: frase de conclusao quando todos ok");
   ok(!/Olá|Ol[aá],/.test(todosOk.split("\n")[2] ?? ""), "Lote-result: sem nome no cabecalho (evita assumir mesmo cadastro)");
   ok(todosOk.includes("📅 Novo vencimento: 14/10/2026") && todosOk.includes("📅 Novo vencimento: 08/12/2026"), "Lote-result: vencimento por acesso");
+  // Resumo completo por acesso renovado.
+  ok(todosOk.includes("🔑 Usuário: 828667229"), "Lote-result: usuario real do acesso 1");
+  ok(todosOk.includes("🔑 Usuário: não informado"), "Lote-result: acesso 2 (Sigma, sem usuario) -> 'não informado'");
+  ok(todosOk.includes("📦 Plano: Mensal") && todosOk.includes("📦 Plano: Anual"), "Lote-result: plano por acesso");
+  ok(todosOk.includes("💰 Valor: R$ 35,00") && todosOk.includes("💰 Valor: R$ 300,00"), "Lote-result: valor real por acesso");
+  ok(!/(undefined|null|\[object|NaN)/.test(todosOk), "Lote-result: nunca undefined/null/NaN");
 
   const parcial = montarMensagemResultadoLote([
-    { nome: "A", servidorNome: "BLAZE", sucesso: true, vencimentoFormatado: "14/10/2026" },
-    { nome: "B", servidorNome: "NewOne", sucesso: false, vencimentoFormatado: null },
+    { nome: "A", usuario: "111", servidorNome: "BLAZE", planoNome: "Mensal", valorFormatado: "35,00", sucesso: true, vencimentoFormatado: "14/10/2026" },
+    { nome: "B", usuario: "222", servidorNome: "NewOne", planoNome: "Mensal", valorFormatado: "35,00", sucesso: false, vencimentoFormatado: null },
   ]);
+  ok(parcial.startsWith("✅ *Pagamento confirmado!*"), "Lote-result: cabecalho neutro quando algum falhou");
   ok(parcial.includes("Suas renovações foram registradas.") && !parcial.includes("com sucesso."), "Lote-result: sem 'com sucesso' se algum falhou");
   ok(parcial.includes("⚠️ Um atendente vai concluir esta renovação por aqui."), "Lote-result: acesso que falhou aponta atendente humano");
-  ok(!parcial.includes("Novo vencimento:") || parcial.split("Novo vencimento:").length - 1 === 1, "Lote-result: acesso que falhou NAO mostra vencimento novo");
+  ok(parcial.split("Novo vencimento:").length - 1 === 1, "Lote-result: so' o acesso renovado mostra novo vencimento");
+  // O bloco do acesso que falhou NAO traz Usuario/Plano/Valor.
+  const blocoB = parcial.split("\n\n").find((b) => b.includes("*2. B*"));
+  ok(blocoB && !/🔑 Usuário:|📦 Plano:|💰 Valor:/.test(blocoB), "Lote-result: bloco do acesso que falhou so' tem servidor + aviso de atendente");
 }
 
 // =====================================================================

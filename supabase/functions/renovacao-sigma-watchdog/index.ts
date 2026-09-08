@@ -60,7 +60,7 @@ import {
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { notificarTransferenciaHumana } from "../_shared/notificacao_transferencia.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
-import { montarMensagemResultadoLote, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO } from "../_shared/mensagens_fixas.ts";
+import { montarMensagemResultadoLote, formatarValorBRL, MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO } from "../_shared/mensagens_fixas.ts";
 import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 // Peca 3 (2026-08-29) -- reconciliacao de pagamento (reusa as primitivas CAS do openpix-webhook)
 import { reconciliarPagamentoRenovacao, reconciliarSePago } from "../_shared/reconciliacao_renovacao.ts";
@@ -272,7 +272,10 @@ Deno.serve(async (req: Request) => {
     const textoCliente = montarMensagemResultadoLote(
       filhos.map((f) => ({
         nome: f.cliente_nome,
+        usuario: f.tipo === "unitv" ? f.unitv_sn : (f.usuario ?? null),
         servidorNome: f.servidor_nome,
+        planoNome: f.plano_nome,
+        valorFormatado: formatarValorBRL(f.valor_esperado_centavos / 100),
         sucesso: f.estado === "renovacao_concluida",
         vencimentoFormatado: f.vencimento_confirmado
           ? new Date(f.vencimento_confirmado).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })

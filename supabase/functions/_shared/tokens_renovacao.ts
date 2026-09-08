@@ -44,6 +44,14 @@ export interface TokenRenovacao {
   telefone: string;
   operacao_id: string | null;
   cliente_nome: string;
+  // Usuario real do acesso, capturado NA CRIACAO DA PROPOSTA (o mesmo
+  // que o /match|/status daquela requisicao ja trouxe -- nunca uma
+  // consulta nova ao Rocket). Sigma: usa este campo. UniTV: o usuario
+  // e' o unitv_sn (este fica null). So' exibicao na mensagem final --
+  // a maquina de estados nunca le/escreve isto. NULL = token criado
+  // antes desta coluna existir, ou usuario nao identificado (a
+  // mensagem cai no "não informado" honesto, nunca inventado).
+  usuario: string | null;
   servidor_nome: string;
   plano_nome: string;
   valor_esperado_centavos: number;
@@ -98,6 +106,12 @@ export async function criarTokenRenovacao(params: {
   planoNome: string;
   valorEsperadoCentavos: number;
   vencimentoAtual: string;
+  // Usuario real do acesso (Sigma), ja identificado na proposta pelo
+  // /match|/status da mesma requisicao -- o Orquestrador so' repassa o
+  // valor que ja tinha. Opcional/aditivo: quem nao passa (ou passa
+  // null) grava NULL e a mensagem final cai no "não informado". Para
+  // tipo='unitv' este campo e' ignorado (o usuario e' o unitvSn).
+  usuario?: string | null;
   // Renovacao UniTV (Etapa 2, Bloco 3). Default 'sigma' -- toda chamada
   // Sigma existente continua identica (nem passa estes campos). Para
   // 'unitv', unitvSn (== usuario do cadastro Rocket) e unitvId (id
@@ -129,6 +143,9 @@ export async function criarTokenRenovacao(params: {
       public_id: params.publicId,
       telefone: params.telefone,
       cliente_nome: params.clienteNome,
+      // Sigma: guarda o usuario ja identificado na proposta. UniTV: null
+      // (o usuario e' o unitv_sn) -- mesma disciplina de unitv_sn/id abaixo.
+      usuario: tipo === "unitv" ? null : (params.usuario ?? null),
       servidor_nome: params.servidorNome,
       plano_nome: params.planoNome,
       valor_esperado_centavos: params.valorEsperadoCentavos,

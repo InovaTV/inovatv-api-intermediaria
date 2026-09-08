@@ -38,6 +38,8 @@ const TEL = "5517981625486";
       publicId: "pub-A",
       unitvSn: null,
       unitvId: null,
+      // usuario real ja identificado na montagem do lote (proposta)
+      usuario: "cmxjkb",
       clienteNome: "Meu Uso Testes",
       servidorNome: "BLAZE",
       planoNome: "Mensal",
@@ -49,6 +51,7 @@ const TEL = "5517981625486";
       publicId: "pub-B",
       unitvSn: null,
       unitvId: null,
+      // sem `usuario` -> grava null (mensagem final cai no "não informado")
       clienteNome: "Js Informática Rp",
       servidorNome: "NewOne",
       planoNome: "Mensal",
@@ -83,6 +86,9 @@ const TEL = "5517981625486";
   ok(kids.map((k) => k.public_id).sort().join(",") === "pub-A,pub-B", "criar: public_id de cada acesso preservado");
   ok(kids.every((k) => k.valor_esperado_centavos === 3000), "criar: valor por acesso no snapshot do filho");
   ok(kids.some((k) => k.cliente_nome === "Js Informática Rp" && k.servidor_nome === "NewOne"), "criar: snapshot nome/servidor por filho");
+  // 2026-09-07: usuario por filho -> so' exibicao na mensagem final.
+  ok(kids.find((k) => k.public_id === "pub-A")?.usuario === "cmxjkb", "criar: filho Sigma com usuario -> persistido no snapshot");
+  ok(kids.find((k) => k.public_id === "pub-B")?.usuario === null, "criar: filho Sigma sem usuario -> null (nunca 'undefined')");
   ok(kids.every((k) => typeof k.token_hash === "string" && k.token_hash.length === 64), "criar: cada filho tem token_hash proprio");
   ok(new Set(kids.map((k) => k.token_hash)).size === 2 && !kids.some((k) => k.token_hash === capa.token_hash), "criar: token_hash dos filhos e' distinto entre si e da capa (nunca usado pra lookup)");
 }

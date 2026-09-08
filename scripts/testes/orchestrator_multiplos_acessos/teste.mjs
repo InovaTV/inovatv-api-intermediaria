@@ -305,6 +305,9 @@ async function testeB() {
   const texto2 = interativas[0]?.texto ?? "";
   ok(texto2.includes("*Usuário:* 828667229"), "Teste B: mensagem 2 traz o usuario REAL do acesso resolvido (BLAZE)");
   ok(texto2.includes("*Servidor:* BLAZE"), "Teste B: mensagem 2 confirma o servidor certo");
+  // 2026-09-07: o MESMO usuario da proposta e' PERSISTIDO no token
+  // (Sigma), sem nova consulta ao Rocket -- pra mensagem final.
+  ok((argsCriarToken()[0] ?? {}).usuario === "828667229", "Teste B: criarTokenRenovacao recebe o usuario real (persistencia Sigma)");
   ok(interativas[0]?.botoes?.some((b) => b.titulo === "ACEITO"), "Teste B: botão ACEITO presente");
   ok(interativas[0]?.botoes?.some((b) => b.titulo === "CANCELAR"), "Teste B: botão CANCELAR presente");
 
@@ -550,6 +553,14 @@ async function testeI() {
     c.filhos?.map((f) => f.publicId).sort().join(",") === [PUBLIC_ID_A, PUBLIC_ID_B].sort().join(","),
     "Teste I: filhos apontam para os public_id reais dos dois acessos",
   );
+  {
+    // 2026-09-07: cada filho Sigma carrega o SEU usuario real (aqui via
+    // fallback /match, ja que este fake /status nao traz `usuario`) --
+    // persistido no snapshot para a mensagem final.
+    const porPubUsuario = Object.fromEntries((c.filhos ?? []).map((f) => [f.publicId, f.usuario]));
+    ok(porPubUsuario[PUBLIC_ID_A] === "828667229", "Teste I: filho A carrega o usuario real (828667229)");
+    ok(porPubUsuario[PUBLIC_ID_B] === "2715749553", "Teste I: filho B carrega o usuario real (2715749553)");
+  }
 
   const interativas = getMensagensInterativasEnviadas();
   ok(interativas.length === 1, "Teste I: exatamente 1 mensagem interativa (confirmacao do lote)");
@@ -1042,6 +1053,9 @@ async function testeU() {
   ok(c.filhos.every((f) => f.publicId), "Teste U: TODOS os filhos carregam public_id (inclusive UniTV)");
   ok(c.filhos[0].unitvSn === null && c.filhos[0].unitvId === null, "Teste U: filho Sigma nao tem unitv_sn/unitv_id");
   ok(c.filhos[1].unitvSn === "gcnv6v" && c.filhos[1].unitvId === 3433363, "Teste U: filho UniTV carrega unitv_sn + unitv_id resolvidos");
+  // 2026-09-07: Sigma usa `usuario`; UniTV IGNORA (usuario=null, usa unitvSn).
+  ok(c.filhos[0].usuario === "828667229", "Teste U: filho Sigma carrega o usuario real na coluna `usuario`");
+  ok(c.filhos[1].usuario === null, "Teste U: filho UniTV -> usuario=null (o usuario dele e' o unitv_sn)");
   ok(c.valorTotalCentavos === 7000, "Teste U: total = soma dos valores reais (35,00 + 35,00 = R$ 70,00)");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste U: confirmacao interativa do lote enviada");
   ok(acionamentosRegistrados().length === 0, "Teste U: nenhuma transferencia (lote criado)");
@@ -1101,6 +1115,7 @@ async function testeV() {
   const c = chamadasCriarLote()[0] ?? {};
   ok(c.filhos.length === 2 && c.filhos.every((f) => f.tipo === "unitv"), "Teste V: 2 filhos, ambos tipo='unitv'");
   ok(c.filhos.every((f) => f.publicId && f.unitvSn && f.unitvId), "Teste V: cada filho UniTV com public_id + unitv_sn + unitv_id");
+  ok(c.filhos.every((f) => f.usuario === null), "Teste V: filhos UniTV -> usuario=null (usam unitv_sn)");
   ok(c.filhos.find((f) => f.unitvSn === "3tnjsc") && c.filhos.find((f) => f.unitvSn === "gcnv6v"), "Teste V: os dois sn corretos nos filhos");
   ok(c.valorTotalCentavos === 7000, "Teste V: total = soma real (35 + 35)");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste V: confirmacao interativa do lote enviada");
@@ -1225,6 +1240,7 @@ async function testeW() {
   ok(chamadasCriarToken() === 1, "Teste W: token criado (UniTV resolvida)");
   const arg = argsCriarToken()[0] ?? {};
   ok(arg.tipo === "unitv" && arg.unitvSn === "gcnv6v" && arg.unitvId === 3433363, "Teste W: token tipo='unitv' com sn/id do acesso 1");
+  ok(arg.usuario === null, "Teste W: token UniTV -> usuario=null no call site (usa unitv_sn)");
   ok(getMensagensInterativasEnviadas().length === 1, "Teste W: confirmacao interativa enviada");
   ok(acionamentosRegistrados().length === 0, "Teste W: nenhuma transferencia");
   ok(

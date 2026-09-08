@@ -45,8 +45,9 @@ import {
   IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
   IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
-  montarTextoConfirmacaoPagamentoRenovacao,
+  montarMensagemRenovacaoConcluida,
   montarMensagemResultadoLote,
+  formatarValorBRL,
   MENSAGEM_RENOVACAO_INSTABILIDADE,
 } from "../_shared/mensagens_fixas.ts";
 
@@ -181,33 +182,38 @@ Deno.serve(async (req: Request) => {
   }
 
   if (resultado === "sucesso") {
-    const vencimentoFormatado = vencimentoConfirmado ? formatarDataBr(vencimentoConfirmado) : "";
-    const parametrosTemplate = [
-      atualizado.cliente_nome,
-      atualizado.plano_nome,
-      atualizado.servidor_nome,
+    const vencimentoFormatado = vencimentoConfirmado ? formatarDataBr(vencimentoConfirmado) : "não informado";
+    // Mensagem final = resumo completo, montada com dado JA' real
+    // (snapshot do token + vencimento confirmado pela reconsulta do
+    // workflow). `usuario` so' existe no fluxo UniTV (== unitv_sn do
+    // cadastro); no fluxo Sigma o token nao carrega usuario -> cai no
+    // "não informado" honesto, nunca inventado. Nada aqui altera o
+    // mecanismo que obtem/confirma o vencimento.
+    const textoRenovacaoConcluida = montarMensagemRenovacaoConcluida({
+      clienteNome: atualizado.cliente_nome,
+      // UniTV: usuario = unitv_sn (validado em producao). Sigma: usuario
+      // capturado na proposta e persistido no token -- SEM nova consulta
+      // ao Rocket aqui. Ausente (token pre-coluna) -> "não informado".
+      usuario: atualizado.tipo === "unitv" ? atualizado.unitv_sn : (atualizado.usuario ?? null),
+      servidorNome: atualizado.servidor_nome,
+      planoNome: atualizado.plano_nome,
+      valorFormatado: formatarValorBRL(atualizado.valor_esperado_centavos / 100),
       vencimentoFormatado,
-    ];
+    });
     const envio = await enviarTemplateWhatsApp(
       atualizado.telefone,
       NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
       IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
-      parametrosTemplate,
+      [textoRenovacaoConcluida],
     );
     if (envio.outcome === "success") {
       // Bloco de renovacao 2026-08-28 (C4): grava no historico do
-      // Painel exatamente o texto que o cliente recebeu. O envio real
-      // e' o template acima; isto e' so' registro. Best-effort, nunca
-      // desfaz nem bloqueia o resultado ja processado.
+      // Painel exatamente o texto que o cliente recebeu. Best-effort,
+      // nunca desfaz nem bloqueia o resultado ja processado.
       await inserirMensagem(
         atualizado.conversation_id,
         "ia",
-        montarTextoConfirmacaoPagamentoRenovacao({
-          clienteNome: atualizado.cliente_nome,
-          planoNome: atualizado.plano_nome,
-          servidorNome: atualizado.servidor_nome,
-          vencimentoFormatado,
-        }),
+        textoRenovacaoConcluida,
         null,
       ).catch(() => {});
     }
@@ -352,7 +358,12 @@ async function processarResultadoLote(body: {
       const filho = it.token_id ? porId.get(it.token_id) : undefined;
       return {
         nome: it.cliente_nome ?? filho?.cliente_nome ?? "não informado",
+        // usuario so' existe pra acesso UniTV (== unitv_sn); Sigma nao
+        // carrega usuario no snapshot -> "não informado" no helper.
+        usuario: filho?.tipo === "unitv" ? (filho?.unitv_sn ?? null) : (filho?.usuario ?? null),
         servidorNome: it.servidor_nome ?? filho?.servidor_nome ?? "não informado",
+        planoNome: filho?.plano_nome ?? "não informado",
+        valorFormatado: filho ? formatarValorBRL(filho.valor_esperado_centavos / 100) : null,
         sucesso: it.resultado === "sucesso",
         vencimentoFormatado: it.vencimentoConfirmado ? formatarDataBr(it.vencimentoConfirmado) : null,
       };

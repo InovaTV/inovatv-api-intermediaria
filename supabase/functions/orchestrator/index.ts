@@ -630,6 +630,15 @@ async function processarCobrancaRenovacao(
       planoNome: dadosResultado.planoNome,
       valorEsperadoCentavos: valorCentavos,
       vencimentoAtual: dadosResultado.vencimento,
+      // Usuario real ja identificado na proposta (o mesmo encadeamento
+      // /status ?? /match usado no passo 0-A para o `sn` UniTV). So'
+      // repassa o valor que a requisicao ja tinha -- nenhuma consulta
+      // nova ao Rocket. So' Sigma persiste aqui; UniTV usa unitvSn e
+      // grava usuario=null (explicito no call site, nao so' no helper).
+      usuario:
+        tokenTipo === "unitv"
+          ? null
+          : acessoResolvido.cliente?.usuario ?? usuarioResolvido ?? null,
       // Etapa 2 (Bloco 4): tipoToken/unitvSn/unitvId ja resolvidos no
       // passo 0-A. Caminho Sigma: tipoToken='sigma', os dois null.
       tipo: tokenTipo,
@@ -1766,6 +1775,16 @@ Deno.serve(async (req: Request) => {
             // falhaResolucaoUnitv teria abortado antes).
             unitvSn: tiposLote[i] === "unitv" ? (resolucoesUnitv.get(s.publicId as string)?.sn ?? null) : null,
             unitvId: tiposLote[i] === "unitv" ? (resolucoesUnitv.get(s.publicId as string)?.id ?? null) : null,
+            // Usuario real ja identificado (mesmo encadeamento /status ??
+            // /match usado para o `sn` UniTV mais acima). So' repassa o
+            // valor da propria requisicao -- nenhuma consulta nova ao
+            // Rocket. Sigma grava; filho UniTV ignora (usa unitvSn).
+            usuario:
+              tiposLote[i] === "unitv"
+                ? null
+                : s.cliente.usuario ??
+                  matchResult.candidates.find((c) => c.publicId === s.publicId)?.usuario ??
+                  null,
             clienteNome: s.cliente.nome ?? "não informado",
             servidorNome: s.cliente.servidorNome ?? "não informado",
             planoNome: s.cliente.planoNome ?? "não informado",

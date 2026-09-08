@@ -54,6 +54,12 @@ const TOKEN_UNITV = {
   plano_nome: "Mensal",
   servidor_nome: "UNITV",
   telefone: "5517981625486",
+  tipo: "unitv",
+  unitv_sn: "3tnjsc",
+  // valor stray em `usuario` NUNCA deve vazar para a mensagem UniTV --
+  // regra rigida: UniTV usa unitv_sn, Sigma usa usuario.
+  usuario: "SIGMA-NAO-DEVE-APARECER",
+  valor_esperado_centavos: 3500,
 };
 
 // =====================================================================
@@ -66,10 +72,77 @@ const TOKEN_UNITV = {
   const resp = await handler(req({ operacao_id: "op-1", resultado: "sucesso", vencimentoConfirmado: "2026-12-03T02:31:01-03:00" }));
   const body = await resp.json();
   ok(body.outcome === "sucesso_processado", "C1: outcome sucesso_processado");
-  ok(fWa.templatesEnviados().some((t) => t.nome === "pagamento_confirmado"), "C1: template pagamento_confirmado enviado (caminho normal)");
+  const tpl = fWa.templatesEnviados().find((t) => t.nome === "pagamento_confirmado");
+  ok(tpl, "C1: mensagem final enviada (via enviarTemplateWhatsApp, nome pagamento_confirmado)");
+  // Ajuste de UX 2026-09-07: a mensagem final e' um RESUMO COMPLETO
+  // (um unico parametro de corpo = o texto pronto), nao mais os 4
+  // campos crus.
+  const textoFinal = tpl.parametros[0];
+  ok(tpl.parametros.length === 1, "C1: um unico parametro de corpo (texto pronto)");
+  ok(textoFinal.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*"), "C1: cabecalho de conclusao");
+  ok(textoFinal.includes("👤 *Cliente:* José Antonio Dos Santos"), "C1: campo Cliente");
+  ok(textoFinal.includes("🔑 *Usuário:* 3tnjsc"), "C1: campo Usuario real (unitv_sn do fluxo UniTV)");
+  ok(!textoFinal.includes("SIGMA-NAO-DEVE-APARECER"), "C1: UniTV IGNORA a coluna `usuario` -- so' unitv_sn");
+  ok(textoFinal.includes("🖥️ *Servidor:* UNITV"), "C1: campo Servidor");
+  ok(textoFinal.includes("📦 *Plano:* Mensal"), "C1: campo Plano");
+  ok(textoFinal.includes("💰 *Valor:* R$ 35,00"), "C1: campo Valor formatado a partir de valor_esperado_centavos");
+  ok(/📅 \*Novo vencimento:\* .+/.test(textoFinal), "C1: campo Novo vencimento (data confirmada pelo workflow)");
+  ok(textoFinal.includes("✅ Sua renovação foi concluída com sucesso e seu acesso já está atualizado."), "C1: confirmacao clara");
+  ok(!/undefined|null|\[object|NaN/.test(textoFinal), "C1: sem undefined/null/NaN na mensagem final");
+  ok(fMsg.mensagens().some((m) => m.origem === "ia" && m.texto === textoFinal), "C1: mesma mensagem final gravada no historico do Painel");
   ok(fConv.acionamentos().length === 0, "C1: NENHUM acionarTransferenciaHumana");
   ok(!fWa.templatesEnviados().some((t) => t.nome === "nova_transferencia_humana"), "C1: sem aviso de transferencia");
   ok(!fMsg.mensagens().some((m) => /Rocket/.test(m.texto)), "C1: sem nota de sistema sobre Rocket");
+}
+
+// =====================================================================
+// C1-S (2026-09-07): individual SIGMA sucesso -> mensagem final usa o
+//     `usuario` persistido no token (identificado na proposta, SEM nova
+//     consulta ao Rocket aqui). Ausente -> "não informado" honesto.
+// =====================================================================
+{
+  resetar();
+  fTok.configurarToken({
+    conversation_id: "conv-sig-ok",
+    cliente_nome: "Leandro Barros",
+    plano_nome: "Mensal",
+    servidor_nome: "BLAZE",
+    telefone: "5517981625486",
+    tipo: "sigma",
+    unitv_sn: null,
+    usuario: "cmxjkb",
+    valor_esperado_centavos: 3500,
+  });
+  const resp = await handler(req({ operacao_id: "op-1s", resultado: "sucesso", vencimentoConfirmado: "2026-12-03T02:31:01-03:00" }));
+  const body = await resp.json();
+  ok(body.outcome === "sucesso_processado", "C1-S: outcome sucesso_processado");
+  const textoFinal = fWa.templatesEnviados().find((t) => t.nome === "pagamento_confirmado")?.parametros[0] ?? "";
+  ok(textoFinal.includes("👤 *Cliente:* Leandro Barros"), "C1-S: campo Cliente");
+  ok(textoFinal.includes("🔑 *Usuário:* cmxjkb"), "C1-S: usuario REAL do token (Sigma) -- nunca 'não informado'");
+  ok(!textoFinal.includes("não informado"), "C1-S: nenhum campo cai em 'não informado' quando o dado existe");
+  ok(textoFinal.includes("🖥️ *Servidor:* BLAZE") && textoFinal.includes("💰 *Valor:* R$ 35,00"), "C1-S: resto do resumo intacto");
+  ok(fMsg.mensagens().some((m) => m.origem === "ia" && m.texto === textoFinal), "C1-S: mesma mensagem gravada no historico do Painel");
+}
+
+// C1-S2: individual Sigma sucesso SEM `usuario` no token (token criado
+//        antes da coluna) -> "não informado", nunca 'undefined'/'null'.
+{
+  resetar();
+  fTok.configurarToken({
+    conversation_id: "conv-sig-legado",
+    cliente_nome: "Cliente Legado",
+    plano_nome: "Mensal",
+    servidor_nome: "NewOne",
+    telefone: "5517981625486",
+    tipo: "sigma",
+    unitv_sn: null,
+    // usuario ausente de proposito (token pre-coluna)
+    valor_esperado_centavos: 3500,
+  });
+  await handler(req({ operacao_id: "op-1s2", resultado: "sucesso", vencimentoConfirmado: "2026-12-03T02:31:01-03:00" }));
+  const textoFinal = fWa.templatesEnviados().find((t) => t.nome === "pagamento_confirmado")?.parametros[0] ?? "";
+  ok(textoFinal.includes("🔑 *Usuário:* não informado"), "C1-S2: token sem `usuario` -> 'não informado' honesto");
+  ok(!/undefined|null|\[object/.test(textoFinal), "C1-S2: nunca 'undefined'/'null' na mensagem");
 }
 
 // =====================================================================
@@ -158,8 +231,10 @@ const TOKEN_UNITV = {
 // =====================================================================
 
 // helper: acha o bloco de um servidor dentro da mensagem consolidada
+// (ajuste de UX 2026-09-07: a linha do servidor passou a ser
+// "🖥️ Servidor: <nome>").
 function blocoDoServidor(texto, servidor) {
-  return texto.split("\n\n").find((b) => b.includes(`🖥️ ${servidor}`));
+  return texto.split("\n\n").find((b) => b.includes(`🖥️ Servidor: ${servidor}`));
 }
 
 // =====================================================================
@@ -170,7 +245,10 @@ function blocoDoServidor(texto, servidor) {
 {
   resetar();
   fLote.configurarLote({ grupo_id: "grp-6", conversation_id: "conv-misto-6", telefone: "5517000000006" });
-  fLote.configurarFilhos([{ id: "h1" }, { id: "h2" }]);
+  fLote.configurarFilhos([
+    { id: "h1", tipo: "sigma", plano_nome: "Mensal", valor_esperado_centavos: 3500, unitv_sn: null, usuario: "cmxjkb" },
+    { id: "h2", tipo: "unitv", plano_nome: "Mensal", valor_esperado_centavos: 3500, unitv_sn: "gcnv6v", usuario: null },
+  ]);
   const resp = await handler(req({
     operacao_id: "op-6", grupo_id: "grp-6",
     resultados: [
@@ -184,10 +262,13 @@ function blocoDoServidor(texto, servidor) {
   ok(fNotif.notificacoes().length === 0, "C6: concluida -> notificarTransferenciaHumana nao chamado");
   ok(fWa.mensagensEnviadas().length === 1, "C6: 1 mensagem consolidada ao cliente");
   const texto6 = fWa.mensagensEnviadas()[0].texto;
+  ok(texto6.startsWith("🎉 *RENOVAÇÃO CONCLUÍDA COM SUCESSO!*"), "C6: cabecalho de conclusao (todos sucesso)");
   const bSigma6 = blocoDoServidor(texto6, "BLAZE");
   const bUnitv6 = blocoDoServidor(texto6, "UNITV");
   ok(bSigma6 && /📅 Novo vencimento:/.test(bSigma6), "C6: bloco Sigma (BLAZE) mostra novo vencimento");
   ok(bUnitv6 && /📅 Novo vencimento:/.test(bUnitv6), "C6: bloco UniTV (UNITV) mostra novo vencimento");
+  ok(bSigma6 && bSigma6.includes("🔑 Usuário: cmxjkb") && bSigma6.includes("💰 Valor: R$ 35,00"), "C6: bloco Sigma mostra o usuario REAL do filho (coluna `usuario`)");
+  ok(bUnitv6 && bUnitv6.includes("🔑 Usuário: gcnv6v"), "C6: bloco UniTV mostra o usuario real (unitv_sn)");
   ok(!/⚠️ Um atendente/.test(texto6), "C6: nenhum bloco com aviso de 'um atendente vai concluir'");
   ok(!fWa.templatesEnviados().some((t) => t.nome === "nova_transferencia_humana"), "C6: nenhum aviso ao Jose (sem falha, sem desync)");
   ok(!fMsg.mensagens().some((m) => m.origem === "sistema" && /Rocket/.test(m.texto) && /NÃO sincronizou/.test(m.texto)), "C6: nenhuma nota de dessincronia");
