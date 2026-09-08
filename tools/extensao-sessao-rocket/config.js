@@ -9,8 +9,10 @@
 //   Serve so' para a UI local antecipar "voce e'/nao e' o operador".
 //   A checagem REAL de autorizacao continua no servidor
 //   (PAINEL_EMAIL_AUTORIZADO, dentro de atualizar-sessao-rocket).
-// - INTEGRACAO_HABILITADA: etapa 2A e' PREPARACAO. O envio de
-//   sessionid/csrftoken para atualizar-sessao-rocket fica desligado.
+// - INTEGRACAO_HABILITADA: etapa 2B -- ativa. A extensao le
+//   sessionid/csrftoken (chrome.cookies) SO' no momento do clique em
+//   "Enviar" e faz um POST autenticado para atualizar-sessao-rocket.
+//   Os valores nunca sao exibidos, armazenados nem registrados.
 
 export const SUPABASE_URL = "https://nduxsuxkopuvhwugdkqi.supabase.co";
 
@@ -19,7 +21,6 @@ export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiO
 
 export const OPERADOR_AUTORIZADO_EMAIL = "inovatv.stream@gmail.com";
 
-// Etapa 2A: NAO habilitar. A etapa de integracao troca para true (e
-// so' entao a extensao passa a ler sessionid/csrftoken e chamar a
-// Edge Function).
-export const INTEGRACAO_HABILITADA = false;
+// Etapa 2B: integracao ativa. O backend ja' aceita o caminho Supabase
+// Auth (atualizar-sessao-rocket v29, PAINEL_EMAIL_AUTORIZADO).
+export const INTEGRACAO_HABILITADA = true;

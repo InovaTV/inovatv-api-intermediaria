@@ -10,9 +10,16 @@
 // - Envio para atualizar-sessao-rocket: botao DESABILITADO nesta
 //   etapa; nenhuma leitura de sessionid/csrftoken para isso.
 
-import { avaliarSessaoRocket, COOKIES_ALVO, URL_ROCKET, derivarEstadoAuth } from "./lib.js";
+import {
+  avaliarSessaoRocket,
+  COOKIES_ALVO,
+  URL_ROCKET,
+  derivarEstadoAuth,
+  mensagemResultadoEnvio,
+} from "./lib.js";
 import { entrar, sair, sessaoValida } from "./auth.js";
-import { OPERADOR_AUTORIZADO_EMAIL } from "./config.js";
+import { OPERADOR_AUTORIZADO_EMAIL, INTEGRACAO_HABILITADA } from "./config.js";
+import { enviarSessaoParaRocket } from "./integracao.js";
 
 // ===========================================================================
 // Secao 1 -- deteccao local dos cookies (identica a etapa 1)
@@ -108,7 +115,10 @@ const MOTIVO_LOGIN = {
 async function renderAuth() {
   // sessaoValida() ja' faz a renovacao automatica se o token expirou.
   const sessao = await sessaoValida();
-  const estado = derivarEstadoAuth({ sessao }, OPERADOR_AUTORIZADO_EMAIL);
+  const estado = derivarEstadoAuth(
+    { sessao, integracaoHabilitada: INTEGRACAO_HABILITADA },
+    OPERADOR_AUTORIZADO_EMAIL,
+  );
 
   $authLogin.hidden = estado.tela !== "login";
   $authLogado.hidden = estado.tela === "login";
@@ -151,12 +161,22 @@ $authSair.addEventListener("click", async () => {
   }
 });
 
-// O botao ja' nasce disabled no HTML. Este listener existe so' para o
-// caso improvavel de ser habilitado -- e mesmo assim NAO envia nada na
-// etapa 2A.
-$enviarRocket.addEventListener("click", () => {
-  $authMsg.textContent =
-    "Envio desabilitado nesta etapa (2A). Sera' habilitado na etapa de integracao.";
+// Etapa 2B -- envio real. So' habilitado quando o operador autorizado
+// esta' logado (renderAuth cuida do disabled).
+$enviarRocket.addEventListener("click", async () => {
+  $enviarRocket.disabled = true;
+  $authMsg.textContent = "Enviando...";
+  $authMsg.className = "rodape";
+  try {
+    const r = await enviarSessaoParaRocket(); // nunca retorna valores
+    $authMsg.textContent = mensagemResultadoEnvio(r);
+    $authMsg.className = r.ok ? "rodape ok" : "rodape erro";
+  } catch {
+    $authMsg.textContent = "Nao foi possivel atualizar a sessao. Tente de novo.";
+    $authMsg.className = "rodape erro";
+  } finally {
+    await renderAuth();
+  }
 });
 
 renderAuth();

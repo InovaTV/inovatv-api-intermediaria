@@ -136,7 +136,8 @@ export function avaliarOperador(sessao, emailAutorizado) {
  * }}
  */
 export function derivarEstadoAuth(entrada, emailAutorizado) {
-  const { sessao = null, agoraEpochS, margemS } = entrada ?? {};
+  const { sessao = null, agoraEpochS, margemS, integracaoHabilitada = false } =
+    entrada ?? {};
   const op = avaliarOperador(sessao, emailAutorizado);
 
   if (!op.autenticado) {
@@ -160,8 +161,36 @@ export function derivarEstadoAuth(entrada, emailAutorizado) {
     rotulo: op.rotulo,
     podeLogout: true,
     precisaRenovar,
-    // Etapa 2A: SEMPRE desabilitado -- inclusive para o operador
-    // autorizado. So' a etapa de integracao habilita isto.
-    envioRocketHabilitado: false,
+    // So' o operador AUTORIZADO e com a integracao ligada pode enviar.
+    envioRocketHabilitado: op.autorizado === true && integracaoHabilitada === true,
   };
+}
+
+/**
+ * Texto seguro para a UI a partir do resultado do envio. Recebe so'
+ * codigos + nomes de cookie -- NUNCA valores.
+ * @param {{ ok?: boolean, resultado?: string, faltando?: string[] }} r
+ * @returns {string}
+ */
+export function mensagemResultadoEnvio(r) {
+  const base = {
+    sessao_atualizada_validada: "Sessao atualizada e validada.",
+    sessao_atualizada: "Sessao atualizada (validacao pendente no servidor).",
+    sem_operador: "Faca login como operador autorizado primeiro.",
+    nao_autorizado_servidor: "Operador nao autorizado pelo servidor.",
+    cookie_faltando:
+      "Falta cookie de sessao do Rocket. Faca login em app.rocketgestor.com e tente de novo.",
+    desabilitada: "Integracao desabilitada.",
+    erro: "Nao foi possivel atualizar a sessao. Tente de novo.",
+  };
+  let msg = base[r && r.resultado] || "Nao foi possivel atualizar a sessao.";
+  if (
+    r &&
+    r.resultado === "cookie_faltando" &&
+    Array.isArray(r.faltando) &&
+    r.faltando.length
+  ) {
+    msg += " Faltando: " + r.faltando.join(", ") + ".";
+  }
+  return msg;
 }

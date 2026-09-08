@@ -14,6 +14,7 @@ import {
   tokenExpirado,
   avaliarOperador,
   derivarEstadoAuth,
+  mensagemResultadoEnvio,
 } from "../lib.js";
 import {
   INTEGRACAO_HABILITADA,
@@ -211,74 +212,83 @@ const shape = (o) => Object.keys(o).sort().join(",");
   ok(sem.envioRocketHabilitado === false, "12: sem sessao -> envio desabilitado");
 
   const agora = 2_000_000;
-  const opOk = derivarEstadoAuth(
-    { sessao: { email: OPERADOR_AUTORIZADO_EMAIL, expires_at: agora + 3600 }, agoraEpochS: agora },
+  const S = (email, exp) => ({ email, expires_at: exp });
+
+  // sem integracaoHabilitada -> envio OFF (default)
+  const opDefault = derivarEstadoAuth(
+    { sessao: S(OPERADOR_AUTORIZADO_EMAIL, agora + 3600), agoraEpochS: agora },
     OPERADOR_AUTORIZADO_EMAIL,
   );
-  ok(opOk.tela === "operador", "12: operador com token fresco -> tela 'operador'");
-  ok(opOk.podeLogout === true, "12: operador -> pode logout");
+  ok(opDefault.envioRocketHabilitado === false, "12: operador SEM integracaoHabilitada -> envio OFF");
+
+  // 2B: operador autorizado + integracao ligada -> envio ON
+  const opOk = derivarEstadoAuth(
+    { sessao: S(OPERADOR_AUTORIZADO_EMAIL, agora + 3600), agoraEpochS: agora, integracaoHabilitada: true },
+    OPERADOR_AUTORIZADO_EMAIL,
+  );
+  ok(opOk.tela === "operador" && opOk.podeLogout === true, "12: operador com token fresco -> tela 'operador' + logout");
   ok(opOk.precisaRenovar === false, "12: token fresco -> nao precisa renovar");
-  ok(opOk.envioRocketHabilitado === false, "12: ETAPA 2A -- envio desabilitado MESMO para o operador autorizado");
+  ok(opOk.envioRocketHabilitado === true, "12: 2B -- operador autorizado + integracao ON -> envio HABILITADO");
 
   const opVelho = derivarEstadoAuth(
-    { sessao: { email: OPERADOR_AUTORIZADO_EMAIL, expires_at: agora - 5 }, agoraEpochS: agora },
+    { sessao: S(OPERADOR_AUTORIZADO_EMAIL, agora - 5), agoraEpochS: agora, integracaoHabilitada: true },
     OPERADOR_AUTORIZADO_EMAIL,
   );
-  ok(opVelho.precisaRenovar === true, "12: token expirado -> precisaRenovar=true");
-  ok(opVelho.tela === "operador", "12: expirado nao derruba a tela (renovacao e' automatica)");
+  ok(opVelho.precisaRenovar === true && opVelho.tela === "operador", "12: token expirado -> precisaRenovar=true, tela mantida");
 
+  // nao-operador NUNCA envia, nem com integracao ligada
   const naoOp = derivarEstadoAuth(
-    { sessao: { email: "x@y.test", expires_at: agora + 3600 }, agoraEpochS: agora },
+    { sessao: S("x@y.test", agora + 3600), agoraEpochS: agora, integracaoHabilitada: true },
     OPERADOR_AUTORIZADO_EMAIL,
   );
   ok(naoOp.tela === "nao_operador", "12: autenticado nao-operador -> tela 'nao_operador'");
-  ok(naoOp.envioRocketHabilitado === false, "12: nao-operador -> envio desabilitado");
-  ok(naoOp.podeLogout === true, "12: nao-operador -> pode logout (para trocar de conta)");
+  ok(naoOp.envioRocketHabilitado === false, "12: nao-operador -> envio OFF mesmo com integracao ON");
+  ok(naoOp.podeLogout === true, "12: nao-operador -> pode logout");
 }
 
-// --- 13. integracao: PREPARACAO apenas, nada e' enviado ---
+// --- 12b. mensagemResultadoEnvio: so' texto seguro, nunca valores ---
 {
-  ok(INTEGRACAO_HABILITADA === false, "13: INTEGRACAO_HABILITADA e' false na etapa 2A");
+  for (const cod of [
+    "sessao_atualizada_validada",
+    "sessao_atualizada",
+    "sem_operador",
+    "nao_autorizado_servidor",
+    "cookie_faltando",
+    "desabilitada",
+    "erro",
+    "codigo_desconhecido",
+  ]) {
+    const m = mensagemResultadoEnvio({ resultado: cod });
+    ok(typeof m === "string" && m.length > 0, `12b: '${cod}' -> texto nao vazio`);
+  }
+  const mf = mensagemResultadoEnvio({ resultado: "cookie_faltando", faltando: ["sessionid"] });
+  ok(mf.includes("sessionid") && !mf.includes("="), "12b: cookie_faltando cita o NOME do cookie (nunca um valor)");
+}
+
+// --- 13. integracao: descritor (etapa 2B ativa) ---
+{
+  ok(INTEGRACAO_HABILITADA === true, "13: INTEGRACAO_HABILITADA e' true na etapa 2B");
   ok(
     URL_ATUALIZAR_SESSAO_ROCKET === `${SUPABASE_URL}/functions/v1/atualizar-sessao-rocket`,
     "13: URL alvo montada a partir da URL publica do projeto",
   );
 
   const d = descreverChamadaAtualizarSessao();
-  ok(d.habilitada === false, "13: descritor.habilitada === false");
+  ok(d.habilitada === true, "13: descritor.habilitada === true");
   ok(d.metodo === "POST" && d.url.endsWith("/functions/v1/atualizar-sessao-rocket"), "13: descritor: POST na Edge Function");
   ok(
     d.headersPlanejados.some((h) => h.startsWith("Authorization: Bearer")) &&
       d.headersPlanejados.some((h) => h.startsWith("apikey:")),
-    "13: descritor lista Authorization Bearer + apikey (planejados)",
-  );
-  ok(
-    /sessionid/.test(d.corpoPlanejado) && /csrftoken/.test(d.corpoPlanejado) &&
-      /etapa de integracao/i.test(d.corpoPlanejado),
-    "13: descritor diz que sessionid/csrftoken so' entram na etapa de integracao",
+    "13: descritor lista Authorization Bearer + apikey",
   );
   ok(
     !JSON.stringify(d).includes(SUPABASE_ANON_KEY),
-    "13: descritor NAO contem o valor real da anon key (so' o placeholder <anon key publica>)",
+    "13: descritor NAO contem o valor real da anon key",
   );
-
-  // enviarSessaoParaRocket() nunca faz fetch na etapa 2A.
-  const fetchOriginal = globalThis.fetch;
-  let fetchChamado = false;
-  globalThis.fetch = () => {
-    fetchChamado = true;
-    throw new Error("fetch NAO deveria ser chamado na etapa 2A");
-  };
-  try {
-    const env = await enviarSessaoParaRocket();
-    ok(
-      env.enviado === false && env.motivo === "integracao_desabilitada_etapa_2a",
-      "13: enviarSessaoParaRocket() -> { enviado:false, motivo:'integracao_desabilitada_etapa_2a' }",
-    );
-    ok(fetchChamado === false, "13: enviarSessaoParaRocket() NAO tocou a rede");
-  } finally {
-    globalThis.fetch = fetchOriginal;
-  }
+  ok(
+    /nao (armazenad|guardad)|nunca armazenados/i.test(JSON.stringify(d)),
+    "13: descritor reafirma que os cookies nao sao armazenados",
+  );
 }
 
 // --- 14. config: sem secret privado ---

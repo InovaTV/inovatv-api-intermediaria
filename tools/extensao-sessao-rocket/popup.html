@@ -113,12 +113,11 @@
     <hr />
 
     <h2>3. Enviar sessao para atualizar-sessao-rocket</h2>
-    <button id="enviar-rocket" type="button" disabled>
-      Enviar (desabilitado nesta etapa)
-    </button>
+    <button id="enviar-rocket" type="button" disabled>Enviar sessao</button>
     <p class="rodape">
-      Etapa 2A: preparacao apenas. Nada e' enviado; <code>sessionid</code> /
-      <code>csrftoken</code> nao sao lidos aqui.
+      Le <code>sessionid</code> / <code>csrftoken</code> so' no clique, envia
+      com o Bearer do operador e nao guarda nem exibe os valores. Habilitado
+      so' com o operador autorizado logado.
     </p>
 
     <script type="module" src="popup.js"></script>

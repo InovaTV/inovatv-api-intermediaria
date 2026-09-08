@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Ferramenta local isolada -- nao faz parte de nenhuma Edge Function nem do app. Extensao Chrome MV3: deteccao dos cookies de sessao do Rocket + login do operador via Supabase Auth (anon key publica). Sem dependencias.",
   "scripts": {
-    "test": "node testes/teste.mjs && node testes/teste-auth.mjs"
+    "test": "node testes/teste.mjs && node testes/teste-auth.mjs && node testes/teste-integracao.mjs"
   }
 }

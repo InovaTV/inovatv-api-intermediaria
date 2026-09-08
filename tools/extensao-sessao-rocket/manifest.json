@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "InovaTV — Sessao Rocket (etapa 2A: deteccao + login do operador)",
-  "version": "0.2.0",
-  "description": "Detecta localmente os cookies sessionid/csrftoken de app.rocketgestor.com e autentica o operador via Supabase Auth (anon key publica). Etapa 2A: nao mostra valores, nao envia sessionid/csrftoken para servidor.",
+  "name": "InovaTV — Sessao Rocket (etapa 2B: envio ao atualizar-sessao-rocket)",
+  "version": "0.3.0",
+  "description": "Detecta os cookies sessionid/csrftoken de app.rocketgestor.com, autentica o operador via Supabase Auth (anon key publica) e envia a sessao do Rocket para a Edge Function atualizar-sessao-rocket. Nao mostra, nao armazena e nao registra valores de cookie/token.",
   "permissions": ["cookies", "storage"],
-  "host_permissions": ["https://app.rocketgestor.com/*"],
+  "host_permissions": [
+    "https://app.rocketgestor.com/*",
+    "https://nduxsuxkopuvhwugdkqi.supabase.co/*"
+  ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Sessao Rocket + login do operador"
+    "default_title": "Sessao Rocket -> atualizar-sessao-rocket"
   }
 }
