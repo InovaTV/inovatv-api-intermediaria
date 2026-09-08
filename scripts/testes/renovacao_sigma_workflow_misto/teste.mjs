@@ -99,6 +99,12 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.includes("/rest/v1/rpc/unitv_dealer_token_ler")) {
     return new Response(JSON.stringify("tkn-vault-runner"), { status: 200 }); // Fase 2A
   }
+  if (u.endsWith("/functions/v1/renovacao-sigma-id-interno")) {
+    const pid = JSON.parse(opts.body || "{}").publicId || "";
+    // id numerico deterministico por publicId (fake); resolve sempre.
+    const idFake = String(1500000 + (pid.charCodeAt(0) || 0));
+    return new Response(JSON.stringify({ outcome: "resolvido", idInterno: idFake }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   if (u.endsWith("/functions/v1/renovacao-sigma-cliente")) {
     const body = clienteSeq[Math.min(nCliente++, clienteSeq.length - 1)];
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });

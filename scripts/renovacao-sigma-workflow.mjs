@@ -205,6 +205,27 @@ async function lerClienteRocket(publicId) {
 }
 
 // Pacote atual + expires_at do Sigma + validade da sessao vem da Edge
+// Resolve FRESH o id_cliente interno via Edge Function
+// renovacao-sigma-id-interno (GET server-side do HTML + cross-check
+// sigma/info dentro do Supabase). Sem cache/stale/fallback aqui.
+async function resolverIdInternoFresh(publicId) {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/renovacao-sigma-id-interno`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Token": CALLBACK_TOKEN },
+      body: JSON.stringify({ publicId }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) return { outcome: "unavailable", motivo: `http_${resp.status}` };
+    if (data.outcome === "resolvido" && data.idInterno) {
+      return { outcome: "resolvido", idInterno: String(data.idInterno) };
+    }
+    return { outcome: data.outcome ?? "unavailable", motivo: data.motivo };
+  } catch (erro) {
+    return { outcome: "unavailable", motivo: `excecao:${erro.message ?? String(erro)}` };
+  }
+}
+
 // Function interna renovacao-sigma-contexto -- roda DENTRO do Supabase,
 // nao no runner. O runner nao fala com app.rocketgestor.com fora do
 // Playwright.
@@ -291,7 +312,17 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
   }
   const vencimentoAntes = clienteAntes.vencimento;
 
-  let idClienteInterno = null;
+  // Resolucao FRESH do id_cliente interno (Edge Function
+  // renovacao-sigma-id-interno) -- ANTES de qualquer Playwright de
+  // pagamento. Sem cache/stale/fallback: se nao resolver, transfere.
+  const idFresh = await resolverIdInternoFresh(publicId);
+  if (idFresh.outcome !== "resolvido") {
+    return {
+      resultado: "resultado_ambiguo",
+      detalhe: `resolucao fresh do id_cliente falhou (${idFresh.outcome}${idFresh.motivo ? ":" + idFresh.motivo : ""})`,
+    };
+  }
+  let idClienteInterno = idFresh.idInterno;
   let pacoteAtualTexto = null;
   let expiresAtAntes = null;
 
@@ -324,32 +355,11 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       // telefone -- por isso o seletor e' escopado por
       // data-bs-target="#modal-add-pagamento", nunca so' por [cliente_id].
       // Desambigua por nome+telefone, nunca por posicao/ordem, exatamente 1.
-      await page
-        .waitForSelector(SELETOR_ADD_PAGAMENTO, { timeout: 15000 })
-        .catch(() => {}); // sem nenhum elemento -> lista abaixo vira [] -> "nao encontrado"
-      const elementos = await page.$$eval(SELETOR_ADD_PAGAMENTO, (nodes) =>
-        nodes.map((n) => ({
-          id: n.getAttribute("cliente_id"),
-          nome: n.getAttribute("nome"),
-          telefone: n.getAttribute("telefone"),
-        })),
-      );
-      const { ids, totalBotoes, botoesComNomeAlvo } = resolverIdInternoDoDom(
-        elementos,
-        clienteNome,
-        telefone,
-      );
-      if (ids.length !== 1) {
-        console.log(
-          `[renovacao-sigma-workflow] id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
-          JSON.stringify({ totalBotoes, botoesComNomeAlvo, candidatos: ids.length }),
-        );
-        return {
-          resultado: "resultado_ambiguo",
-          detalhe: `id_cliente interno ${ids.length === 0 ? "nao encontrado" : "ambiguo"}`,
-        };
-      }
-      idClienteInterno = ids[0];
+      // idClienteInterno JA resolvido FRESH acima (renovacao-sigma-id-interno).
+      // resolverIdInternoDoDom fica como fallback dormente (default OFF),
+      // nao usado neste caminho.
+      void SELETOR_ADD_PAGAMENTO;
+      void resolverIdInternoDoDom;
 
       // --- Pacote atual + expires_at (baseline) via renovacao-sigma-contexto
       // (Supabase), agora com o id ja resolvido pelo DOM. A Camada A
