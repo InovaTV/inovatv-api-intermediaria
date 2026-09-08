@@ -3436,3 +3436,48 @@ congelada).
   (congelada).
 - `docs/propor_renovacao/` — contrato do Gemini, resolução de acesso,
   persistência de seleção.
+
+---
+
+## CHECKPOINT 2026-09-08 — Option E no ar; sessao Rocket do Vault expirada (bloqueio)
+
+Retomar quinta-feira.
+
+- **Option E `9365ace`** implementada e enviada (`origin/main`).
+- **`renovacao-sigma-id-interno` v1 ACTIVE** em producao (`--no-verify-jwt`).
+- `renovacao-sigma-workflow.mjs` ja usa a **resolucao fresh** do id_cliente
+  (chama a EF ANTES do executarCliqueAddPagamento). `resolverIdInternoDoDom`
+  ficou como fallback dormente, nao usado.
+- **Auth workflow -> EF conferida e correta**: `renovacao-sigma.yml` passa
+  `RENOVACAO_SIGMA_CALLBACK_TOKEN`; o workflow envia como `X-Internal-Token`;
+  a EF checa o mesmo nome. Identico ao `renovacao-sigma-cliente` (que ja
+  funciona).
+- **Teste real de hoje** chegou ao pos-pagamento e retornou
+  `resolucao fresh do id_cliente falhou (unavailable:auth)`. Causa
+  confirmada: NAO e' problema de token workflow->EF (isso seria `http_401`).
+  `motivo:"auth"` = a EF autenticou OK, leu a sessao Rocket do Vault, fez o
+  GET `/gerenciador/cliente/info/{public_id}/` e recebeu redirect para
+  `/accounts/login/` -> **a sessao Rocket armazenada no Vault esta
+  expirada/invalida**.
+- **Sessao Rocket nova ainda NAO foi atualizada no Vault.** `atualizar-sessao-rocket`
+  v29 (`d983b76`) aceita 2 caminhos: `X-Internal-Token` (=`SESSAO_ROCKET_UPDATE_TOKEN`,
+  cujo valor em texto puro nao existe em nenhum arquivo local) OU
+  `Authorization: Bearer <Supabase Auth do operador>` (verificarOperador,
+  e-mail == `PAINEL_EMAIL_AUTORIZADO`). O caminho Bearer exige a senha do
+  operador para gerar o access token -- nao disponivel na sessao. Nenhum
+  secret foi gerado/alterado.
+- **`scripts/ROCKET_SESSIONID.env`** contem os cookies novos (sessionid/
+  csrftoken) localmente. Adicionado ao `.gitignore`. **NUNCA commitar.**
+- **Extensao Rocket 2B** commitada (`707abb6`: trim na senha + remocao de
+  autocomplete). O login do operador na extensao ainda **nao foi resolvido**
+  (GoTrue retorna `invalid_credentials` com uma credencial que entra no
+  Painel; config/endpoint/anon key verificados e corretos -- causa provavel
+  ambiental: autofill/whitespace, a confirmar).
+- **Caso R$35**: preservado, nao reprocessar.
+- **Pagamento confirmado no teste de hoje**: nao cobrar de novo nem
+  reprocessar automaticamente.
+
+**Proximo passo (quinta):** concluir a atualizacao + validacao da sessao
+Rocket no Vault (via `atualizar-sessao-rocket`, caminho Bearer do operador
+OU token interno se disponibilizado), depois um teste controlado da
+renovacao Sigma.

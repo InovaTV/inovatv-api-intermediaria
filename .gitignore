@@ -5,3 +5,5 @@ supabase/.temp/
 supabase/.branches/
 .vercel
 .env*
+
+scripts/ROCKET_SESSIONID.env
