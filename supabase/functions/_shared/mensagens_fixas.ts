@@ -336,7 +336,9 @@ export function montarMensagemConfirmacaoLote(dados: {
     "",
     `💰 *Total: R$ ${dados.totalFormatado}*`,
     "",
-    "Toque em *ACEITO* para gerar o PIX, ou em *CANCELAR* para desistir.",
+    "Digite *1* para ACEITO e gerar o PIX, ou *2* para CANCELAR e desistir.",
+    "",
+    "Você também pode responder ACEITO ou CANCELAR.",
   ].join("\n");
 }
 
@@ -439,7 +441,9 @@ export function montarMensagemBotoesConfirmacaoRenovacao(dados: {
     `💰 *Valor:* R$ ${dados.valorFormatado}`,
     `📅 *Vencimento atual:* ${dados.vencimentoFormatado}`,
     "",
-    "Toque em *ACEITO* para gerar o PIX, ou em *CANCELAR* para desistir.",
+    "Digite *1* para ACEITO e gerar o PIX, ou *2* para CANCELAR e desistir.",
+    "",
+    "Você também pode responder ACEITO ou CANCELAR.",
   ].join("\n");
 }
 
@@ -491,7 +495,7 @@ export const MENSAGEM_RENOVACAO_EXPIRADA_SEM_PAGAMENTO =
 // acesso (tokens_renovacao_ativo_unico_por_acesso_idx) -- nunca cria
 // uma segunda, so' lembra o cliente do que ja esta em andamento.
 export const MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO =
-  "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, procure os botões que te mandei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
+  "Você já tem uma renovação em andamento para este acesso. Se ainda não confirmou, responda *1* para ACEITO ou *2* para CANCELAR na mensagem que te enviei há pouco -- se precisar, é só pedir de novo que eu reenvio.";
 
 // Etapa 1.5 (Lacuna A, 2026-08-28) -- redacao ORIGINAL, hoje reservada
 // exclusivamente a uma eventual condicao de DESLIGAMENTO FUNCIONAL da

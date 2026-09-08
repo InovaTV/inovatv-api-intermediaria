@@ -21,6 +21,7 @@ import {
   montarTextoConfirmacaoPagamentoRenovacao,
   montarMensagemConfirmacaoLote,
   montarMensagemResultadoLote,
+  MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO,
   MENSAGEM_RENOVACAO_UNITV_NAO_INTEGRADA,
   MENSAGEM_RENOVACAO_LOTE_COM_UNITV,
   MENSAGEM_RENOVACAO_UNITV_INSTABILIDADE,
@@ -62,7 +63,15 @@ function ok(condicao, mensagem) {
   ok(texto.includes("*Plano:* Mensal"), "C2: campo Plano presente");
   ok(texto.includes("*Valor:* R$ 35,00"), "C2: campo Valor presente, formatado em reais");
   ok(texto.includes("*Vencimento atual:* 13/09/2026"), "C2: campo Vencimento atual presente");
-  ok(texto.includes("ACEITO") && texto.includes("CANCELAR"), "C2: instrucao dos botoes ACEITO/CANCELAR");
+  ok(texto.includes("ACEITO") && texto.includes("CANCELAR"), "C2: instrucao cita ACEITO/CANCELAR");
+  // Ajuste de UX (2026-09-07): a instrucao deixa claro que sao RESPOSTAS
+  // DE TEXTO (1/2 ou a palavra), nunca botoes -- o canal Wasender nao
+  // tem botao nativo.
+  ok(
+    texto.includes("Digite *1*") && texto.includes("*2*") && texto.includes("responder ACEITO ou CANCELAR"),
+    "C2: instrucao de resposta por texto (1/2 e ACEITO/CANCELAR)",
+  );
+  ok(!/toque em|clique|bot[aã]o|bot[oõ]es/i.test(texto), "C2: nunca diz 'toque'/'clique'/'botao'");
   ok(texto.length <= 1024, "C2: corpo cabe no limite de 1024 chars do interactive.button");
 
   // Cada campo em sua propria linha, na ordem certa (rotulo pode ter
@@ -305,8 +314,26 @@ checarLista("C3(venc null)", [
   ok(texto.includes("🖥️ BLAZE · 📦 Mensal"), "Lote-confirm: servidor + plano na mesma linha");
   ok((texto.match(/💰 R\$ 30,00/g) ?? []).length === 2, "Lote-confirm: valor final por acesso, 1x cada");
   ok(texto.includes("💰 *Total: R$ 60,00*"), "Lote-confirm: total consolidado");
-  ok(texto.includes("Toque em *ACEITO*"), "Lote-confirm: instrucao de ACEITO/CANCELAR");
+  // Ajuste de UX (2026-09-07): resposta por texto, nunca 'botao'.
+  ok(
+    texto.includes("Digite *1*") && texto.includes("*2*") && texto.includes("ACEITO") && texto.includes("CANCELAR"),
+    "Lote-confirm: instrucao de resposta por texto (1/2 e ACEITO/CANCELAR)",
+  );
+  ok(!/toque em|clique|bot[aã]o|bot[oõ]es/i.test(texto), "Lote-confirm: nunca diz 'toque'/'clique'/'botao'");
   ok(!/promo|desconto/i.test(texto), "Lote-confirm: NUNCA cita 'promocao'/'desconto'");
+}
+
+// Ajuste de UX (2026-09-07) -- MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO
+// nao pode mais dizer "procure os botoes".
+{
+  ok(
+    /responda \*1\*.*ACEITO.*\*2\*.*CANCELAR/is.test(MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO),
+    "JA_EXISTE: instrui responder 1/ACEITO ou 2/CANCELAR",
+  );
+  ok(
+    !/bot[aã]o|bot[oõ]es|toque|clique/i.test(MENSAGEM_JA_EXISTE_SOLICITACAO_RENOVACAO),
+    "JA_EXISTE: nunca menciona 'botao'/'botoes'/'toque'/'clique'",
+  );
 }
 
 // Etapa 1 -- confirmacao do lote com valores DIFERENTES por acesso:
