@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Detectar sessao Rocket</title>
+    <style>
+      body {
+        font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+        margin: 0;
+        padding: 14px;
+        width: 320px;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 10px;
+      }
+      button {
+        font: inherit;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button[disabled] {
+        cursor: default;
+        opacity: 0.6;
+      }
+      #resultado {
+        margin-top: 12px;
+      }
+      #resultado p {
+        margin: 0;
+      }
+      #resultado ul {
+        margin: 6px 0 0;
+        padding-left: 18px;
+      }
+      .ok {
+        color: #1a7f37;
+      }
+      .faltando {
+        color: #9a6700;
+      }
+      .erro {
+        color: #cf222e;
+      }
+      .rodape {
+        margin-top: 14px;
+        color: #57606a;
+        font-size: 11px;
+      }
+      code {
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sessao do Rocket — deteccao (etapa 1)</h1>
+    <button id="detectar" type="button">Detectar cookies de sessao</button>
+    <div id="resultado" aria-live="polite"></div>
+    <p class="rodape">
+      Esta etapa apenas verifica se os cookies <code>sessionid</code> e
+      <code>csrftoken</code> de <code>app.rocketgestor.com</code> existem neste
+      navegador. Nao mostra valores, nao guarda nada e nao envia nada para
+      nenhum servidor.
+    </p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

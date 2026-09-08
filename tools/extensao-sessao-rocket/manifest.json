@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "InovaTV — Sessao Rocket (etapa 1: deteccao)",
+  "version": "0.1.0",
+  "description": "Detecta localmente se os cookies sessionid e csrftoken de app.rocketgestor.com existem neste navegador. Etapa 1: nao mostra valores, nao armazena nada, nao envia nada.",
+  "permissions": ["cookies"],
+  "host_permissions": ["https://app.rocketgestor.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Detectar sessao Rocket"
+  }
+}
