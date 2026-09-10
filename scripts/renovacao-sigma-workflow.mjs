@@ -277,13 +277,15 @@ async function sincronizarVencimentoRocket(publicId, vencimentoAlvo) {
 // Rocket. Retorna um item de resultado pronto (mesma forma dos itens
 // Sigma de processarLote), com rocketDesync=true quando a renovacao
 // deu certo mas o Rocket nao sincronizou.
-async function renovarUmAcessoUniTVComSync({ sn, id, publicId, servidorNome, clienteNome, tokenId }) {
+async function renovarUmAcessoUniTVComSync({ sn, id, planoNome, publicId, servidorNome, clienteNome, tokenId }) {
   // Fase 2A: injeta o token resolvido (Vault -> fallback env). O
   // executor congelado recebe o valor pronto -- seu default
   // process.env.UNITV_DEALER_TOKEN nunca e' exercido, mas o valor
   // entregue e' identico ao que ele leria (nao ha rotacao nesta fase).
+  // `planoNome` (tokens_renovacao.plano_nome) define a duracao da
+  // renovacao -- plano nao reconhecido -> resultado_ambiguo no executor.
   const dealerToken = await obterDealerTokenRunner();
-  const r = await renovarUmAcessoUniTV({ sn, id, dealerToken });
+  const r = await renovarUmAcessoUniTV({ sn, id, planoNome, dealerToken });
   const item = {
     token_id: tokenId,
     tipo: "unitv",
@@ -637,6 +639,7 @@ async function processarLote(lote, sessionid, csrftoken) {
         await renovarUmAcessoUniTVComSync({
           sn: filho.unitv_sn,
           id: filho.unitv_id,
+          planoNome: filho.plano_nome,
           publicId: filho.public_id,
           servidorNome: filho.servidor_nome,
           clienteNome: filho.cliente_nome,
@@ -683,6 +686,7 @@ async function main() {
     const item = await renovarUmAcessoUniTVComSync({
       sn: token.unitv_sn,
       id: token.unitv_id,
+      planoNome: token.plano_nome,
       publicId: token.public_id,
       servidorNome: token.servidor_nome,
       clienteNome: token.cliente_nome,

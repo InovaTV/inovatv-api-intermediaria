@@ -160,7 +160,7 @@ const filhosMisto = [
   },
   {
     id: "f-unitv", tipo: "unitv", public_id: PUBLIC_ID_UNITV,
-    unitv_sn: UNITV_SN, unitv_id: UNITV_ID,
+    unitv_sn: UNITV_SN, unitv_id: UNITV_ID, plano_nome: "Trimestral",
     servidor_nome: "UNITV", cliente_nome: CLIENTE_UNITV, telefone: TELEFONE,
   },
 ];
@@ -224,6 +224,7 @@ function itemPorTipo(callback, tipo) {
 
   ok(chamadasRenovarUniTV().length === 1, "M1: executor UniTV chamado EXATAMENTE 1x");
   ok(chamadasRenovarUniTV()[0].sn === UNITV_SN && chamadasRenovarUniTV()[0].id === UNITV_ID, "M1: executor UniTV recebeu sn/id do filho");
+  ok(chamadasRenovarUniTV()[0].planoNome === "Trimestral", "M1: executor UniTV recebeu o plano_nome do filho (duracao)");
 
   const launches = eventos.filter((e) => e.tipo === "launch").length;
   ok(launches === 1, "M1: chromium.launch acontece 1x (so' pro filho Sigma)");

@@ -109,6 +109,7 @@ const tokenUniTV = {
 
   ok(chamadasRenovarUniTV().length === 1, "C1: renovarUmAcessoUniTV chamado EXATAMENTE 1x");
   ok(chamadasRenovarUniTV()[0].sn === "gcnv6v" && chamadasRenovarUniTV()[0].id === 3433363, "C1: chamado com sn/id do token");
+  ok(chamadasRenovarUniTV()[0].planoNome === "Mensal", "C1: planoNome do token repassado ao executor (define a duracao)");
   // Fase 2A: o workflow le o dealer token do Vault (RPC unitv_dealer_token_ler)
   // e o INJETA no executor congelado -- que assim nunca exerce seu default de env.
   ok(chamadasRenovarUniTV()[0].dealerToken === "tkn-vault-runner", "C1(2A): dealerToken do Vault injetado no executor");
@@ -209,8 +210,8 @@ const tokenUniTV = {
   cfgToken = null;
   cfgLote = [{ grupo_id: "grp-1", operacao_id: process.env.OPERACAO_ID }];
   cfgFilhos = [
-    { id: "f1", tipo: "unitv", public_id: "pub-1", unitv_sn: "gcnv6v", unitv_id: 3433363, servidor_nome: "UNITV", cliente_nome: "A", telefone: "551700000001" },
-    { id: "f2", tipo: "unitv", public_id: "pub-2", unitv_sn: "3tnjsc", unitv_id: 9999999, servidor_nome: "UNITV", cliente_nome: "B", telefone: "551700000002" },
+    { id: "f1", tipo: "unitv", public_id: "pub-1", unitv_sn: "gcnv6v", unitv_id: 3433363, servidor_nome: "UNITV", cliente_nome: "A", telefone: "551700000001", plano_nome: "Mensal" },
+    { id: "f2", tipo: "unitv", public_id: "pub-2", unitv_sn: "3tnjsc", unitv_id: 9999999, servidor_nome: "UNITV", cliente_nome: "B", telefone: "551700000002", plano_nome: "Trimestral" },
   ];
   cfgSessao = { sessionid: "s", csrftoken: "c" };
   // 1o sync ok, 2o sync desync
@@ -234,6 +235,10 @@ const tokenUniTV = {
   ok(callback.resultados.every((it) => it.tipo === "unitv" && it.resultado === "sucesso"), "C6: os 2 filhos UniTV com resultado 'sucesso'");
   ok(callback.resultados.filter((it) => it.rocketDesync === true).length === 1, "C6: exatamente 1 filho com rocketDesync (o 2o sync falhou)");
   ok(chamadasRenovarUniTV().length === 2, "C6: renovarUmAcessoUniTV chamado 1x por filho (2), nunca repetido");
+  ok(
+    chamadasRenovarUniTV()[0].planoNome === "Mensal" && chamadasRenovarUniTV()[1].planoNome === "Trimestral",
+    "C6: cada filho leva seu proprio plano_nome ao executor (duracao por filho)",
+  );
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

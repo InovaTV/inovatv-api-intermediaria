@@ -20,6 +20,8 @@ import {
   spDateToIso,
   resolverContaUnitv,
   renovarUmAcessoUniTV,
+  resolverRenovacaoUniTVPorPlano,
+  UNITV_RENOVACAO_POR_DURACAO,
   UNITV_PRE_AUTH_ID,
 } from "../../lib/unitv-renovar.mjs";
 
@@ -168,7 +170,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
       return envelope({ uuid: "abcd-1234" }, { jumpCode: 1, errorMessage: "entrara em vigor em 5 minutos" });
     },
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "sucesso", "caminho feliz -> resultado 'sucesso'");
   ok(r.vencimentoConfirmado === "2026-12-03T02:31:01-03:00", "sucesso devolve vencimentoConfirmado ISO da reconsulta");
   ok(f.contadores["/api/account/renew"] === 1, "o /renew e' chamado exatamente 1 vez (nunca retry)");
@@ -180,7 +182,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     "/api/account": () => envelope({ total: 1, list: [contaGcnv6v("2026-11-03 02:31:01")] }),
     "/api/account/renew": () => envelope(undefined, { returnCode: 1001, errorMessage: "creditos insuficientes" }),
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "falha" && /rc=1001/.test(r.detalhe) && /creditos insuficientes/.test(r.detalhe), "renew rc!=0 -> falha com rc e errorMessage no detalhe");
 }
 
@@ -190,7 +192,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     "/api/account": () => envelope({ total: 1, list: [contaGcnv6v("2026-11-03 02:31:01")] }),
     "/api/account/renew": () => envelope({ uuid: "x" }, { jumpCode: 1 }),
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "falha" && /nao avancou/.test(r.detalhe), "expireTime igual antes/depois -> falha 'nao avancou'");
   ok(f.contadores["/api/account"] === 1 + 3, "reconsulta tenta 3x antes de desistir");
 }
@@ -201,7 +203,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     "/api/account": () => envelope({ total: 0, list: [] }),
     "/api/account/renew": () => { throw new Error("renew nao deveria ser chamado"); },
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "resultado_ambiguo" && /antes da renovacao/.test(r.detalhe), "baseline falha -> resultado_ambiguo (renew nao chamado)");
   ok(!f.contadores["/api/account/renew"], "renew realmente nao foi chamado quando o baseline falha");
 }
@@ -212,7 +214,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     "/api/account": () => envelope({ total: 1, list: [contaGcnv6v("2026-11-03 02:31:01")] }), // painel diz id 3433363
     "/api/account/renew": () => { throw new Error("renew nao deveria ser chamado"); },
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 9999999, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 9999999, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "resultado_ambiguo" && /divergente/.test(r.detalhe), "id token != id painel -> resultado_ambiguo");
   ok(!f.contadores["/api/account/renew"], "renew nao chamado quando o id diverge");
 }
@@ -228,7 +230,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     },
     "/api/account/renew": () => envelope({ uuid: "x" }, { jumpCode: 1 }),
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "resultado_ambiguo" && /reconsultar a conta depois/.test(r.detalhe), "reconsulta sempre falha apos renew -> resultado_ambiguo");
 }
 
@@ -243,7 +245,7 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     },
     "/api/account/renew": () => { throw new Error("ECONNRESET"); },
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "sucesso" && r.vencimentoConfirmado === "2026-12-03T02:31:01-03:00", "/renew cai no transporte mas expireTime avancou -> sucesso (a reconsulta manda)");
 }
 
@@ -254,14 +256,114 @@ for (const bad of [null, undefined, "", "   ", "03/11/2026", "2026-11-03", "2026
     "/api/account": () => envelope({ total: 1, list: [contaGcnv6v("2026-11-03 02:31:01")] }),
     "/api/account/renew": () => { throw new Error("ECONNRESET"); },
   });
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: f, ...CREDS, sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: f, ...CREDS, sleep: noSleep });
   ok(r.resultado === "resultado_ambiguo" && /transporte/.test(r.detalhe), "/renew cai no transporte + expireTime igual -> resultado_ambiguo (nao 'falha')");
 }
 
 // 5g. credenciais ausentes -> ambiguo antes de qualquer chamada
 {
-  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, fetchImpl: makeFakeFetch({}), dealerName: "x", sleep: noSleep });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Mensal", fetchImpl: makeFakeFetch({}), dealerName: "x", sleep: noSleep });
   ok(r.resultado === "resultado_ambiguo" && /credenciais UniTV ausentes/.test(r.detalhe), "sem UNITV_DEALER_TOKEN -> resultado_ambiguo");
+}
+
+// 5j. Trimestral: o /renew leva os parametros oficiais de 3 meses
+{
+  let etapa = 0;
+  const f = makeFakeFetch({
+    "/api/account": () => {
+      etapa++;
+      return envelope({ total: 1, list: [contaGcnv6v(etapa === 1 ? "2026-11-03 02:31:01" : "2027-02-03 02:31:01")] });
+    },
+    "/api/account/renew": (req) => {
+      ok(
+        req.pre_auth_id === 124 && req.package_id === 1 && req.points_type === 1 && req.points === 3 && req.auth_cycle === 3,
+        "Trimestral -> renew com pre_auth_id=124, points_type=1, points=3, auth_cycle=3",
+      );
+      ok(req.auth_unit === undefined, "renew NAO envia auth_unit no corpo (o payload real capturado nao o tem)");
+      ok(req.sign === unitvSign(3433363, 1, 3), "Trimestral -> sign = MD5('dealer'+id+1+3)");
+      return envelope({ uuid: "tri-1" }, { jumpCode: 1 });
+    },
+  });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Trimestral", fetchImpl: f, ...CREDS, sleep: noSleep });
+  ok(r.resultado === "sucesso" && r.vencimentoConfirmado === "2027-02-03T02:31:01-03:00", "Trimestral -> sucesso com vencimento avancado");
+}
+
+// 5k. Anual: points_type=2, points=1 (1 credito ANUAL) -- NUNCA points=12
+{
+  let etapa = 0;
+  const f = makeFakeFetch({
+    "/api/account": () => {
+      etapa++;
+      return envelope({ total: 1, list: [contaGcnv6v(etapa === 1 ? "2026-11-03 02:31:01" : "2027-11-04 02:31:01")] });
+    },
+    "/api/account/renew": (req) => {
+      ok(
+        req.pre_auth_id === 126 && req.package_id === 1 && req.points_type === 2 && req.points === 1 && req.auth_cycle === 1,
+        "Anual -> renew com pre_auth_id=126, points_type=2, points=1, auth_cycle=1 (nunca points=12)",
+      );
+      ok(req.sign === unitvSign(3433363, 2, 1), "Anual -> sign = MD5('dealer'+id+2+1)");
+      return envelope({ uuid: "ano-1" }, { jumpCode: 1 });
+    },
+  });
+  const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: "Plano Anual (365 dias)", fetchImpl: f, ...CREDS, sleep: noSleep });
+  ok(r.resultado === "sucesso", "Anual -> sucesso");
+}
+
+// 5l. Plano nao reconhecido -> resultado_ambiguo ANTES de qualquer
+//     chamada de rede (nem baseline nem /renew sao chamados)
+{
+  const f = makeFakeFetch({
+    "/api/account": () => { throw new Error("/api/account nao deveria ser chamado"); },
+    "/api/account/renew": () => { throw new Error("/renew nao deveria ser chamado"); },
+  });
+  for (const plano of ["Plano 90 dias", "Semanal", "", null, undefined, "Mensal Anual"]) {
+    const r = await renovarUmAcessoUniTV({ sn: "gcnv6v", id: 3433363, planoNome: plano, fetchImpl: f, ...CREDS, sleep: noSleep });
+    ok(
+      r.resultado === "resultado_ambiguo" && /nao mapeado para uma duracao UniTV/.test(r.detalhe),
+      `plano ${JSON.stringify(plano)} -> resultado_ambiguo, sem renovar`,
+    );
+  }
+  ok(!f.contadores["/api/account"] && !f.contadores["/api/account/renew"], "plano desconhecido -> ZERO chamadas de rede");
+}
+
+// =====================================================================
+// 6. resolverRenovacaoUniTVPorPlano -- os quatro planos oficiais
+// =====================================================================
+{
+  const esperado = {
+    mensal:     { duracao: "mensal", package_id: 1, points_type: 1, auth_cycle: 1, auth_unit: "1", pre_auth_id: 123, points: 1 },
+    trimestral: { duracao: "trimestral", package_id: 1, points_type: 1, auth_cycle: 3, auth_unit: "1", pre_auth_id: 124, points: 3 },
+    semestral:  { duracao: "semestral", package_id: 1, points_type: 1, auth_cycle: 6, auth_unit: "1", pre_auth_id: 125, points: 6 },
+    anual:      { duracao: "anual", package_id: 1, points_type: 2, auth_cycle: 1, auth_unit: "4", pre_auth_id: 126, points: 1 },
+  };
+  const nomes = {
+    mensal: ["Mensal", "mensal", "MENSAL", "Plano Mensal", "Plano Mensal (31 dias)"],
+    trimestral: ["Trimestral", "trimestral", "Plano Trimestral (93 dias)"],
+    semestral: ["Semestral", "Plano Semestral (180 dias)"],
+    anual: ["Anual", "anual", "Plano Anual", "Plano Anual (365 dias)"],
+  };
+  for (const [dur, lista] of Object.entries(nomes)) {
+    for (const nome of lista) {
+      ok(
+        JSON.stringify(resolverRenovacaoUniTVPorPlano(nome)) === JSON.stringify(esperado[dur]),
+        `resolverRenovacaoUniTVPorPlano(${JSON.stringify(nome)}) == parametros oficiais de ${dur}`,
+      );
+    }
+  }
+
+  // Anti-regressao explicita: Anual e' 1 credito anual, nao 12.
+  ok(resolverRenovacaoUniTVPorPlano("Anual").points === 1, "Anual.points === 1 (nunca 12)");
+  ok(resolverRenovacaoUniTVPorPlano("Anual").points_type === 2, "Anual.points_type === 2 (credito anual)");
+  // A tabela nao usa o periodo em dias do Rocket em nenhum ponto.
+  ok(
+    Object.values(UNITV_RENOVACAO_POR_DURACAO).every((p) => p.package_id === 1),
+    "todas as duracoes usam package_id=1 (pacote unico)",
+  );
+
+  // Nomes desconhecidos / ambiguos -> null (o chamador transfere).
+  for (const bad of ["", "   ", null, undefined, "Plano 90 dias", "Semanal", "Quinzenal", "Mensal Trimestral", 123, {}]) {
+    ok(resolverRenovacaoUniTVPorPlano(bad) === null, `resolverRenovacaoUniTVPorPlano(${JSON.stringify(bad)}) === null`);
+  }
 }
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);

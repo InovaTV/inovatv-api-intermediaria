@@ -26,11 +26,17 @@
 // deles, iguais para qualquer revendedor/sessao) -- nao sao segredo
 // nosso. Confirmados decifrando trafego real na captura de 2026-08-28.
 //
-// Parametros de pacote sao CONSTANTES: o painel expoe um unico pacote
-// ("Plano Basico", package_id=1) e a renovacao mensal InovaTV e' sempre
-// "+1 mes" -> pre_auth_id=123 (o mesmo valor da POC; confirmado no
-// catalogo /api/dealer-core/package/package-name da captura). NAO ha'
-// resolucao de pacote por cliente.
+// Pacote unico ("Plano Basico", package_id=1), mas a DURACAO da
+// renovacao vem do plano contratado do cliente (Rocket:
+// Mensal/Trimestral/Semestral/Anual) -- NUNCA do pacote tecnico atual
+// do painel, NUNCA de calculo por "periodo em dias" do Rocket. Cada
+// duracao tem um conjunto oficial de parametros (points_type,
+// auth_cycle, pre_auth_id, points), confirmado pelo catalogo real
+// (POST /api/dealer-core/package/package-name) e pela regra do proprio
+// modal "Renovar" do painel (points = auth_cycle * exchange_points, com
+// exchange_points = 1). Ver UNITV_RENOVACAO_POR_DURACAO abaixo.
+// Atencao ao Anual: e' points_type=2 / points=1 (1 credito ANUAL),
+// nunca points=12.
 //
 // dealer_token / dealer_name vem SO' de env (UNITV_DEALER_TOKEN /
 // UNITV_DEALER_NAME) -- nunca hardcoded, nunca logado.
@@ -48,13 +54,55 @@ import crypto from "node:crypto";
 const UNITV_AES_KEY = Buffer.from("93403d3aa2ec48b4", "utf8"); // 16 bytes -> AES-128
 const UNITV_AES_IV = Buffer.from("7cf0127d190cb909", "utf8"); // 16 bytes
 
-// --- Constantes de renovacao mensal (unico caso da InovaTV) ---
 export const UNITV_API_BASE = "https://panel-web.revenda.site";
 export const UNITV_PACKAGE_ID = 1;
+
+// --- Constantes da renovacao MENSAL (mantidas para compatibilidade;
+// sao exatamente a linha `mensal` de UNITV_RENOVACAO_POR_DURACAO). ---
 export const UNITV_POINTS_TYPE = 1; // creditos mensais
 export const UNITV_AUTH_CYCLE = 1; // 1 ciclo
 export const UNITV_POINTS = 1; // 1 credito
 export const UNITV_PRE_AUTH_ID = 123; // "1 Mes" (catalogo confirmado 2026-08-28)
+
+// --- Parametros oficiais de /api/account/renew por DURACAO do plano.
+// Fonte: catalogo real do painel (pacote unico id=1) --
+//   1Month -> pre_auth_id 123 (auth_cycle 1, auth_unit "1")
+//   3Month -> pre_auth_id 124 (auth_cycle 3, auth_unit "1")
+//   6Month -> pre_auth_id 125 (auth_cycle 6, auth_unit "1")
+//   1Year  -> pre_auth_id 126 (auth_cycle 1, auth_unit "4")
+// + a regra de `points` do proprio modal "Renovar" do painel
+// (getRenewFormSchema): points = auth_cycle * moth_exchange_points
+// quando points_type=1 (mensal); points = auth_cycle * year_exchange_points
+// quando points_type=2 (anual). No catalogo atual os dois exchange_points
+// valem 1, entao: mensal->1, trimestral->3, semestral->6, ANUAL->1.
+// Ancora empirica: a renovacao real de 1 mes capturada
+// (docs/unitv/UNITV_RENOVACAO_TESTE_REAL.md secao 5) tem exatamente
+// { points_type:1, auth_cycle:1, points:1, pre_auth_id:123 }.
+// `auth_unit` fica aqui como metadado/rastreabilidade -- NAO e' enviado
+// no corpo do /renew (o payload real capturado nao o inclui).
+export const UNITV_RENOVACAO_POR_DURACAO = {
+  mensal:     { package_id: 1, points_type: 1, auth_cycle: 1, auth_unit: "1", pre_auth_id: 123, points: 1 },
+  trimestral: { package_id: 1, points_type: 1, auth_cycle: 3, auth_unit: "1", pre_auth_id: 124, points: 3 },
+  semestral:  { package_id: 1, points_type: 1, auth_cycle: 6, auth_unit: "1", pre_auth_id: 125, points: 6 },
+  anual:      { package_id: 1, points_type: 2, auth_cycle: 1, auth_unit: "4", pre_auth_id: 126, points: 1 },
+};
+
+// Resolve os parametros oficiais a partir do nome do plano contratado
+// (cadastro Rocket -- ex.: "Mensal", "Trimestral", "Plano Semestral
+// (180 dias)"). Normaliza (minusculas, sem acento) e casa por
+// palavra-chave de duracao. Retorna null quando NAO da' pra identificar
+// com seguranca UMA das quatro duracoes conhecidas (nome desconhecido
+// OU ambiguo) -- nesse caso o chamador NUNCA renova (transfere para
+// humano). Nao adivinha por "periodo em dias".
+export function resolverRenovacaoUniTVPorPlano(planoNome) {
+  const norm = String(planoNome ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+  const chaves = Object.keys(UNITV_RENOVACAO_POR_DURACAO).filter((k) => norm.includes(k));
+  if (chaves.length !== 1) return null; // 0 = desconhecido; >1 = ambiguo
+  return { duracao: chaves[0], ...UNITV_RENOVACAO_POR_DURACAO[chaves[0]] };
+}
 
 const HTTP_TIMEOUT_MS = 15000;
 const RECONSULTA_TENTATIVAS = 3;
@@ -205,9 +253,16 @@ export async function resolverContaUnitv(sn, {
 // `sn` e `id` vem do token (tokens_renovacao.unitv_sn / unitv_id). O
 // `id` do token e' revalidado contra o `id` que o painel devolve pelo
 // `sn` -- divergencia -> ambiguo (nunca renova um id que nao casa).
+//
+// `planoNome` vem do token (tokens_renovacao.plano_nome -- o plano
+// contratado no cadastro Rocket) e define a DURACAO (parametros
+// oficiais de UNITV_RENOVACAO_POR_DURACAO). Plano nao reconhecido ->
+// resultado_ambiguo ANTES de qualquer chamada de rede (nunca renova
+// com duracao adivinhada).
 export async function renovarUmAcessoUniTV({
   sn,
   id,
+  planoNome,
   fetchImpl = globalThis.fetch,
   dealerToken = process.env.UNITV_DEALER_TOKEN,
   dealerName = process.env.UNITV_DEALER_NAME,
@@ -218,6 +273,16 @@ export async function renovarUmAcessoUniTV({
   }
   if (!dealerToken || !dealerName) {
     return { resultado: "resultado_ambiguo", detalhe: "credenciais UniTV ausentes (UNITV_DEALER_TOKEN/UNITV_DEALER_NAME)" };
+  }
+
+  // Duracao vem do plano contratado -- sem plano reconhecido, NAO
+  // renova (nenhuma chamada de rede acontece a partir daqui).
+  const plano = resolverRenovacaoUniTVPorPlano(planoNome);
+  if (!plano) {
+    return {
+      resultado: "resultado_ambiguo",
+      detalhe: `plano "${planoNome ?? ""}" nao mapeado para uma duracao UniTV conhecida (mensal/trimestral/semestral/anual)`,
+    };
   }
 
   const opts = { fetchImpl, dealerToken, dealerName };
@@ -234,14 +299,16 @@ export async function renovarUmAcessoUniTV({
   const expireAntes = antes.expireTimeRaw;
 
   // 2) /renew -- uma unica tentativa, sem retry (retry consumiria credito
-  //    de novo). NUNCA confia no returnCode:0 sozinho.
-  const sign = unitvSign(contaId, UNITV_POINTS_TYPE, UNITV_POINTS);
+  //    de novo). NUNCA confia no returnCode:0 sozinho. Parametros pela
+  //    duracao do plano contratado (nunca pelo pacote tecnico atual).
+  //    `auth_unit` NAO entra no corpo (o payload real capturado nao o tem).
+  const sign = unitvSign(contaId, plano.points_type, plano.points);
   const renew = await callUnitvApi("/api/account/renew", {
-    package_id: UNITV_PACKAGE_ID,
-    points_type: UNITV_POINTS_TYPE,
-    auth_cycle: UNITV_AUTH_CYCLE,
-    points: UNITV_POINTS,
-    pre_auth_id: UNITV_PRE_AUTH_ID,
+    package_id: plano.package_id,
+    points_type: plano.points_type,
+    auth_cycle: plano.auth_cycle,
+    points: plano.points,
+    pre_auth_id: plano.pre_auth_id,
     sn,
     id: contaId,
     sign,
