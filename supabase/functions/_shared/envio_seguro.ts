@@ -15,7 +15,7 @@
 // Nao e' usado em nenhum outro envio -- os demais pontos do codigo so
 // mandam 1 mensagem por vez pro mesmo cliente na mesma execucao, sem
 // esse risco especifico.
-export const INTERVALO_SEGURO_ENTRE_ENVIOS_MS = 7000;
+export const INTERVALO_SEGURO_ENTRE_ENVIOS_MS = 15000;
 
 export async function aguardarIntervaloSeguroEntreEnvios(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, INTERVALO_SEGURO_ENTRE_ENVIOS_MS));
