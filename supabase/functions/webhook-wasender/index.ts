@@ -48,6 +48,10 @@ import {
 // renovacao_confirmacao.ts, encaminhado abaixo pelo MESMO contrato HTTP
 // que o webhook Meta ja usa (ver encaminharParaRenovacaoConfirmar).
 import { resolverRoteamentoConfirmacaoRenovacao } from "../_shared/renovacao_wasender_resolver.ts";
+// Fase 4, Checkpoint C (shadow mode, aprovado 2026-09-11): usado SOMENTE
+// por processarMidiaShadow() abaixo -- ver o bloco isolado logo depois
+// de ehMidia()/diagnosticoMidia() para o que exatamente muda.
+import { processarMidiaWasender } from "../_shared/wasender_media.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -280,6 +284,109 @@ function ehMidia(msg: WasenderMensagem): boolean {
   return !!(m?.imageMessage || m?.audioMessage || m?.documentMessage || m?.videoMessage);
 }
 
+// ----------------------------------------------------------------------------
+// Diagnostico de midia (Fase 4, Checkpoint A -- aprovado 2026-09-11). SO'
+// LOG -- nao muda em nada o comportamento: ehMidia() continua sendo o
+// unico ponto de decisao, e o fluxo continua terminando no mesmo `return`
+// de sempre logo depois. Existe so' para descobrir a FORMA real do
+// payload de midia que o Wasender entrega (nenhum exemplo de midia
+// aparece na doc oficial acessada ate agora).
+//
+// Regra de seguranca, sem excecao: nunca inclui url, mediaKey, token,
+// telefone, base64 ou o payload bruto -- so' presenca/metadados de baixo
+// risco. Object.keys() abaixo so' revela NOMES de campo (estrutura),
+// nunca os valores -- e' o que permite descobrir campos nao documentados
+// (ex.: fileLength, fileSha256, caption, ptt, seconds) sem arriscar logar
+// o conteudo deles.
+function diagnosticoMidia(msg: WasenderMensagem): Record<string, unknown> {
+  const m: WasenderMessageContent = msg.message ?? {};
+  const porTipo: Array<[string, WasenderMidia | undefined]> = [
+    ["imageMessage", m.imageMessage],
+    ["audioMessage", m.audioMessage],
+    ["documentMessage", m.documentMessage],
+    ["videoMessage", m.videoMessage],
+  ];
+  const encontrado = porTipo.find(([, valor]) => valor !== undefined);
+  const tipo = encontrado?.[0] ?? "desconhecido";
+  const midia = encontrado?.[1];
+  const midiaComoRegistro = (midia ?? {}) as unknown as Record<string, unknown>;
+
+  // Legenda/texto associado a midia: SO' presenca, nunca o texto em si.
+  // Cobre os 2 lugares onde isso poderia vir -- um campo "caption" nao
+  // tipado dentro do proprio objeto de midia (a doc oficial nao confirma
+  // nem descarta este campo) e os mesmos 2 campos que extrairTexto() ja
+  // usa para texto puro (message.conversation / messageBody), que na
+  // pratica tambem servem de legenda de midia em alguns clientes.
+  const captionPresente =
+    typeof midiaComoRegistro.caption === "string" && midiaComoRegistro.caption.length > 0;
+  const textoAssociadoPresente =
+    captionPresente ||
+    (typeof m.conversation === "string" && m.conversation.length > 0) ||
+    (typeof msg.messageBody === "string" && msg.messageBody.length > 0);
+
+  return {
+    tipo,
+    mimetype: midia?.mimetype ?? null,
+    fileName: midia?.fileName ?? null,
+    urlPresente: !!midia?.url,
+    mediaKeyPresente: !!midia?.mediaKey,
+    textoAssociadoPresente,
+    camposMidia: Object.keys(midiaComoRegistro),
+    camposMessage: Object.keys(m as unknown as Record<string, unknown>),
+  };
+}
+
+// Extrai o objeto de midia REAL (url/mediaKey/mimetype) -- usado SOMENTE
+// por processarMidiaShadow() logo abaixo. Deliberadamente separado de
+// diagnosticoMidia() (que so' devolve metadados sanitizados, nunca os
+// valores em si) -- este e' o UNICO ponto do arquivo que le os valores
+// reais, e o valor lido nunca e' logado diretamente por ele proprio.
+function extrairObjetoMidia(msg: WasenderMensagem): WasenderMidia | null {
+  const m = msg.message;
+  return m?.imageMessage ?? m?.audioMessage ?? m?.documentMessage ?? m?.videoMessage ?? null;
+}
+
+// ----------------------------------------------------------------------------
+// Fase 4, Checkpoint C (shadow mode, aprovado 2026-09-11): chama
+// processarMidiaWasender() (_shared/wasender_media.ts) SOMENTE para
+// observacao/log, contra o Wasender REAL. O resultado NAO entra em
+// nenhum lugar alem deste log -- nunca chega ao Orchestrator, ao
+// Gemini, a Base Evolutiva nem a nenhuma tabela. O fluxo continua
+// terminando no MESMO `return` de sempre, logo depois desta chamada
+// (ver processarMensagemRecebidaPosDedup abaixo). Escopo desta etapa:
+// so' imagem/audio/documento/video cujo objeto tenha url+mediaKey+
+// mimetype completos -- qualquer coisa faltando so' loga e nao tenta
+// processar (fail-safe, nunca inventa dado ausente).
+//
+// Erros aqui NUNCA podem interromper o atendimento -- try/catch
+// dedicado, isolado do resto do arquivo (mesmo padrao do shadow da
+// Base Evolutiva em orchestrator/index.ts).
+async function processarMidiaShadow(msg: WasenderMensagem, id: string): Promise<void> {
+  try {
+    const midia = extrairObjetoMidia(msg);
+    if (!midia?.url || !midia.mediaKey || !midia.mimetype) {
+      console.log(
+        "[shadow:wasender_media] campos insuficientes para processar (url/mediaKey/mimetype ausentes)",
+        JSON.stringify({ id }),
+      );
+      return;
+    }
+    const resultado = await processarMidiaWasender(
+      { url: midia.url, mediaKey: midia.mediaKey, mimetype: midia.mimetype },
+      id,
+    );
+    console.log(
+      "[shadow:wasender_media] resultado",
+      JSON.stringify({ id, outcome: resultado.outcome }),
+    );
+  } catch (erro) {
+    console.log(
+      "[shadow:wasender_media] erro (ignorado, nao afeta atendimento)",
+      erro instanceof Error ? erro.message : String(erro),
+    );
+  }
+}
+
 // Prioriza message.conversation (texto puro); messageBody serve para texto
 // e tambem como legenda de midia (por isso vem depois).
 function extrairTexto(msg: WasenderMensagem): string | null {
@@ -300,12 +407,16 @@ async function processarMensagemRecebidaPosDedup(msg: WasenderMensagem): Promise
   const key = msg.key ?? {};
   const id = key.id ?? "(sem id)";
 
-  // Midia -- so detecta e loga, NAO baixa/decrypta (fora de escopo).
+  // Midia -- so detecta e loga, NAO baixa/decrypta pro ATENDIMENTO (fora
+  // de escopo). processarMidiaShadow() (Checkpoint C) roda so' em modo
+  // sombra, log-only -- nao muda o que acontece a seguir: o fluxo
+  // continua terminando no MESMO `return` de sempre.
   if (ehMidia(msg)) {
     console.log(
       "[webhook-wasender] mensagem de midia -- pendencia, nao processada nesta etapa",
-      JSON.stringify({ id }),
+      JSON.stringify({ id, diagnostico: diagnosticoMidia(msg) }),
     );
+    await processarMidiaShadow(msg, id);
     return;
   }
 
