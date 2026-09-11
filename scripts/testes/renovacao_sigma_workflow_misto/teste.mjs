@@ -155,7 +155,7 @@ async function rodar(nome, cfg) {
 const filhosMisto = [
   {
     id: "f-sigma", tipo: "sigma", public_id: PUBLIC_ID_SIGMA,
-    unitv_sn: null, unitv_id: null,
+    unitv_sn: null, unitv_id: null, plano_nome: "Mensal",
     servidor_nome: "BLAZE", cliente_nome: CLIENTE_SIGMA, telefone: TELEFONE,
   },
   {

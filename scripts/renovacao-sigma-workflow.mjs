@@ -302,12 +302,60 @@ async function renovarUmAcessoUniTVComSync({ sn, id, planoNome, publicId, servid
   return item;
 }
 
+// Duracao da renovacao Sigma por PLANO CONTRATADO (Rocket:
+// Mensal/Trimestral/Semestral/Anual) -- NUNCA pelo pacote tecnico atual
+// do Sigma. Correcao 2026-09-11: fecha no caminho Sigma/Rocket o mesmo
+// gap ja corrigido no UniTV (scripts/lib/unitv-renovar.mjs,
+// UNITV_RENOVACAO_POR_DURACAO / resolverRenovacaoUniTVPorPlano) -- foi
+// exatamente essa classe de erro (duracao inferida do pacote/estado
+// tecnico atual, nao do plano contratado) que causou uma renovacao
+// UniTV incorreta em producao. Aqui so' precisamos da duracao em meses
+// (1/3/6/12) -- nao ha' package_id/points/pre_auth_id como no UniTV, o
+// Sigma so' precisa saber QUAL <option> do select escolher. Tabela
+// independente da do UniTV (protocolos diferentes, nao e' a mesma fonte
+// de verdade -- so' o PRINCIPIO e' o mesmo).
+const SIGMA_DURACAO_MESES_POR_PLANO = {
+  mensal: 1,
+  trimestral: 3,
+  semestral: 6,
+  anual: 12,
+};
+
+// Mesma normalizacao (NFD, sem acento, minusculas, casa por
+// palavra-chave) usada por resolverRenovacaoUniTVPorPlano. Retorna null
+// quando NAO da' pra identificar com seguranca UMA das quatro duracoes
+// conhecidas (nome desconhecido OU ambiguo) -- o chamador NUNCA renova
+// nesse caso.
+function resolverDuracaoMesesPorPlano(planoNome) {
+  const norm = String(planoNome ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+  const chaves = Object.keys(SIGMA_DURACAO_MESES_POR_PLANO).filter((k) => norm.includes(k));
+  if (chaves.length !== 1) return null; // 0 = desconhecido; >1 = ambiguo
+  return SIGMA_DURACAO_MESES_POR_PLANO[chaves[0]];
+}
+
 // Renova UM acesso Sigma. Extraido do antigo corpo de main() sem
 // nenhuma mudanca de sequencia -- so' deixou de chamar reportarResultado
 // diretamente: agora RETORNA { resultado, vencimentoConfirmado?, detalhe? }
 // pro chamador (main individual OU processarLote) decidir como reportar.
 // Recebe a sessao ja lida (uma vez por job, nao por acesso).
-async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNome, telefone }) {
+//
+// `planoNome` (tokens_renovacao.plano_nome / renovacoes_lote filho.plano_nome
+// -- mesma coluna ja usada pelo UniTV, nenhuma fonte nova) define a
+// DURACAO da renovacao. Resolvido ANTES de qualquer chamada de rede --
+// plano nao reconhecido -> resultado_ambiguo, zero chamadas ao
+// Rocket/Sigma/Playwright (mesma disciplina do UniTV).
+async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNome, telefone, planoNome }) {
+  const duracaoMesesAlvo = resolverDuracaoMesesPorPlano(planoNome);
+  if (!duracaoMesesAlvo) {
+    return {
+      resultado: "resultado_ambiguo",
+      detalhe: `plano "${planoNome ?? ""}" nao mapeado para uma duracao Sigma conhecida (mensal/trimestral/semestral/anual)`,
+    };
+  }
+
   const { ok: okAntes, cliente: clienteAntes } = await lerClienteRocket(publicId);
   if (!okAntes || !clienteAntes) {
     return { resultado: "resultado_ambiguo", detalhe: "falha ao ler cliente no Rocket antes da tentativa" };
@@ -400,7 +448,7 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       // cenario. O POST /pagamento/add/ consome credito e nao e'
       // idempotente -- repetir renovaria 2x. Todo retry desta etapa fica
       // so' na LEITURA (reconsulta), nunca no clique.
-      await executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto);
+      await executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto, duracaoMesesAlvo);
 
       // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
       // Sigma (via renovacao-sigma-contexto), nunca confia no clique/toast
@@ -495,7 +543,7 @@ function extrairDuracaoMeses(texto) {
 // MAXIMO 1x por acesso (nunca repetida). Lanca se qualquer passo nao
 // completar (ex.: pacote nao encontrado no <select>) -- nesse caso o
 // POST /pagamento/add/ nunca chega a ser submetido.
-async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto) {
+async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto, duracaoMesesAlvo) {
   await page
     .locator(`[data-bs-target="#modal-add-pagamento"][cliente_id="${idClienteInterno}"]`)
     .click({ timeout: 10000 });
@@ -541,20 +589,34 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
   // (ex.: "PLANO COMPLETO 1 MÊS(1 TELA) - 1 créditos - 3 tela(s)"). O
   // antigo match por startsWith(pacoteAtualTexto) nunca achava a opcao.
   //
-  // Nova regra: a opcao e' determinada por DURACAO (1/3/6/12 meses) +
-  // ADULTO (com adultos = SEM a expressao "SEM ADULTOS"; sem adultos =
-  // COM a expressao), ambos extraidos de pacoteAtualTexto. A quantidade
-  // de telas NUNCA entra na decisao -- e' caracteristica interna da
-  // opcao do Rocket. A selecao usa o `value` da propria <option>
-  // carregada pelo Rocket (fonte de verdade), nunca um id fixo.
+  // Regra: a opcao e' determinada por DURACAO (1/3/6/12 meses) + ADULTO
+  // (com adultos = SEM a expressao "SEM ADULTOS"; sem adultos = COM a
+  // expressao). A quantidade de telas NUNCA entra na decisao -- e'
+  // caracteristica interna da opcao do Rocket. A selecao usa o `value`
+  // da propria <option> carregada pelo Rocket (fonte de verdade), nunca
+  // um id fixo.
+  //
+  // Correcao 2026-09-11 (fecha o gap Sigma/Rocket da AUDITORIA GERAL DE
+  // ENCERRAMENTO): a DURACAO agora vem de `duracaoMesesAlvo`, resolvida
+  // pelo chamador a partir do PLANO CONTRATADO (plano_nome), NUNCA mais
+  // extraida de pacoteAtualTexto (isso inferia a duracao do pacote
+  // TECNICO ATUAL do Sigma -- a mesma classe de erro que causou a
+  // renovacao UniTV incorreta). O flag ADULTO continua vindo de
+  // pacoteAtualTexto -- e' uma caracteristica do cadastro atual do
+  // cliente no Sigma (qual familia de pacote ele usa), nao do
+  // plano/duracao contratada, entao nao faz sentido vir do plano.
   //
   // Escopo: exclusivamente #modal-add-pagamento > #id_sigma_package_id_select
   // (o <select> real; o campo enviado no form e' o hidden
   // #id_sigma_package_id, preenchido pelo proprio Rocket ao trocar a opcao).
-  const duracaoMeses = extrairDuracaoMeses(pacoteAtualTexto);
   const pacoteSemAdultos = /sem\s+adultos/i.test(pacoteAtualTexto);
-  if (!duracaoMeses) {
-    throw new Error(`nao consegui extrair a duracao (meses) do pacote atual: "${pacoteAtualTexto}"`);
+  if (!duracaoMesesAlvo) {
+    // Defensivo: o chamador (renovarUmAcessoSigma) ja resolve e valida
+    // duracaoMesesAlvo ANTES de chegar aqui -- este throw nunca deveria
+    // disparar em uso normal, mas mantem a mesma disciplina de "nunca
+    // adivinha 1 mes" caso este helper seja chamado de outro lugar no
+    // futuro sem o parametro.
+    throw new Error("duracaoMesesAlvo ausente -- deveria ter sido resolvido a partir do plano contratado antes do clique");
   }
 
   const selectPacote = modalAddPagamento.locator("#id_sigma_package_id_select");
@@ -588,18 +650,18 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
   }
 
   const opcaoAlvo = opcoesPacote.find(
-    (p) => extrairDuracaoMeses(p.texto) === duracaoMeses && /sem\s+adultos/i.test(p.texto) === pacoteSemAdultos,
+    (p) => extrairDuracaoMeses(p.texto) === duracaoMesesAlvo && /sem\s+adultos/i.test(p.texto) === pacoteSemAdultos,
   );
   if (!opcaoAlvo) {
     throw new Error(
-      `nenhuma opcao do select casa com duracao=${duracaoMeses} mes(es) + ${pacoteSemAdultos ? "sem" : "com"} adultos ` +
+      `nenhuma opcao do select casa com duracao=${duracaoMesesAlvo} mes(es) (plano contratado) + ${pacoteSemAdultos ? "sem" : "com"} adultos ` +
         `(pacote atual do Sigma: "${pacoteAtualTexto}")`,
     );
   }
   await selectPacote.selectOption({ value: opcaoAlvo.value });
   console.log(
     `[renovacao-sigma-workflow] pacote selecionado: "${opcaoAlvo.texto.trim()}" (value=${opcaoAlvo.value}) ` +
-      `-- duracao=${duracaoMeses}m, ${pacoteSemAdultos ? "sem" : "com"} adultos`,
+      `-- duracao=${duracaoMesesAlvo}m (plano contratado), ${pacoteSemAdultos ? "sem" : "com"} adultos`,
   );
   await page.waitForTimeout(1500);
 
@@ -655,6 +717,7 @@ async function processarLote(lote, sessionid, csrftoken) {
       publicId: filho.public_id,
       clienteNome: filho.cliente_nome,
       telefone: filho.telefone,
+      planoNome: filho.plano_nome,
     });
     resultados.push({
       token_id: filho.id,
@@ -743,6 +806,7 @@ async function main() {
     publicId: token.public_id,
     clienteNome: token.cliente_nome,
     telefone: token.telefone,
+    planoNome: token.plano_nome,
   });
   const extra = {};
   if (r.vencimentoConfirmado) extra.vencimentoConfirmado = r.vencimentoConfirmado;
