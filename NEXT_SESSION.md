@@ -1,5 +1,93 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-11 — RENOVAÇÃO AUTOMÁTICA: AUDITORIA GERAL DE
+> ENCERRAMENTO CONCLUÍDA. UNITV E SIGMA CORRIGIDOS E TESTADOS. NENHUM
+> BLOQUEIO DE CÓDIGO CONHECIDO NO MOMENTO.** Este bloco substitui, para
+> fins de estado atual, o `## CHECKPOINT 2026-09-08` no fim deste
+> arquivo (mantido abaixo só como histórico) — a premissa daquele
+> checkpoint (sessão Rocket expirada, bloqueio) **já não é verdadeira**:
+> a sessão Rocket está operacional desde antes desta data (extensão 2B
+> funcionando, `atualizar-sessao-rocket` em uso normal).
+>
+> **UniTV — duração pelo plano contratado: corrigida, testada e
+> validada em produção.** Commit `cb2d84c`. Causa raiz do incidente da
+> cliente Maridete Souza Silva (UniTV Trimestral renovado como 1 mês):
+> a duração vinha de constantes fixas, nunca do plano. Corrigida com
+> `UNITV_RENOVACAO_POR_DURACAO` + `resolverRenovacaoUniTVPorPlano()`
+> (`scripts/lib/unitv-renovar.mjs`) — parâmetros oficiais dos 4 planos
+> (Mensal/Trimestral/Semestral/Anual) confirmados via catálogo real do
+> painel UniTV. Fail-safe: plano não reconhecido → `resultado_ambiguo`,
+> zero chamadas de rede. Testado 90/90. Validado em produção com o
+> caminho Mensal (cliente Silvio Cezar); Trimestral/Semestral/Anual
+> ainda sem validação real de campo (só testes automatizados) — não é
+> erro conhecido, é lacuna de evidência.
+>
+> **Branding Fase 1 (InovaTV → Tope TV, texto visível ao cliente):
+> concluída e deployada.** Commits `96a228d` (api-intermediaria) e
+> `cb58edb` (inovatv_central). Escopo: só texto visível (mensagens,
+> telas do Painel, footer/app do Central) — identificadores, URLs,
+> templates da Meta e migrations **não** tocados. `SYSTEM_PROMPT` do
+> Gemini também migrado (`8729e39`, 4 ocorrências) após confirmar que o
+> validador determinístico compara a saída do Gemini contra
+> `contextoCompleto`, nunca contra o próprio `SYSTEM_PROMPT` — não havia
+> acoplamento a preservar.
+>
+> **AUDITORIA GERAL DE ENCERRAMENTO (2026-09-11) encontrou 1 achado
+> crítico: o caminho Sigma/Rocket nunca tinha recebido a mesma correção
+> de duração-por-plano do UniTV** — a duração ainda vinha do pacote
+> técnico ATUAL do cliente no Sigma (`extrairDuracaoMeses(pacoteAtualTexto)`),
+> a mesma classe de erro do incidente da Maridete, só que pelo lado
+> Sigma. Corrigido em 2 etapas, ambas commitadas e enviadas a
+> `origin/main`, **sem deploy necessário** (`renovacao-sigma-workflow.mjs`
+> é script de GitHub Actions, baixado via `actions/checkout` a cada
+> `workflow_dispatch` — a próxima execução real já usa o código novo,
+> não é Edge Function):
+>
+> 1. **`24f8ee7`** — duração Sigma passa a vir de `plano_nome`
+>    (`resolverDuracaoMesesPorPlano()`), nunca mais do pacote atual.
+> 2. **`861f96d`** — revisão de 2 pontos encontrados numa verificação
+>    read-only ao vivo no Rocket (BLAZE/NewOne/ChannelTV): (a) a
+>    identificação adulto/sem-adulto só reconhecia "SEM ADULTOS" por
+>    extenso — o ChannelTV usa abreviação "C/ADULTOS"/"S/ADULTOS", que
+>    ficava indistinguível; corrigido com `identificarAdultoPorTexto()`
+>    (reconhece as 4 grafias, fail-safe se contraditórias). (b) uma
+>    primeira versão desta correção chegou a fixar "sempre 1 tela" como
+>    regra comercial — **estava ERRADA** (o Rocket não cria os pacotes
+>    Sigma, só reproduz o catálogo real do painel Sigma no dropdown; a
+>    Tope TV vende por PONTO/ACESSO configurado no cadastro do cliente,
+>    não um número fixo) — revertida e substituída pela leitura do
+>    campo `input[name="telas"]` do próprio formulário "ADD Pagamento"
+>    já aberto (o Rocket já preenche esse campo sozinho com o cadastro
+>    do cliente; confirmado ao vivo, leitura read-only, em BLAZE/
+>    ChannelTV/NewOne). Fail-safe: campo ausente/vazio/não-numérico →
+>    `resultado_ambiguo`, nunca assume 1 nem qualquer outro número.
+>
+> **Testes:** suíte dedicada `scripts/testes/renovacao_sigma_duracao_por_plano/`
+> **55/55** (duração pelos 4 planos, adulto genérico + ChannelTV C/S,
+> cliente com 1/2/3 pontos escolhendo a opção correspondente, e todos
+> os fail-safes: ausência de opção, ambiguidade, adulto indeterminável,
+> campo `telas` ausente/vazio/não-numérico). Sweep completo do repositório
+> (~43 suítes) sem nenhuma falha nova. As 2 suítes pré-existentemente
+> quebradas — `renovacao-sigma-workflow-leitura` (drift do fake
+> Playwright pós-6a1b528) e `saudacao_inicial` (falhas de wiring/mock,
+> sem relação com texto/marca ou renovação) — seguem **idênticas ao
+> baseline**, confirmadas nesta auditoria.
+>
+> **Pendências não-bloqueantes (nenhuma impede considerar a renovação
+> automática encerrada):** (1) nenhuma validação real de campo ainda
+> para Sigma pós-correção (adulto/telas por cadastro) nem para UniTV
+> Trimestral/Semestral/Anual — só o primeiro caso real de cada vai
+> confirmar; (2) branch `correcao-cors-painel` (local e `origin`) é um
+> ramo muito antigo (ancestral direto de `main`, de antes de quase todo
+> o código atual existir) — lixo esquecido, candidato a exclusão, não é
+> trabalho pendente de mesclar; (3) este arquivo estava desatualizado
+> até esta edição.
+>
+> **Git:** `main` == `origin/main` == `861f96d`, working tree limpo nos
+> 3 repositórios do ecossistema. Nenhum deploy, commit, push, cobrança
+> ou renovação real foi feito durante a auditoria em si — só leitura
+> (código, testes, e inspeção read-only ao vivo no Rocket).
+
 > **⏸️ CHECKPOINT 2026-09-07 — TELA "TOKEN UNITV" NO PAINEL: DEPLOYADA
 > (3 Edge Functions v1 + Vercel prod), UX DO PROCEDIMENTO DE CAPTURA
 > ADICIONADA; COMMIT/PUSH AINDA PENDENTE (aguardando autorização + 1
@@ -3441,6 +3529,12 @@ congelada).
 
 ## CHECKPOINT 2026-09-08 — Option E no ar; sessao Rocket do Vault expirada (bloqueio)
 
+> **⚠️ SUPERADO — ver `## CHECKPOINT 2026-09-11` no fim deste arquivo.**
+> A sessao Rocket do Vault ja foi atualizada e esta operacional desde
+> antes de 2026-09-11 (extensao 2B funcionando normalmente). O bloqueio
+> descrito abaixo **nao reflete mais o estado atual** -- mantido so'
+> como historico de como o bloqueio foi diagnosticado.
+
 Retomar quinta-feira.
 
 - **Option E `9365ace`** implementada e enviada (`origin/main`).
@@ -3481,3 +3575,197 @@ Retomar quinta-feira.
 Rocket no Vault (via `atualizar-sessao-rocket`, caminho Bearer do operador
 OU token interno se disponibilizado), depois um teste controlado da
 renovacao Sigma.
+
+---
+
+## CHECKPOINT 2026-09-11 — UniTV e Sigma corrigidos (duracao + adulto + telas por cadastro); auditoria geral de encerramento concluida
+
+Sessao Rocket **resolvida** (superou o bloqueio do checkpoint 2026-09-08
+acima -- extensao 2B operacional, `atualizar-sessao-rocket` em uso
+normal). Nesta sessao: (1) UniTV corrigido e validado em producao,
+(2) Branding Fase 1 concluida e deployada, (3) auditoria geral de
+encerramento da renovacao automatica, (4) 2 correcoes no caminho
+Sigma/Rocket a partir dos achados dessa auditoria.
+
+### 1. UniTV -- duracao pelo plano contratado (`cb2d84c`)
+
+Causa raiz do incidente da cliente Maridete Souza Silva (UniTV
+Trimestral renovado como 1 mes): a duracao vinha de constantes fixas
+(`UNITV_POINTS_TYPE`/`UNITV_AUTH_CYCLE`/etc., sempre "1 mes"), nunca do
+plano contratado. Corrigido com `UNITV_RENOVACAO_POR_DURACAO` +
+`resolverRenovacaoUniTVPorPlano()` (`scripts/lib/unitv-renovar.mjs`) --
+parametros oficiais dos 4 planos (Mensal/Trimestral/Semestral/Anual)
+confirmados via catalogo real do painel UniTV (investigacao read-only:
+catalogo `POST /api/dealer-core/package/package-name` + reverse-
+engineering do bundle JS do proprio painel). Achado nao-obvio: Anual usa
+`points_type=2, points=1` (1 credito ANUAL), nunca `points=12`.
+Fail-safe: plano nao reconhecido/ambiguo -> `resultado_ambiguo`, zero
+chamadas de rede -- nunca renova com duracao adivinhada. Testado 90/90
+(`scripts/testes/unitv_renovar/`). **Validado em producao** no caminho
+Mensal (cliente Silvio Cezar). Trimestral/Semestral/Anual ainda sem
+validacao real de campo -- so' testes automatizados (nao e' erro
+conhecido, e' lacuna de evidencia; Maridete NUNCA deve ser reprocessada
+para fechar essa lacuna).
+
+### 2. Branding Fase 1 -- InovaTV -> Tope TV, texto visivel (`96a228d`, `8729e39`)
+
+Escopo deliberadamente restrito a texto visivel ao cliente: mensagens
+fixas, telas do Painel de Atendimento, footer/app do Central,
+`SYSTEM_PROMPT` do Gemini (4 ocorrencias). **Fora do escopo, nao
+tocado**: identificadores, URLs, templates da Meta, migrations. A
+edicao do `SYSTEM_PROMPT` so' foi feita apos confirmar por auditoria de
+codigo que o validador deterministico (`_shared/validador.ts`) compara
+a saida do Gemini contra `contextoCompleto`, nunca contra o proprio
+`SYSTEM_PROMPT` -- nao havia acoplamento a preservar (correcao de uma
+suposicao errada de sessao anterior).
+
+### 3. Auditoria geral de encerramento -- achado critico: gap Sigma/Rocket
+
+A auditoria (verificacao ponto a ponto: arquitetura, testes, Edge
+Functions, GitHub Actions, banco/migrations, codigo legado,
+documentacao, versionamento, seguranca, operacao) encontrou que **o
+caminho Sigma/Rocket nunca tinha recebido a mesma correcao de
+duracao-por-plano do UniTV** -- `renovarUmAcessoSigma()` nao recebia
+`plano_nome`, e a duracao ainda vinha do pacote TECNICO ATUAL do
+cliente no Sigma (`extrairDuracaoMeses(pacoteAtualTexto)`, lido de
+`renovacao-sigma-contexto`) -- a mesma classe de erro do incidente da
+Maridete, so' que pelo lado Sigma. Nenhuma evidencia de que isso ja
+tivesse causado um incidente real, mas nenhuma protecao existia contra
+o proximo cliente Sigma nao-mensal.
+
+Verdicto da auditoria: renovacao automatica **PENDENTE/RISCO** (nao
+"OK") ate essa correcao ser feita. Relatorio completo (15 secoes:
+resumo executivo, matriz SERVIDOR x PLANO x CAMINHO, testes, deploy,
+git, banco, documentacao, codigo legado, seguranca, operacao, suporte,
+riscos, futuro, checklist, conclusao) entregue na sessao -- nao
+duplicado aqui.
+
+### 4. Correcao do gap Sigma -- duracao pelo plano contratado (`24f8ee7`)
+
+`resolverDuracaoMesesPorPlano()` (nova, em
+`scripts/renovacao-sigma-workflow.mjs`) resolve a duracao a partir de
+`plano_nome` (mesma coluna ja usada pelo UniTV, nenhuma fonte nova),
+ANTES de qualquer chamada de rede -- mesma disciplina do UniTV. O flag
+adulto/sem-adulto continua vindo do pacote atual (`pacoteAtualTexto`) --
+e' caracteristica do cadastro do cliente no Sigma, nao do plano.
+Fail-safe: plano nao reconhecido -> `resultado_ambiguo`, zero chamadas
+de rede. UNITV, pagamento, watchdog, idempotencia, sessao Rocket e
+mensagens **nao tocados**.
+
+### 5. Verificacao read-only ao vivo no Rocket -- 2 achados que exigiram revisao (`861f96d`)
+
+Antes do deploy da correcao acima, uma verificacao read-only ao vivo no
+Rocket (BLAZE, NewOne, ChannelTV -- os 3 servidores Sigma realmente em
+uso; CLUB e P2Cine existem no cadastro mas nao sao usados) encontrou 2
+problemas na etapa de SELECAO da opcao do `<select>` "Pacote Sigma"
+(etapa que ja existia antes desta auditoria, herdada do commit
+`6a1b528`):
+
+- **ChannelTV usa nomenclatura abreviada "C/ADULTOS"/"S/ADULTOS"** --
+  a regex antiga (so' `/sem\s+adultos/i`) nunca casava com nenhuma das
+  duas formas abreviadas, tornando adulto/sem-adulto indistinguivel
+  nesse servidor.
+- **BLAZE oferece ate 3 variantes de tela (1/2/3) pra mesma
+  duracao+adulto** -- o `.find()` antigo pegava a primeira do array,
+  sem garantia de ser a correta.
+
+Uma primeira versao desta correcao chegou a fixar `telas === 1` como
+regra comercial universal ("Sigma/Rocket so' vende 1 acesso") -- **essa
+premissa estava ERRADA** e foi corrigida apos revisao funcional do
+usuario: o Rocket **nao cria** os pacotes Sigma, so' reproduz no
+dropdown "Pacote Sigma" o catalogo real do painel Sigma (endpoints
+`/gerenciador/cliente/sigma/info/` + `/sigma/packages/`, ja
+documentados em `docs/renovacao_automatica/levantamentos/
+2026-08-21_renovacao_automatica_painel_primeiro.md`). A Tope TV vende
+por PONTO/ACESSO configurado no cadastro de cada cliente (1 ponto, 2
+pontos, etc.) -- nao um numero fixo.
+
+Investigacao read-only confirmou, ao vivo (leitura pura, nenhum
+"Salvar" clicado, nenhum dado alterado): o campo `input[name="telas"]`
+do proprio formulario "ADD Pagamento" **ja vem preenchido pelo Rocket
+com o cadastro real do cliente** (testado em 3 clientes reais: BLAZE
+telas=3, ChannelTV telas=2, NewOne telas=1 -- todos batendo com a
+coluna "Telas" da lista de clientes). Ou seja, o dado certo ja estava
+disponivel na mesma pagina que a automacao ja abre -- nenhum endpoint
+novo, nenhuma coluna nova no banco, nenhuma Edge Function alterada foi
+necessaria.
+
+Correcao final (`861f96d`):
+- `identificarAdultoPorTexto()` (nova) reconhece as 4 grafias (COM/SEM
+  por extenso + C//S abreviado do ChannelTV, com/sem espaco ao redor da
+  barra). Marcadores contraditorios (ambos presentes) -> `null` ->
+  fail-safe, nunca renova.
+- `executarCliqueAddPagamento()` le `input[name="telas"]` do formulario
+  ja aberto via `page.locator(...).inputValue()` -- NENHUMA chamada de
+  rede nova. Campo ausente, vazio ou nao-numerico -> fail-safe
+  (`resultado_ambiguo`), nunca assume 1 nem qualquer outro numero.
+- A opcao do `<select>` passa a exigir duracao + adulto/sem-adulto +
+  quantidade de telas do CADASTRO do cliente (antes: duracao + adulto +
+  "sempre 1 tela"). Zero ou mais de uma opcao correspondente -> sempre
+  fail-safe (nunca escolhe arbitrariamente, nunca clica em "Salvar").
+- Preservado sem alteracao: `resolverDuracaoMesesPorPlano`, selecao
+  pelo `value` real da `<option>`, pagamento, idempotencia, janela de
+  pagamento, watchdog, sessao Rocket, mensagens, UNITV (nenhuma linha
+  tocada em nenhum dos dois commits).
+
+### 6. Deploy
+
+**Nao se aplica a nenhuma das 2 correcoes Sigma.**
+`scripts/renovacao-sigma-workflow.mjs` nao e' Edge Function -- e'
+baixado via `actions/checkout@v4` a cada `workflow_dispatch` do
+`.github/workflows/renovacao-sigma.yml` (sem `ref:` fixo). A proxima
+execucao real ja usa o codigo de `origin/main` automaticamente, sem
+etapa de deploy propria.
+
+### 7. Testes
+
+Suite dedicada `scripts/testes/renovacao_sigma_duracao_por_plano/`
+(criada e reescrita ao longo desta sessao) -- **55/55**, cobrindo:
+duracao pelos 4 planos (inclusive o cenario central "pacote atual
+mensal + plano trimestral -> escolhe 3 meses, nao 1"); adulto generico
++ ChannelTV C/ADULTOS e S/ADULTOS; cliente com 1/2/3 pontos escolhendo
+a opcao correspondente do catalogo (nunca a primeira do array); e todos
+os fail-safes pedidos (ausencia de opcao compativel, ambiguidade entre
+opcoes, adulto indeterminavel/contraditorio, campo `telas`
+ausente/vazio/nao-numerico). `renovacao_sigma_workflow_misto` (40/40),
+`renovacao_sigma_workflow_unitv` (32/32), `unitv_renovar` (90/90) e
+`unitv_conta` (27/27) inalterados. Sweep completo do repositorio
+(~43 suites): nenhuma falha nova. As 2 suites pre-existentemente
+quebradas -- `renovacao-sigma-workflow-leitura` (drift do fake
+Playwright pos-`6a1b528`, crash no mesmo TypeError na mesma linha) e
+`saudacao_inicial` (13 falhas de wiring/mock, sem relacao com
+renovacao) -- confirmadas **identicas ao baseline** em cada uma das
+3 rodadas de teste desta sessao (antes e depois de cada correcao).
+
+### 8. Estado do git
+
+3 commits nesta sessao, todos em `origin/main`:
+- `cb2d84c` -- UniTV duracao por plano (sessao anterior, ja em producao).
+- `96a228d` / `8729e39` -- Branding Fase 1 (api-intermediaria +
+  inovatv_central `cb58edb`).
+- `24f8ee7` -- Sigma duracao por plano.
+- `861f96d` -- Sigma: adulto multi-nomenclatura + telas por cadastro.
+
+`main` == `origin/main` == `861f96d`. Working tree limpo nos 3
+repositorios do ecossistema (`inovatv-api-intermediaria`,
+`inovatv_central`, `inovatv_painel`).
+
+### 9. Pendencias registradas (nenhuma bloqueia considerar a renovacao automatica encerrada)
+
+1. **Validacao real de campo ainda pendente** para: UniTV
+   Trimestral/Semestral/Anual, e Sigma pos-correcao (adulto/telas por
+   cadastro) -- so' testes automatizados ate agora. Sera' o proximo
+   cliente real de cada tipo a confirmar. Maridete continua NUNCA
+   devendo ser reprocessada.
+2. **Branch `correcao-cors-painel`** (existe local e em `origin`) --
+   confirmado nesta auditoria que e' um ramo muito antigo (ancestral
+   direto de `main`, de antes de quase todo o codigo atual existir,
+   `git merge-base --is-ancestor` confirma). Nao e' trabalho pendente
+   de mesclar -- e' lixo de branch esquecido, candidato a exclusao
+   (local + `origin`) quando autorizado.
+3. Este arquivo (`NEXT_SESSION.md`) estava desatualizado desde
+   2026-09-08 (nao registrava nenhum dos itens 1-5 acima) -- corrigido
+   nesta edicao.
+
+**Nao ha' nenhum item conhecido que bloqueie considerar a frente de
+renovacao automatica (UniTV + Sigma) tecnicamente fechada.**
