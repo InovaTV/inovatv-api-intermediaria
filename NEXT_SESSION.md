@@ -1,5 +1,52 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-11 (tarde) — TESTE REAL ACCOUNT PROTECTION +
+> SELEÇÃO DE ACESSO: SUCESSO PONTA A PONTA.** Após o commit `f884b20`
+> (intervalo seguro entre envios aumentado de 7s para 15s) e seu deploy
+> em produção (`orchestrator` v89, `renovacao-confirmar` v35), foi
+> realizado um teste real ponta a ponta com: **Account Protection do
+> Wasender ATIVA**, intervalo seguro configurado em **15 segundos**,
+> número/sessão "Tope Tv" novo conectado, **RocketZap conectado**.
+> Cliente de teste: **Js Informática Rp**, acesso **ChannelTV**, Plano
+> Mensal, R$35,00.
+>
+> **Sequência real:** cliente iniciou a conversa → sistema identificou
+> corretamente os 4 acessos → cliente solicitou explicitamente a
+> renovação do ChannelTV → sistema manteve corretamente o acesso
+> ChannelTV selecionado (sem desviar para UNITV) → 1º envio ("Só um
+> momento, vou buscar os dados...") → 2º envio (botões ACEITO/CANCELAR)
+> → **intervalo real entre os dois envios: ~15,976s (~16s)** → **ambos
+> os envios aceitos pelo Wasender com sucesso, nenhum HTTP 429** →
+> cliente confirmou ACEITO → Pix enviado → cliente pagou → renovação
+> processada automaticamente → Sigma retornou sucesso → vencimento
+> atualizado corretamente de 30/12/2026 para **30/01/2027, 20:59:59**
+> → fluxo terminou **sem transferência para atendimento humano e sem
+> intervenção manual**.
+>
+> **Evidências, cruzadas em 3 fontes independentes:** Painel de
+> Atendimento; Wasender Outgoing Message Activity (timestamps reais de
+> cada envio, status "Sent"); logs da Edge Function `orchestrator` no
+> Supabase (`[wasender_client] wasender_send_accepted` nos dois envios,
+> nenhuma ocorrência de `[wasender_client] envio falhou` na janela do
+> teste — busca explícita confirmou isso).
+>
+> **Resultado — confirma simultaneamente:** (1) `f884b20` — intervalo
+> de 15s entre os envios evitou o 429 da Account Protection **neste
+> cenário** (o mesmo 429 das 11:41, com 7s, está documentado e
+> preservado no checkpoint anterior, abaixo); (2) `e1965c5` — seleção
+> correta do acesso ChannelTV, sem desvio para UNITV; (3) renovação
+> real ponta a ponta funcionando corretamente; (4) Account Protection
+> permaneceu ativa durante todo o teste; (5) nenhuma falha ou
+> transferência automática ocorreu durante o fluxo.
+>
+> **Ressalva deliberada, não fechar a investigação com base numa
+> amostra só:** este é um teste real bem-sucedido, mas **não** declara
+> que o comportamento está matematicamente garantido para todos os
+> cenários — é registrado como **validação positiva em produção**, não
+> como encerramento definitivo. Ainda não testado com outros
+> servidores/cenários de renovação (BLAZE, NewOne, UNITV, lote). Antes
+> disso:**
+
 > **✅ CHECKPOINT 2026-09-11 — RENOVAÇÃO AUTOMÁTICA: AUDITORIA GERAL DE
 > ENCERRAMENTO CONCLUÍDA. UNITV E SIGMA CORRIGIDOS E TESTADOS. NENHUM
 > BLOQUEIO DE CÓDIGO CONHECIDO NO MOMENTO.** Este bloco substitui, para
