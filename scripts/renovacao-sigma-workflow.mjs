@@ -539,6 +539,47 @@ function extrairDuracaoMeses(texto) {
   return m ? Number(m[1]) : null;
 }
 
+// Identifica se um texto de pacote Sigma (pacote atual do cliente OU
+// <option> do select do Rocket) e' "sem adultos" (true), "com adultos"
+// (false) ou NAO DETERMINAVEL (null -- ver AUDITORIA DE VERIFICACAO NO
+// ROCKET, 2026-09-11: nomenclatura real varia por servidor):
+//   - BLAZE: "SEM ADULTOS" por extenso; ausencia de qualquer marcador
+//     ("PLANO COMPLETO 1 MÊS(1 TELA)") = com adultos (comportamento
+//     ja validado, PRESERVADO aqui).
+//   - NewOne: "COM ADULTOS" / "SEM ADULTOS" por extenso.
+//   - ChannelTV: abreviado, "C/ADULTOS" / "S/ADULTOS" -- a regex antiga
+//     (so' `/sem\s+adultos/i`) NUNCA casava com nenhuma das duas formas
+//     abreviadas, tornando "com" e "sem" indistinguiveis nesse servidor.
+// Correcao 2026-09-11: reconhece as 4 grafias (COM/SEM por extenso e
+// C//S abreviado, com ou sem espaco ao redor da barra). Nunca adivinha:
+// se o texto tiver AMBOS os marcadores (com e sem) ao mesmo tempo --
+// dado corrompido/inesperado -- retorna null (o chamador trata como
+// fail-safe, nunca renova). Ausencia de qualquer marcador continua
+// "com adultos" (false), exatamente o comportamento ja validado no
+// BLAZE -- nao e' um caso de ambiguidade, e' o default do catalogo.
+function identificarAdultoPorTexto(texto) {
+  const t = String(texto ?? "").toUpperCase();
+  const temSemAdultos = /\bSEM\s+ADULTOS\b/.test(t) || /\bS\s*\/\s*ADULTOS\b/.test(t);
+  const temComAdultos = /\bCOM\s+ADULTOS\b/.test(t) || /\bC\s*\/\s*ADULTOS\b/.test(t);
+  if (temSemAdultos && temComAdultos) return null; // marcadores contraditorios -> nao determinavel
+  if (temSemAdultos) return true;
+  return false; // temComAdultos explicito OU nenhum marcador (default = com adultos)
+}
+
+// Extrai a quantidade de telas do sufixo padronizado que o proprio
+// Rocket acrescenta a toda <option> do select de pacote Sigma, em
+// QUALQUER servidor (ex.: "... - 1 créditos - 2 tela(s)") -- formato
+// estavel, confirmado em BLAZE, NewOne e ChannelTV na AUDITORIA DE
+// VERIFICACAO NO ROCKET (2026-09-11). So' le o CATALOGO (o texto da
+// <option>) -- a quantidade de telas/pontos JA CADASTRADA pro cliente
+// vem de outro lugar (input[name="telas"] do formulario, ver
+// executarCliqueAddPagamento); este extrator so' identifica qual opcao
+// do catalogo tem aquela quantidade.
+function extrairTelas(texto) {
+  const m = String(texto ?? "").match(/(\d+)\s*tela\(s\)/i);
+  return m ? Number(m[1]) : null;
+}
+
 // Sequencia de clique da renovacao no modal "Add Pagamento". Roda no
 // MAXIMO 1x por acesso (nunca repetida). Lanca se qualquer passo nao
 // completar (ex.: pacote nao encontrado no <select>) -- nesse caso o
@@ -589,27 +630,42 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
   // (ex.: "PLANO COMPLETO 1 MÊS(1 TELA) - 1 créditos - 3 tela(s)"). O
   // antigo match por startsWith(pacoteAtualTexto) nunca achava a opcao.
   //
-  // Regra: a opcao e' determinada por DURACAO (1/3/6/12 meses) + ADULTO
-  // (com adultos = SEM a expressao "SEM ADULTOS"; sem adultos = COM a
-  // expressao). A quantidade de telas NUNCA entra na decisao -- e'
-  // caracteristica interna da opcao do Rocket. A selecao usa o `value`
-  // da propria <option> carregada pelo Rocket (fonte de verdade), nunca
-  // um id fixo.
-  //
   // Correcao 2026-09-11 (fecha o gap Sigma/Rocket da AUDITORIA GERAL DE
-  // ENCERRAMENTO): a DURACAO agora vem de `duracaoMesesAlvo`, resolvida
-  // pelo chamador a partir do PLANO CONTRATADO (plano_nome), NUNCA mais
-  // extraida de pacoteAtualTexto (isso inferia a duracao do pacote
-  // TECNICO ATUAL do Sigma -- a mesma classe de erro que causou a
-  // renovacao UniTV incorreta). O flag ADULTO continua vindo de
-  // pacoteAtualTexto -- e' uma caracteristica do cadastro atual do
-  // cliente no Sigma (qual familia de pacote ele usa), nao do
-  // plano/duracao contratada, entao nao faz sentido vir do plano.
+  // ENCERRAMENTO): a DURACAO vem de `duracaoMesesAlvo`, resolvida pelo
+  // chamador a partir do PLANO CONTRATADO (plano_nome), NUNCA extraida
+  // de pacoteAtualTexto (isso inferia a duracao do pacote TECNICO ATUAL
+  // do Sigma -- a mesma classe de erro que causou a renovacao UniTV
+  // incorreta). O flag ADULTO continua vindo de pacoteAtualTexto -- e'
+  // caracteristica do cadastro atual do cliente no Sigma (qual familia
+  // de pacote ele usa), nao do plano/duracao contratada.
+  //
+  // Correcao 2026-09-11 (AUDITORIA DE VERIFICACAO NO ROCKET, achado 1):
+  //   ADULTO deixa de usar so' `/sem\s+adultos/i` -- vira
+  //   identificarAdultoPorTexto() (COM/SEM por extenso + C//S abreviado
+  //   do ChannelTV). Indeterminavel (marcadores contraditorios) ->
+  //   fail-safe, nunca renova.
+  //
+  // Correcao 2026-09-11, REVISAO (achado 2 -- o Rocket NAO cria os
+  // pacotes Sigma, so' reproduz no dropdown "Pacote Sigma" o catalogo
+  // real do painel Sigma; a Tope TV vende por PONTO/ACESSO cadastrado
+  // no cliente, nunca um numero fixo -- primeira versao desta correcao
+  // chegou a fixar `telas === 1`, o que estava ERRADO e foi revertido):
+  //   TELAS entra como TERCEIRO criterio, usando a quantidade de pontos
+  //   JA CADASTRADA pro cliente (nunca um numero fixo, nunca adivinhado)
+  //   -- lida do proprio formulario "ADD Pagamento" ja aberto
+  //   (input[name="telas"], que o Rocket ja preenche sozinho com o
+  //   cadastro do cliente; confirmado ao vivo em BLAZE/ChannelTV/NewOne,
+  //   leitura read-only). Nenhuma chamada de rede nova. BLAZE tem ate 3
+  //   variantes de tela por duracao+adulto; sem esse criterio o
+  //   `.find()` antigo pegava a primeira (podendo nao bater com o que o
+  //   cliente realmente contratou).
+  // Zero ou mais de uma opcao batendo os 3 criterios -> fail-safe
+  // (nenhuma escolha arbitraria). A selecao usa o `value` da propria
+  // <option> carregada pelo Rocket (fonte de verdade), nunca um id fixo.
   //
   // Escopo: exclusivamente #modal-add-pagamento > #id_sigma_package_id_select
   // (o <select> real; o campo enviado no form e' o hidden
   // #id_sigma_package_id, preenchido pelo proprio Rocket ao trocar a opcao).
-  const pacoteSemAdultos = /sem\s+adultos/i.test(pacoteAtualTexto);
   if (!duracaoMesesAlvo) {
     // Defensivo: o chamador (renovarUmAcessoSigma) ja resolve e valida
     // duracaoMesesAlvo ANTES de chegar aqui -- este throw nunca deveria
@@ -617,6 +673,30 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
     // adivinha 1 mes" caso este helper seja chamado de outro lugar no
     // futuro sem o parametro.
     throw new Error("duracaoMesesAlvo ausente -- deveria ter sido resolvido a partir do plano contratado antes do clique");
+  }
+  const pacoteSemAdultos = identificarAdultoPorTexto(pacoteAtualTexto);
+  if (pacoteSemAdultos === null) {
+    throw new Error(
+      `nao foi possivel determinar adulto/sem adultos do pacote atual do Sigma: "${pacoteAtualTexto}" (marcadores contraditorios)`,
+    );
+  }
+
+  // Quantidade de pontos/acessos JA CADASTRADA pro cliente -- lida do
+  // proprio campo input[name="telas"] do formulario "ADD Pagamento" ja
+  // aberto (o Rocket ja preenche sozinho com o cadastro do cliente,
+  // mesmo campo do PATCH/GET da API publica). NUNCA uma chamada de rede
+  // nova, NUNCA um numero assumido por padrao (nem 1, nem outro): campo
+  // ausente, vazio ou nao numerico -> fail-safe, nunca renova.
+  const telasTextoBruto = await modalAddPagamento
+    .locator('input[name="telas"]')
+    .inputValue()
+    .catch(() => null);
+  const telasClienteCadastro =
+    telasTextoBruto != null && /^\d+$/.test(telasTextoBruto.trim()) ? Number(telasTextoBruto.trim()) : null;
+  if (telasClienteCadastro === null || telasClienteCadastro < 1) {
+    throw new Error(
+      `nao foi possivel ler a quantidade de telas/pontos cadastrada do cliente (input[name="telas"] = ${JSON.stringify(telasTextoBruto)})`,
+    );
   }
 
   const selectPacote = modalAddPagamento.locator("#id_sigma_package_id_select");
@@ -649,19 +729,28 @@ async function executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTex
     throw new Error("o <select> de pacote Sigma (#id_sigma_package_id_select) nao carregou nenhuma opcao");
   }
 
-  const opcaoAlvo = opcoesPacote.find(
-    (p) => extrairDuracaoMeses(p.texto) === duracaoMesesAlvo && /sem\s+adultos/i.test(p.texto) === pacoteSemAdultos,
+  // Compara o catalogo real do Sigma (opcoesPacote) contra a quantidade
+  // de pontos/acessos JA CADASTRADA pro cliente (telasClienteCadastro,
+  // lida acima) -- extrairTelas() so' le o CATALOGO do Rocket, nunca o
+  // cadastro do cliente (essa parte inalterada).
+  const candidatosOpcao = opcoesPacote.filter(
+    (p) =>
+      extrairDuracaoMeses(p.texto) === duracaoMesesAlvo &&
+      identificarAdultoPorTexto(p.texto) === pacoteSemAdultos &&
+      extrairTelas(p.texto) === telasClienteCadastro,
   );
-  if (!opcaoAlvo) {
+  if (candidatosOpcao.length !== 1) {
     throw new Error(
-      `nenhuma opcao do select casa com duracao=${duracaoMesesAlvo} mes(es) (plano contratado) + ${pacoteSemAdultos ? "sem" : "com"} adultos ` +
+      `${candidatosOpcao.length === 0 ? "nenhuma opcao" : `${candidatosOpcao.length} opcoes ambiguas`} do select casa com ` +
+        `duracao=${duracaoMesesAlvo} mes(es) (plano contratado) + ${pacoteSemAdultos ? "sem" : "com"} adultos + ${telasClienteCadastro} tela(s) (cadastro do cliente) ` +
         `(pacote atual do Sigma: "${pacoteAtualTexto}")`,
     );
   }
+  const opcaoAlvo = candidatosOpcao[0];
   await selectPacote.selectOption({ value: opcaoAlvo.value });
   console.log(
     `[renovacao-sigma-workflow] pacote selecionado: "${opcaoAlvo.texto.trim()}" (value=${opcaoAlvo.value}) ` +
-      `-- duracao=${duracaoMesesAlvo}m (plano contratado), ${pacoteSemAdultos ? "sem" : "com"} adultos`,
+      `-- duracao=${duracaoMesesAlvo}m (plano contratado), ${pacoteSemAdultos ? "sem" : "com"} adultos, ${telasClienteCadastro} tela(s) (cadastro do cliente)`,
   );
   await page.waitForTimeout(1500);
 

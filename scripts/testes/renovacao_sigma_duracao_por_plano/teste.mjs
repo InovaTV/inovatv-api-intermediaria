@@ -13,8 +13,14 @@
 //      Anual), nao do pacote atual -- inclusive quando o pacote atual
 //      diverge do plano contratado (o cenario CENTRAL desta correcao);
 //   2. o flag adulto/nao-adulto continua vindo do pacote atual (nao do
-//      plano -- plano nao carrega essa informacao);
-//   3. quantidade de telas nunca influencia a escolha;
+//      plano -- plano nao carrega essa informacao), reconhecendo COM/
+//      SEM por extenso e C//S abreviado (ChannelTV);
+//   3. a quantidade de telas/pontos vem do CADASTRO do cliente (lido de
+//      input[name="telas"], ja preenchido pelo Rocket no formulario "ADD
+//      Pagamento" -- nenhuma chamada de rede nova), NUNCA um numero fixo
+//      (revisao 2026-09-11: a 1a versao desta correcao chegou a fixar
+//      "sempre 1 tela", o que estava ERRADO -- o Rocket so' reproduz o
+//      catalogo do Sigma, nao define quantos pontos o cliente comprou);
 //   4. plano ausente/desconhecido -> resultado_ambiguo, ZERO chamadas
 //      de rede especificas da tentativa de renovacao (nunca adivinha
 //      1 mes);
@@ -125,7 +131,7 @@ function seqSucesso(pacoteAtual) {
   };
 }
 
-async function rodarCenario(nome, { planoNome, pacoteAtual, opcoesSelect, cliente, contexto, semToken } = {}) {
+async function rodarCenario(nome, { planoNome, pacoteAtual, opcoesSelect, cliente, contexto, semToken, telasCliente } = {}) {
   opId += 1;
   const operacaoId = `op-duracao-sigma-${opId}`;
   process.env.OPERACAO_ID = operacaoId;
@@ -144,7 +150,11 @@ async function rodarCenario(nome, { planoNome, pacoteAtual, opcoesSelect, client
   const padrao = pacoteAtual ? seqSucesso(pacoteAtual) : { clienteSeq: [], contextoSeq: [] };
   clienteSeq = cliente ?? padrao.clienteSeq;
   contextoSeq = contexto ?? padrao.contextoSeq;
-  configurarPlaywright({ opcoesSelect: opcoesSelect ?? [] });
+  // telasCliente simula o valor que o Rocket ja preenche sozinho em
+  // input[name="telas"] do formulario "ADD Pagamento" (cadastro do
+  // cliente) -- default "1" quando o cenario nao testa telas
+  // explicitamente. `null` simula o campo nao existir na pagina.
+  configurarPlaywright({ opcoesSelect: opcoesSelect ?? [], telasInputValue: telasCliente === undefined ? "1" : telasCliente });
   novaPromessa();
 
   const urlModulo = new URL("../../renovacao-sigma-workflow.mjs", import.meta.url).href + `?cenario=${nome}`;
@@ -317,20 +327,225 @@ function opcaoEscolhida(eventos, opcoesSelect) {
 }
 
 // =====================================================================
-// 9. Telas NUNCA influencia a escolha -- uma unica opcao com contagem
-//    de telas atipica (5 telas) ainda e' escolhida quando duracao +
-//    adulto batem.
+// 9a/9b/9c. REVISAO 2026-09-11 (a 1a versao desta correcao chegou a
+//    fixar "sempre 1 tela" -- ERRADO, revertido: o Rocket NAO cria os
+//    pacotes Sigma, so' reproduz o catalogo real do painel Sigma no
+//    dropdown; a Tope TV vende por PONTO/ACESSO cadastrado no cliente).
+//    Catalogo com 1/2/3 telas (caso real do BLAZE) -- a automacao tem
+//    que escolher a opcao que bate com a quantidade JA CADASTRADA pro
+//    cliente (simulada aqui via telasCliente, que representa o valor
+//    que o Rocket ja preenche sozinho em input[name="telas"]), nunca um
+//    numero fixo nem a primeira opcao do array.
 // =====================================================================
 {
-  const { resultado, eventos } = await rodarCenario("9-telas-nao-importa", {
+  const opcoes = [
+    "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "PLANO COMPLETO 3 MESES(2 TELAS) - 3 creditos - 2 tela(s)",
+    "PLANO COMPLETO 3 MESES(3 TELAS) - 3 creditos - 3 tela(s)",
+  ];
+  // 9a: cliente cadastrado com 1 ponto/acesso -> escolhe a opcao de 1 tela.
+  const { resultado: r1, eventos: e1 } = await rodarCenario("9a-cliente-1-ponto", {
     planoNome: "Trimestral",
-    pacoteAtual: "1 MES - X",
-    opcoesSelect: ["3 MESES - X - 3 creditos - 5 tela(s)"],
+    pacoteAtual: "PLANO COMPLETO 1 MES(3 TELAS)",
+    opcoesSelect: opcoes,
+    telasCliente: "1",
   });
-  ok(resultado.resultado === "sucesso", "9: sucesso mesmo com contagem de telas atipica");
+  ok(r1.resultado === "sucesso", "9a: cliente com 1 ponto -> sucesso");
   ok(
-    opcaoEscolhida(eventos, ["3 MESES - X - 3 creditos - 5 tela(s)"]) === "3 MESES - X - 3 creditos - 5 tela(s)",
-    "9: escolheu a opcao de 3 meses independente da quantidade de telas",
+    opcaoEscolhida(e1, opcoes) === "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "9a: escolheu a opcao de 1 TELA (cadastro do cliente = 1 ponto)",
+  );
+}
+{
+  // 9b: cliente cadastrado com 2 pontos/acessos -> escolhe a opcao de 2 telas.
+  const opcoes = [
+    "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "PLANO COMPLETO 3 MESES(2 TELAS) - 3 creditos - 2 tela(s)",
+    "PLANO COMPLETO 3 MESES(3 TELAS) - 3 creditos - 3 tela(s)",
+  ];
+  const { resultado, eventos } = await rodarCenario("9b-cliente-2-pontos", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(3 TELAS)",
+    opcoesSelect: opcoes,
+    telasCliente: "2",
+  });
+  ok(resultado.resultado === "sucesso", "9b: cliente com 2 pontos -> sucesso");
+  ok(
+    opcaoEscolhida(eventos, opcoes) === "PLANO COMPLETO 3 MESES(2 TELAS) - 3 creditos - 2 tela(s)",
+    "9b: escolheu a opcao de 2 TELAS (cadastro do cliente = 2 pontos), NAO a de 1 tela",
+  );
+}
+{
+  // 9c: cliente cadastrado com 3 pontos/acessos -> escolhe a opcao de 3 telas.
+  const opcoes = [
+    "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "PLANO COMPLETO 3 MESES(2 TELAS) - 3 creditos - 2 tela(s)",
+    "PLANO COMPLETO 3 MESES(3 TELAS) - 3 creditos - 3 tela(s)",
+  ];
+  const { resultado, eventos } = await rodarCenario("9c-cliente-3-pontos", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(3 TELAS)",
+    opcoesSelect: opcoes,
+    telasCliente: "3",
+  });
+  ok(resultado.resultado === "sucesso", "9c: cliente com 3 pontos -> sucesso");
+  ok(
+    opcaoEscolhida(eventos, opcoes) === "PLANO COMPLETO 3 MESES(3 TELAS) - 3 creditos - 3 tela(s)",
+    "9c: escolheu a opcao de 3 TELAS (cadastro do cliente = 3 pontos)",
+  );
+}
+
+// =====================================================================
+// 10. FAIL-SAFE -- nenhuma opcao do catalogo bate com a quantidade
+//     cadastrada do cliente (cliente com 2 pontos, catalogo so' tem 1 e
+//     3 telas) -> resultado_ambiguo, NUNCA cai para 1 ou 3 como
+//     fallback, nunca clica em "Salvar".
+// =====================================================================
+{
+  const opcoes = [
+    "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "PLANO COMPLETO 3 MESES(3 TELAS) - 3 creditos - 3 tela(s)",
+  ];
+  const { resultado, eventos } = await rodarCenario("10-sem-opcao-compativel", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(2 TELAS)",
+    opcoesSelect: opcoes,
+    telasCliente: "2",
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "10: sem opcao de 2 telas (cadastro do cliente) -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("nenhuma opcao"), "10: detalhe diz que nenhuma opcao casou");
+  ok(String(resultado.detalhe).includes("2 tela"), "10: detalhe cita explicitamente a quantidade cadastrada (2 telas)");
+  ok(cliqueSalvar(eventos) === 0, "10: NUNCA clica em Salvar -- nunca cai para 1 ou 3 telas");
+}
+
+// =====================================================================
+// 11. FAIL-SAFE -- ambiguidade entre DUAS opcoes com a MESMA duracao +
+//     adulto + quantidade de telas do cadastro (catalogo com entrada
+//     duplicada) -> resultado_ambiguo, nunca escolhe arbitrariamente a
+//     primeira.
+// =====================================================================
+{
+  const opcoes = [
+    "PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)",
+    "PLANO COMPLETO 3 MESES PROMO(1 TELA) - 3 creditos - 1 tela(s)",
+  ];
+  const { resultado, eventos } = await rodarCenario("11-duas-opcoes-1-tela", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(1 TELA)",
+    opcoesSelect: opcoes,
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "11: duas opcoes de 1 tela -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("2 opcoes ambiguas"), "11: detalhe cita as 2 opcoes ambiguas");
+  ok(cliqueSalvar(eventos) === 0, "11: NUNCA clica em Salvar sob ambiguidade -- nao escolhe arbitrariamente");
+}
+
+// =====================================================================
+// 11a/11b/11c. FAIL-SAFE -- input[name="telas"] ausente, vazio ou nao
+//     numerico -> resultado_ambiguo. NUNCA assume 1 (nem qualquer outro
+//     numero) como padrao. Nunca chega a clicar em "Salvar".
+// =====================================================================
+{
+  // 11a: campo nao existe na pagina (locator nunca resolve).
+  const { resultado, eventos } = await rodarCenario("11a-telas-campo-ausente", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(1 TELA)",
+    opcoesSelect: ["PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)"],
+    telasCliente: null,
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "11a: campo telas ausente -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("nao foi possivel ler a quantidade de telas"), "11a: detalhe explica a falha de leitura");
+  ok(cliqueSalvar(eventos) === 0, "11a: NUNCA clica em Salvar sem conseguir ler a quantidade cadastrada");
+}
+{
+  // 11b: campo existe mas esta vazio.
+  const { resultado, eventos } = await rodarCenario("11b-telas-vazio", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(1 TELA)",
+    opcoesSelect: ["PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)"],
+    telasCliente: "",
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "11b: campo telas vazio -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("nao foi possivel ler a quantidade de telas"), "11b: detalhe explica a falha de leitura");
+  ok(cliqueSalvar(eventos) === 0, "11b: NUNCA clica em Salvar com o campo vazio");
+}
+{
+  // 11c: campo com valor nao numerico (dado inesperado do Rocket).
+  const { resultado, eventos } = await rodarCenario("11c-telas-nao-numerico", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES(1 TELA)",
+    opcoesSelect: ["PLANO COMPLETO 3 MESES(1 TELA) - 3 creditos - 1 tela(s)"],
+    telasCliente: "abc",
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "11c: campo telas nao numerico -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("nao foi possivel ler a quantidade de telas"), "11c: detalhe explica a falha de leitura");
+  ok(cliqueSalvar(eventos) === 0, "11c: NUNCA clica em Salvar com valor nao numerico");
+}
+
+// =====================================================================
+// 12/13. CHANNELTV -- nomenclatura abreviada "C/ADULTOS" / "S/ADULTOS"
+//        (achado da auditoria de verificacao no Rocket: a regex antiga
+//        so' reconhecia "SEM ADULTOS" por extenso e nunca distinguia
+//        essas duas formas abreviadas). Mesmo catalogo (1 opcao "com" +
+//        1 "sem", ambas 1 tela) em ambos os cenarios -- so' o pacote
+//        atual do cliente muda.
+// =====================================================================
+{
+  const opcoes = [
+    "⭐3 MÊS C/ADULTOS⭐🔞 - 3 créditos - 1 tela(s)",
+    "⭐3 MÊS S/ADULTOS⭐ - 3 créditos - 1 tela(s)",
+  ];
+  // 12: pacote atual "C/ADULTOS" -> com adultos -> escolhe a opcao C/ADULTOS.
+  const { resultado: r12, eventos: e12 } = await rodarCenario("12-channeltv-c-adultos", {
+    planoNome: "Trimestral",
+    pacoteAtual: "⭐1 MÊS C/ADULTOS⭐🔞 - 1 créditos - 1 tela(s)",
+    opcoesSelect: opcoes,
+  });
+  ok(r12.resultado === "sucesso", "12: ChannelTV C/ADULTOS -> sucesso");
+  ok(
+    opcaoEscolhida(e12, opcoes) === "⭐3 MÊS C/ADULTOS⭐🔞 - 3 créditos - 1 tela(s)",
+    "12: ChannelTV 'C/ADULTOS' no pacote atual -> reconhecido como COM adultos, escolhe a opcao C/ADULTOS",
+  );
+}
+{
+  // 13: pacote atual "S/ADULTOS" -> sem adultos -> escolhe a opcao S/ADULTOS.
+  const opcoes = [
+    "⭐3 MÊS C/ADULTOS⭐🔞 - 3 créditos - 1 tela(s)",
+    "⭐3 MÊS S/ADULTOS⭐ - 3 créditos - 1 tela(s)",
+  ];
+  const { resultado, eventos } = await rodarCenario("13-channeltv-s-adultos", {
+    planoNome: "Trimestral",
+    pacoteAtual: "⭐1 MÊS S/ADULTOS⭐ - 1 créditos - 1 tela(s)",
+    opcoesSelect: opcoes,
+  });
+  ok(resultado.resultado === "sucesso", "13: ChannelTV S/ADULTOS -> sucesso");
+  ok(
+    opcaoEscolhida(eventos, opcoes) === "⭐3 MÊS S/ADULTOS⭐ - 3 créditos - 1 tela(s)",
+    "13: ChannelTV 'S/ADULTOS' no pacote atual -> reconhecido como SEM adultos, escolhe a opcao S/ADULTOS",
+  );
+}
+
+// =====================================================================
+// 14. FAIL-SAFE -- adulto/sem adulto NAO DETERMINAVEL (pacote atual com
+//     marcadores contraditorios: "COM ADULTOS" e "SEM ADULTOS" ao mesmo
+//     tempo) -> resultado_ambiguo ANTES de sequer carregar o <select>
+//     (zero efeito colateral -- nunca chega a escolher opcao nem clicar).
+// =====================================================================
+{
+  const { resultado, eventos, chamadas } = await rodarCenario("14-adulto-indeterminavel", {
+    planoNome: "Trimestral",
+    pacoteAtual: "PLANO COMPLETO 1 MES COM ADULTOS SEM ADULTOS",
+    opcoesSelect: ["3 MESES - X - 1 tela(s)"],
+  });
+  ok(resultado.resultado === "resultado_ambiguo", "14: marcadores contraditorios -> resultado_ambiguo");
+  ok(String(resultado.detalhe).includes("marcadores contraditorios"), "14: detalhe explica a contradicao");
+  ok(!eventos.some((e) => e.tipo === "selectOption"), "14: NUNCA chega a selecionar nenhuma opcao do select");
+  ok(cliqueSalvar(eventos) === 0, "14: NUNCA clica em Salvar");
+  // a leitura do pacote atual (renovacao-sigma-contexto) ja aconteceu antes
+  // deste ponto (e' de onde vem o texto contraditorio) -- o que importa e'
+  // que nao ha' NENHUMA chamada extra depois disso (nem reconsulta).
+  ok(
+    chamadas.filter((c) => c.url.endsWith("/functions/v1/renovacao-sigma-contexto")).length === 1,
+    "14: contexto Sigma consultado so' 1x (antes) -- nunca reconsulta apos falhar em determinar adulto",
   );
 }
 

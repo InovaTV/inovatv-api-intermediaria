@@ -14,6 +14,11 @@ export function configurarPlaywright(c = {}) {
     waitForSelectorLanca: false,
     launchLanca: false,
     proximoSeq: () => 0,
+    // Valor de input[name="telas"] no formulario "ADD Pagamento" (o
+    // Rocket ja preenche sozinho com o cadastro do cliente). Default
+    // "1" cobre os cenarios que nao testam telas explicitamente. `null`
+    // simula o campo NAO EXISTIR na pagina (locator nunca resolve).
+    telasInputValue: "1",
     ...c,
   };
   eventos = [];
@@ -88,6 +93,16 @@ function locatorFake(sel) {
     },
     allTextContents: async () => [],
     selectOption: async (o) => ev("selectOption", { value: o?.value ?? null, label: o?.label ?? null }),
+    inputValue: async () => {
+      if (sel.includes('input[name="telas"]')) {
+        ev("inputValue", { sel });
+        if (cfg.telasInputValue === null) {
+          throw new Error(`elemento nao encontrado (fake): ${sel}`);
+        }
+        return cfg.telasInputValue;
+      }
+      return "";
+    },
   };
 }
 

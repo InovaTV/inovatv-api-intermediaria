@@ -106,6 +106,13 @@ function locatorFake(sel) {
       value: o?.value ?? null,
       label: o?.label ?? null,
     }),
+    // input[name="telas"] -- o Rocket ja preenche sozinho com o cadastro
+    // do cliente (correcao 2026-09-11, revisao). O filho Sigma desta
+    // suite e' sempre 1 tela (fixture "1 MES - X - 1 creditos - 1
+    // tela(s)"), entao o fake fixa "1" -- suficiente pra esta suite, que
+    // testa o LOTE misto Sigma+UniTV, nao a variacao de telas em si
+    // (ver scripts/testes/renovacao_sigma_duracao_por_plano pra isso).
+    inputValue: async () => (sel.includes('input[name="telas"]') ? "1" : ""),
   };
 }
 
