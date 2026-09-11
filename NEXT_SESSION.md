@@ -1,5 +1,117 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-11 (encerramento de máquina) — BASE EVOLUTIVA
+> DE SUPORTE: CHECKPOINT 1 E 2 CONCLUÍDOS E EM PRODUÇÃO (SHADOW MODE).
+> Máquina local encerrada aqui — tudo sincronizado no GitHub, sem
+> pendência local.** Este bloco documenta o estado exato pra continuar
+> em outro computador, sem depender de memória de conversa.
+>
+> **Commits desta frente (nesta ordem, todos em `origin/main`):**
+> 1. **`ad7313c`** — `feat: cria base evolutiva de suporte` — migration
+>    `supabase/migrations/20260911140000_base_evolutiva_suporte.sql`,
+>    aplicada em produção. Cria 4 tabelas: `conhecimento_suporte`
+>    (núcleo — procedimentos, contexto aplicativo/servidor/dispositivo,
+>    status candidato→revisao→ativo→arquivado), `tentativas_suporte`,
+>    `evidencias_suporte`, `midia_suporte` (referência, nunca binário).
+>    RLS habilitado, zero policy (só `service_role`, padrão do
+>    projeto). **Não** substitui nem altera `conhecimento_institucional`
+>    — convivem lado a lado.
+> 2. **`068fb56`** — `feat: adiciona busca da base evolutiva de
+>    suporte` (Fase 3, Checkpoint 1) — cria
+>    `supabase/functions/_shared/conhecimento_suporte.ts`
+>    (`buscarConhecimentoSuporte()`, algoritmo determinístico por
+>    palavras-chave, byte-idêntico ao de `_shared/conhecimento.ts`,
+>    deliberadamente duplicado, não compartilhado) + suíte isolada
+>    `scripts/testes/conhecimento_suporte/` (13/13). Nesta etapa a
+>    função **não era chamada por ninguém em produção** — só existia.
+> 3. **`5016fcd`** — `feat: integra conhecimento de suporte em modo
+>    sombra` (Fase 3, Checkpoint 2) — **este é o commit implantado no
+>    `orchestrator`, versão 90, ACTIVE, `verify_jwt=false`.** Conecta
+>    `buscarConhecimentoSuporte()` dentro de `orchestrator/index.ts`
+>    em modo **sombra puro**: chamada dentro de `try/catch` dedicado,
+>    resultado só vai para `console.log("[shadow:conhecimento_suporte]
+>    ...")` (id/título/score/contexto — nunca telefone, token ou texto
+>    bruto da mensagem) e **nunca** entra em `partesContexto` /
+>    `contextoCompleto` / no Gemini / na resposta ao cliente. Contexto
+>    passado: **somente `servidor`** (único dado estruturado/confiável
+>    hoje no Orquestrador) — `aplicativo`/`dispositivo` **não são
+>    inventados** (ficam `undefined`), porque não existem de forma
+>    estruturada no Orquestrador atualmente (confirmado por auditoria
+>    em 2026-09-11). Testes: 6 novos ("Sombra 1"–"6") na suíte real do
+>    handler (`scripts/testes/orchestrator_multiplos_acessos/`),
+>    provando as 6 propriedades exigidas (chamada executada; contexto
+>    correto; resultado não altera resposta nem Gemini; erro na busca
+>    sombra não interrompe o atendimento; `conhecimento_institucional`
+>    continua sendo a única fonte real; log sem dado sensível). Sweep
+>    completo (~43 suítes) sem regressão nova — as 2 falhas
+>    pré-existentes (`saudacao_inicial`,
+>    `renovacao-sigma-workflow-leitura`) seguem idênticas, confirmadas
+>    via `git stash` como pré-existentes ao Checkpoint 2.
+>
+> **Deploy confirmado em produção (2026-09-11):** `orchestrator`
+> version 89→90, `sha256` do bundle mudou de `b234dc4d…` para
+> `f473a22c…`, `verify_jwt=false` preservado. Bundle baixado
+> (`supabase functions download --use-api`) e comparado byte-a-byte
+> (`git diff`) contra o commit `5016fcd`: **idêntico**. Nenhuma outra
+> das 34 Edge Functions do projeto foi tocada (comparação campo a
+> campo version/updated_at/sha256 antes/depois do deploy). Migrations
+> antes e depois do deploy: as mesmas 30, todas `local == remote`, sem
+> nenhuma alteração (deploy de função não toca schema).
+>
+> **Estado real da Base Evolutiva de Suporte em produção agora:**
+> - `conhecimento_suporte`: **1 registro**, id
+>   `2f0a8f47-007b-47c7-8e03-d63cbe489e7b`, `status='candidato'`
+>   (nunca é retornado por `buscarConhecimentoSuporte()` enquanto não
+>   virar `'ativo'`). Conteúdo: aplicativo=**PlaySim**,
+>   servidor=**NewOne**, dispositivo=**Smart TV**, categoria
+>   `suporte_tecnico`, título "PlaySim — canais/playlist não carregam
+>   (botão Recarregar)" — problema real de atendimento (canais/
+>   playlist não carregavam no PlaySim), solução real encontrada pelo
+>   atendente humano (**botão "Recarregar"**), confirmada pelo
+>   cliente.
+> - `tentativas_suporte`, `evidencias_suporte`, `midia_suporte`:
+>   **0 registros** nas 3 — schema existe, nenhuma linha, nenhum
+>   código lê/grava nelas ainda.
+> - **A Base Evolutiva de Suporte ainda NÃO influencia nenhuma
+>   resposta real ao cliente.** `conhecimento_institucional`
+>   (`_shared/conhecimento.ts`, tabela `conhecimento_institucional`)
+>   continua sendo a **única** fonte de conhecimento que efetivamente
+>   chega ao Gemini/cliente — inalterada desde antes desta frente,
+>   sem nenhuma mudança de comportamento em nenhum dos 3 commits
+>   acima.
+> - Nenhuma integração de diagnóstico/sequência (`tentativas_suporte`)
+>   foi implementada. Nenhuma integração de mídia (`midia_suporte`,
+>   Hostinger/Storage) foi implementada — ambas continuam só como
+>   arquitetura conceitual + schema vazio.
+>
+> **Checkpoint 3 (próximo, NÃO implementado, NÃO autorizado ainda) =
+> observação/comparação do shadow mode** — acompanhar, num período real
+> de uso, os logs `[shadow:conhecimento_suporte]` em produção e
+> comparar com o que o atendimento real fez/precisou, **antes** de
+> cogitar qualquer mudança que faça a Base Evolutiva influenciar o
+> Gemini ou a resposta ao cliente. **Não iniciar isso sem autorização
+> explícita nova** — inclui não alterar `conhecimento.ts`, não alterar
+> `gemini_client.ts`/`SYSTEM_PROMPT`, não popular `tentativas_suporte`,
+> não tornar nenhum registro de `conhecimento_suporte` `'ativo'`.
+>
+> **Arquivos locais desta máquina que NÃO estão no Git (deliberado,
+> gitignored, pré-existentes — nenhum criado nesta sessão de
+> encerramento):** `.env.local` (raiz, só `VERCEL_OIDC_TOKEN`),
+> `scripts/.env` (`ROCKET_LOGIN_USUARIO`/`SENHA`,
+> `SESSAO_ROCKET_UPDATE_TOKEN`), `scripts/.credentials/` (tokens/
+> arquivos de sessão do Rocket/Drive, sem relação com a Base
+> Evolutiva), `.claude/settings.local.json` (config local do Claude
+> Code), `node_modules/`/`.next/`/`.vercel/`/`supabase/.temp/` (caches/
+> build, sempre recriáveis). Nenhum desses é necessário para continuar
+> o trabalho do Orquestrador/Base Evolutiva em outra máquina — são de
+> uma frente separada (automação Rocket/Drive) ou puro cache local.
+> **Ressalva honesta:** `docs/IMPLEMENTATION.md` documenta a variável
+> de `painel/.env.local`, mas **não** documenta de forma completa a
+> recriação de `scripts/.env`/`scripts/.credentials/` — se esses forem
+> necessários numa máquina nova (só pra frente Rocket/Drive, não pra
+> Base Evolutiva), será preciso reconstituí-los manualmente (login
+> Rocket, sessão, tokens), não há um passo a passo único hoje.
+
 > **✅ CHECKPOINT 2026-09-11 (tarde) — TESTE REAL ACCOUNT PROTECTION +
 > SELEÇÃO DE ACESSO: SUCESSO PONTA A PONTA.** Após o commit `f884b20`
 > (intervalo seguro entre envios aumentado de 7s para 15s) e seu deploy
