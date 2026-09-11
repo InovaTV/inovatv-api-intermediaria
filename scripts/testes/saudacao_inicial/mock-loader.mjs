@@ -22,6 +22,10 @@ const HERDADOS = {
   "_shared/tokens_renovacao.ts": "fake_tokens_renovacao.mjs",
   "_shared/renovacoes_lote.ts": "fake_renovacoes_lote.mjs",
   "_shared/unitv_conta_client.ts": "fake_unitv_conta_client.mjs",
+  // Novo (folga anti-bloqueio entre 2 envios rapidos, ver
+  // _shared/envio_seguro.ts) -- fakeado so pra suite nao esperar os 7s
+  // reais; nao e' o alvo desta suite.
+  "_shared/envio_seguro.ts": "fake_envio_seguro.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {

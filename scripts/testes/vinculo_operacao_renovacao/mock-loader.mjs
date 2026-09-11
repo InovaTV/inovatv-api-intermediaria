@@ -14,6 +14,10 @@ const MAPA = {
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
   "_shared/openpix_webhook_signature.ts": "fake_openpix_webhook_signature.mjs",
   "_shared/github_actions_dispatch.ts": "fake_github_actions_dispatch.mjs",
+  // Novo (folga anti-bloqueio entre 2 envios rapidos, ver
+  // _shared/envio_seguro.ts) -- fakeado so pra suite nao esperar os 7s
+  // reais; nao e' o alvo deste teste.
+  "_shared/envio_seguro.ts": "fake_envio_seguro.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {

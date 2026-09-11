@@ -12,6 +12,10 @@ const MAPA = {
   "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
   "_shared/openpix_client.ts": "fake_openpix_client.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
+  // Novo (folga anti-bloqueio entre 2 envios rapidos, ver
+  // _shared/envio_seguro.ts) -- fakeado so pra suite nao esperar os 7s
+  // reais; nao e' o alvo deste teste.
+  "_shared/envio_seguro.ts": "fake_envio_seguro.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {

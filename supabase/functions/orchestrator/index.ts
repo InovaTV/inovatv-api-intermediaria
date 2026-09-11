@@ -164,6 +164,7 @@ import { validarResposta } from "../_shared/validador.ts";
 // como referencia. Ver _shared/wasender_client.ts e a "AUDITORIA
 // DOCUMENTAL DO WASENDERAPI -- 2026-09-04" no NEXT_SESSION.md.
 import { enviarMensagemWhatsApp, enviarMensagemInterativaWhatsApp, enviarTemplateWhatsApp } from "../_shared/wasender_client.ts";
+import { aguardarIntervaloSeguroEntreEnvios } from "../_shared/envio_seguro.ts";
 import {
   MENSAGEM_TRANSFERENCIA_CLIENTE,
   NOME_TEMPLATE_NOVA_TRANSFERENCIA,
@@ -700,6 +701,11 @@ async function processarCobrancaRenovacao(
     valorFormatado,
     vencimentoFormatado,
   });
+  // Envio 1 (MENSAGEM_BUSCANDO_DADOS_RENOVACAO, acima) e este envio 2
+  // vao pro mesmo cliente em sequencia -- folga deliberada aqui pra
+  // manter a "Account Protection" do Wasender ativa sem bloquear o 2o
+  // envio (ver _shared/envio_seguro.ts).
+  await aguardarIntervaloSeguroEntreEnvios();
   const envio2 = await enviarMensagemInterativaWhatsApp(telefone, texto2, [
     { id: `renovacao:aceitar:${registro.token_hash}`, titulo: "ACEITO" },
     { id: `renovacao:cancelar:${registro.token_hash}`, titulo: "CANCELAR" },

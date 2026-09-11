@@ -22,6 +22,7 @@ import {
 import { criarCobrancaOpenPix } from "./openpix_client.ts";
 import { criarCobrancaPixRegistro } from "./cobrancas_pix.ts";
 import { enviarMensagemWhatsApp } from "./wasender_client.ts";
+import { aguardarIntervaloSeguroEntreEnvios } from "./envio_seguro.ts";
 import { acionarTransferenciaHumana } from "./conversas_estado.ts";
 import { notificarTransferenciaHumana } from "./notificacao_transferencia.ts";
 import { inserirMensagem } from "./mensagens_atendimento.ts";
@@ -161,6 +162,11 @@ export async function confirmarRenovacao(params: {
   // gravado em cobrancas_pix acima, so' nao vai ao WhatsApp. plano_nome
   // ja esta no token (reivindicarAceite), sem consulta nova.
   const textoPix = montarMensagemPixRenovacao(valor, `Plano: ${autorizado.plano_nome}`, cobranca.paymentLinkUrl);
+  // MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO (acima) e o Pix abaixo vao
+  // pro mesmo cliente em sequencia -- folga deliberada aqui pra manter
+  // a "Account Protection" do Wasender ativa sem bloquear o 2o envio
+  // (ver _shared/envio_seguro.ts).
+  await aguardarIntervaloSeguroEntreEnvios();
   const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
@@ -250,6 +256,9 @@ async function confirmarRenovacaoLote(
 
   const valorTotal = formatarValorBRL(autorizado.valor_total_centavos / 100) ?? "0,00";
   const textoPix = montarMensagemPixRenovacao(valorTotal, `${qtd} acessos`, cobranca.paymentLinkUrl);
+  // Mesma folga do caminho individual acima, mesmo motivo (ver
+  // _shared/envio_seguro.ts).
+  await aguardarIntervaloSeguroEntreEnvios();
   const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
