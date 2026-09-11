@@ -33,6 +33,12 @@ const {
   forcarErroWasenderMedia,
   chamadasWasenderMediaRegistradas,
 } = await import("./fake_wasender_media.mjs");
+const {
+  resetarGeminiClientFake,
+  definirResultadoGemini,
+  forcarErroGemini,
+  chamadasGeminiRegistradas,
+} = await import("./fake_gemini_client.mjs");
 
 // ---------------------------------------------------------------------
 // Fixtures "sensiveis" -- valores deliberadamente distintivos, para que
@@ -90,6 +96,7 @@ function ok(condicao, mensagem) {
 function resetarTudo() {
   resetarWebhookDedup();
   resetarWasenderMediaFake();
+  resetarGeminiClientFake();
   fetchChamadas = [];
   pendentes = [];
 }
@@ -120,14 +127,20 @@ function mensagemMidia({
   url = URL_MIDIA_SENSIVEL,
   mediaKey = MEDIA_KEY_SENSIVEL,
   caption,
+  messageBody,
 }) {
   const objetoMidia = { url, mediaKey, mimetype };
   if (fileName !== undefined) objetoMidia.fileName = fileName;
   if (caption !== undefined) objetoMidia.caption = caption; // campo nao tipado -- testamos runtime real
-  return {
+  const msg = {
     key: chaveMensagem(id, telefone),
     message: { [campoMidia]: objetoMidia },
   };
+  // messageBody (top-level) e' a legenda REAL que extrairTexto() le --
+  // distinto do campo "caption" nao tipado dentro do proprio objeto de
+  // midia (usado so' pelo diagnostico do Checkpoint A).
+  if (messageBody !== undefined) msg.messageBody = messageBody;
+  return msg;
 }
 
 function mensagemTexto({ id, telefone, texto }) {
@@ -403,6 +416,146 @@ async function testeC5_camposInsuficientesNaoChamaHelper() {
   );
 }
 
+// =====================================================================
+// Fase 4, Checkpoint D1 (shadow mode) -- Gemini multimodal chamado
+// DIRETO do webhook (nunca via Orchestrator), so' quando o decrypt/
+// validacao da midia (Checkpoint B/C) teve sucesso. Contrato Webhook->
+// Orchestrator continua intocado (D2 fora de escopo).
+// =====================================================================
+
+// D1.1: Gemini chamado com a midia certa e contextoCliente=null.
+async function testeD1_1_geminiChamadoComMidiaCorreta() {
+  resetarTudo();
+  await processar([
+    mensagemMidia({ id: "IMGD1-1", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  const chamadas = chamadasGeminiRegistradas();
+  ok(chamadas.length === 1, "D1.1: chamarGemini chamado exatamente 1 vez quando o decrypt teve sucesso");
+  ok(chamadas[0]?.contextoCliente === null, "D1.1: contextoCliente e' sempre null neste caminho");
+  ok(
+    Array.isArray(chamadas[0]?.midias) && chamadas[0].midias.length === 1,
+    "D1.1: exatamente 1 midia repassada ao Gemini",
+  );
+  ok(chamadas[0]?.midias[0]?.mimeType === "image/jpeg", "D1.1: mimeType repassado do resultado do decrypt");
+  ok(
+    chamadas[0]?.midias[0]?.dadosBase64 === "FAKE_BASE64_NUNCA_DEVE_APARECER_NO_LOG",
+    "D1.1: dadosBase64 repassado do resultado do decrypt",
+  );
+  ok(
+    chamadas[0]?.mensagemCliente === "(sem texto associado a esta midia)",
+    "D1.1: placeholder usado quando nao ha legenda/texto associado",
+  );
+}
+
+// D1.2: legenda real (messageBody) e' repassada como mensagem ao Gemini.
+async function testeD1_2_legendaUsadaComoMensagem() {
+  resetarTudo();
+  const LEGENDA = "PlaySim nao carrega os canais, olha o print";
+  await processar([
+    mensagemMidia({
+      id: "IMGD1-2",
+      telefone: TELEFONE_TESTE,
+      campoMidia: "imageMessage",
+      messageBody: LEGENDA,
+    }),
+  ]);
+  ok(
+    chamadasGeminiRegistradas()[0]?.mensagemCliente === LEGENDA,
+    "D1.2: legenda (messageBody) repassada como mensagem ao Gemini",
+  );
+}
+
+// D1.3: log so' mostra metadados seguros -- NUNCA o texto completo da
+// resposta do Gemini (que pode conter qualquer dado, ate' um telefone).
+async function testeD1_3_logSoMetadadosSeguros() {
+  resetarTudo();
+  const TEXTO_RESPOSTA_SENSIVEL =
+    `Resposta completa do Gemini que NUNCA deve vazar inteira, telefone: ${TELEFONE_TESTE}`;
+  definirResultadoGemini({
+    outcome: "success",
+    data: { tipo: "responder", texto: TEXTO_RESPOSTA_SENSIVEL, esclarecimento: false },
+  });
+  const { logCompleto } = await processar([
+    mensagemMidia({ id: "IMGD1-3", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  ok(logCompleto.includes('"outcome":"success"'), "D1.3: log reporta o outcome");
+  ok(logCompleto.includes('"tipo":"responder"'), "D1.3: log reporta o tipo da resposta estruturada");
+  ok(logCompleto.includes('"tamanhoTextoResposta"'), "D1.3: log reporta o TAMANHO do texto, nunca o texto");
+  ok(
+    !logCompleto.includes(TEXTO_RESPOSTA_SENSIVEL),
+    "D1.3: texto completo da resposta do Gemini nunca aparece no log",
+  );
+  ok(
+    !logCompleto.includes("Resposta completa do Gemini"),
+    "D1.3: nenhum fragmento do texto do Gemini vaza no log",
+  );
+  ok(
+    !logCompleto.includes(TELEFONE_TESTE),
+    "D1.3: telefone (mesmo escondido dentro do texto do Gemini) nunca aparece no log",
+  );
+  ok(!logCompleto.includes(URL_MIDIA_SENSIVEL), "D1.3: URL ainda nunca aparece no log");
+  ok(!logCompleto.includes(MEDIA_KEY_SENSIVEL), "D1.3: mediaKey ainda nunca aparece no log");
+  ok(
+    !logCompleto.includes("FAKE_BASE64_NUNCA_DEVE_APARECER_NO_LOG"),
+    "D1.3: base64 da midia nunca aparece no log",
+  );
+}
+
+// D1.4: Gemini NUNCA e' chamado se o decrypt/validacao da midia falhou.
+async function testeD1_4_geminiNaoChamadoSeDecryptFalhou() {
+  resetarTudo();
+  definirResultadoWasenderMedia({ outcome: "decrypt_falhou" });
+  await processar([
+    mensagemMidia({ id: "IMGD1-4", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  ok(
+    chamadasGeminiRegistradas().length === 0,
+    "D1.4: Gemini nunca e' chamado se o decrypt/validacao da midia falhou",
+  );
+}
+
+// D1.5: erro no Gemini shadow nunca derruba o atendimento.
+async function testeD1_5_erroNoGeminiNaoDerruba() {
+  resetarTudo();
+  forcarErroGemini(new Error("falha simulada do Gemini multimodal"));
+  const { resp, logCompleto } = await processar([
+    mensagemMidia({ id: "IMGD1-5", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  ok(resp.status === 200, "D1.5: erro no Gemini shadow nao muda a resposta HTTP (200)");
+  ok(
+    logCompleto.includes("[shadow:gemini_multimodal] erro (ignorado"),
+    "D1.5: erro do Gemini shadow e' logado como ignorado",
+  );
+  ok(fetchChamadas.length === 0, "D1.5: mesmo com erro no Gemini shadow, nunca chega ao Orquestrador");
+}
+
+// D1.6: reafirma que a integracao completa (decrypt + Gemini) ainda
+// nunca gera nenhuma chamada real ao Orquestrador nem muda a resposta
+// ao cliente.
+async function testeD1_6_aindaNuncaChegaAoOrquestrador() {
+  resetarTudo();
+  await processar([
+    mensagemMidia({ id: "IMGD1-6", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  ok(
+    fetchChamadas.length === 0,
+    "D1.6: midia com Gemini multimodal shadow AINDA nunca gera chamada real ao Orquestrador",
+  );
+}
+
+// D1.7: outcome "unavailable" do Gemini tambem so' loga outcome/tempo.
+async function testeD1_7_outcomeUnavailable() {
+  resetarTudo();
+  definirResultadoGemini({ outcome: "unavailable" });
+  const { logCompleto } = await processar([
+    mensagemMidia({ id: "IMGD1-7", telefone: TELEFONE_TESTE, campoMidia: "imageMessage" }),
+  ]);
+  ok(
+    logCompleto.includes('"outcome":"unavailable"') && logCompleto.includes("gemini_multimodal"),
+    "D1.7: outcome unavailable do Gemini e' logado normalmente",
+  );
+}
+
 await teste1_diagnosticoImagem();
 await teste2a6_nadaSensivelNoLog();
 await teste7_captionSoPresenca();
@@ -415,6 +568,13 @@ await testeC3_aindaNuncaChegaAoOrquestrador();
 await testeC4_erroNoHelperNaoDerruba();
 await testeC4b_outcomeDeFalhaTambemSoLogaOutcome();
 await testeC5_camposInsuficientesNaoChamaHelper();
+await testeD1_1_geminiChamadoComMidiaCorreta();
+await testeD1_2_legendaUsadaComoMensagem();
+await testeD1_3_logSoMetadadosSeguros();
+await testeD1_4_geminiNaoChamadoSeDecryptFalhou();
+await testeD1_5_erroNoGeminiNaoDerruba();
+await testeD1_6_aindaNuncaChegaAoOrquestrador();
+await testeD1_7_outcomeUnavailable();
 
 console.log("");
 if (falhas === 0) {

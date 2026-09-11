@@ -51,7 +51,12 @@ import { resolverRoteamentoConfirmacaoRenovacao } from "../_shared/renovacao_was
 // Fase 4, Checkpoint C (shadow mode, aprovado 2026-09-11): usado SOMENTE
 // por processarMidiaShadow() abaixo -- ver o bloco isolado logo depois
 // de ehMidia()/diagnosticoMidia() para o que exatamente muda.
-import { processarMidiaWasender } from "../_shared/wasender_media.ts";
+import { processarMidiaWasender, type MidiaProcessadaSucesso } from "../_shared/wasender_media.ts";
+// Fase 4, Checkpoint D1 (shadow mode, aprovado 2026-09-11): usado
+// SOMENTE por processarGeminiMultimodalShadow() abaixo -- Gemini
+// multimodal direto do webhook, NUNCA via Orchestrator (D2, fora de
+// escopo desta etapa -- contrato Webhook->Orchestrator INTOCADO).
+import { chamarGemini } from "../_shared/gemini_client.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -379,9 +384,79 @@ async function processarMidiaShadow(msg: WasenderMensagem, id: string): Promise<
       "[shadow:wasender_media] resultado",
       JSON.stringify({ id, outcome: resultado.outcome }),
     );
+
+    // Fase 4, Checkpoint D1: so' tenta o Gemini multimodal se a midia
+    // foi decriptada/validada com sucesso -- nunca com bytes invalidos
+    // ou ausentes.
+    if (resultado.outcome === "success") {
+      await processarGeminiMultimodalShadow(msg, id, resultado);
+    }
   } catch (erro) {
     console.log(
       "[shadow:wasender_media] erro (ignorado, nao afeta atendimento)",
+      erro instanceof Error ? erro.message : String(erro),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Fase 4, Checkpoint D1 (shadow mode, aprovado 2026-09-11): chama
+// chamarGemini() com a midia REAL ja decriptada/validada (Checkpoint
+// B/C), SOMENTE para observacao/log -- prova se o Gemini de fato
+// "enxerga" a imagem. Chamado DIRETO daqui, NUNCA via Orchestrator
+// (isso seria o Checkpoint D2, fora de escopo -- o contrato Webhook->
+// Orchestrator continua identico, sem nenhum campo novo). O resultado
+// NUNCA chega ao Orchestrator, nunca vira resposta ao cliente, nunca
+// altera absolutamente nada no atendimento real.
+//
+// Contexto passado ao Gemini: SOMENTE o texto/legenda associado a esta
+// midia (extrairTexto -- os mesmos 2 campos que qualquer texto puro ja
+// usa), se houver. contextoCliente e' SEMPRE null aqui -- este caminho
+// nao consulta Rocket/conversas_estado/conhecimento algum (o
+// webhook-wasender nao tem acesso a essa camada, e criar esse acesso
+// so' para um teste de shadow estaria fora do escopo autorizado).
+//
+// SEGURANCA -- nunca loga: o texto completo da resposta do Gemini (que
+// pode conter qualquer coisa, inclusive dado do cliente), a imagem, o
+// base64, url, mediaKey, telefone. So' loga: outcome, tipo da resposta
+// estruturada (responder/transferir/propor_renovacao), o booleano
+// esclarecimento, o TAMANHO (nao o conteudo) do texto de resposta, e o
+// tempo de processamento. Erro aqui nunca pode interromper o
+// atendimento -- try/catch dedicado.
+async function processarGeminiMultimodalShadow(
+  msg: WasenderMensagem,
+  id: string,
+  midiaProcessada: MidiaProcessadaSucesso,
+): Promise<void> {
+  try {
+    const inicio = Date.now();
+    const mensagemParaGemini = extrairTexto(msg) ?? "(sem texto associado a esta midia)";
+    const resultadoGemini = await chamarGemini(mensagemParaGemini, null, [
+      { mimeType: midiaProcessada.mimeType, dadosBase64: midiaProcessada.dadosBase64 },
+    ]);
+    const tempoMs = Date.now() - inicio;
+
+    if (resultadoGemini.outcome === "success") {
+      console.log(
+        "[shadow:gemini_multimodal] resultado",
+        JSON.stringify({
+          id,
+          outcome: "success",
+          tipo: resultadoGemini.data.tipo,
+          esclarecimento: resultadoGemini.data.esclarecimento,
+          tamanhoTextoResposta: resultadoGemini.data.texto.length,
+          tempoMs,
+        }),
+      );
+    } else {
+      console.log(
+        "[shadow:gemini_multimodal] resultado",
+        JSON.stringify({ id, outcome: "unavailable", tempoMs }),
+      );
+    }
+  } catch (erro) {
+    console.log(
+      "[shadow:gemini_multimodal] erro (ignorado, nao afeta atendimento)",
       erro instanceof Error ? erro.message : String(erro),
     );
   }
