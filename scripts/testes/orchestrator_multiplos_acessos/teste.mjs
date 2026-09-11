@@ -1341,14 +1341,28 @@ async function testeY() {
 // =====================================================================
 // Peca 1 (NOVA_INTENCAO_EXPLICITA) + Peca 2 (validade read-side do
 // estado de sessao) -- gerenciamento de estado conversacional,
-// 2026-08-29. Criterio: uma nova solicitacao explicita NUNCA pode ser
-// silenciosamente interpretada como continuacao de uma selecao antiga.
+// 2026-08-29. Criterio original: uma nova solicitacao explicita NUNCA
+// pode ser silenciosamente interpretada como continuacao de uma
+// selecao antiga.
+//
+// CORRIGIDO (2026-09-11, achado real -- caso Js Informatica Rp "2" ->
+// "Renovar"): "nova solicitacao explicita" e "selecao de acesso
+// invalida" deixaram de ser a MESMA coisa. A palavra "renovar"
+// sozinha, na mensagem atual, continua estabelecendo INTENCAO de
+// renovacao (ehContextoRenovacao/intencaoRenovacaoEstabelecida,
+// inalterados) -- mas nao invalida mais, sozinha, o
+// acesso_selecionado. So invalidam a selecao as condicoes REAIS
+// (Peca 2 -- operacao terminal; TTL de sessao; public_id que sumiu do
+// conjunto atual). Os testes Z1/Z2/Z8 abaixo foram atualizados pra
+// refletir esse contrato; Z3-Z7 continuam validos e inalterados.
 // =====================================================================
 
-// Peca 1 -- caso real ChannelTV: 2 acessos, acesso_selecionado +
-// intencao_atual gravados de uma escolha anterior, Gemini (guiado pelo
-// que seria o contexto) propoe o acesso 1 -> "quero renovar" deve
-// RELISTAR, nunca ir direto pra "Confira os dados".
+// Peca 1, CORRIGIDO -- caso real ChannelTV: 2 acessos, acesso_selecionado
+// + intencao_atual gravados de uma escolha anterior (SEM nenhuma
+// operacao terminal associada) -> "quero renovar", sozinho, agora
+// HONRA a selecao guardada (BLAZE) e vai direto pra "Confira os
+// dados", em vez de relistar. Espelha o caso real: "2" -> ChannelTV
+// persistido, "Renovar" isolado tem que continuar usando ChannelTV.
 async function testeZ1() {
   resetarTudo();
   configurarSigmaMaisUnitv();
@@ -1360,25 +1374,29 @@ async function testeZ1() {
   });
 
   const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
-  await resp.json();
+  const body = await resp.json();
   const enviadas = getMensagensEnviadas();
 
   ok(resp.status === 200, "Teste Z1: HTTP 200");
-  ok(enviadas.length === 1, "Teste Z1: exatamente 1 mensagem ao cliente");
-  ok(enviadas[0]?.texto.includes("📋 *Seus acessos*"), "Teste Z1: VOLTOU a listar os acessos");
   ok(
-    enviadas[0]?.texto.includes("BLAZE") && enviadas[0]?.texto.includes("UNITV"),
-    "Teste Z1: a lista mostra os DOIS acessos",
+    !enviadas.some((m) => m.texto.includes("📋 *Seus acessos*")),
+    "Teste Z1: NAO relista -- honra a selecao guardada (BLAZE), sem operacao terminal",
   );
   ok(
-    !enviadas.some((m) => m.texto.includes("Confira os dados")),
-    "Teste Z1: NAO foi direto pra 'Confira os dados'",
+    getMensagensInterativasEnviadas().some((m) => m.texto.includes("Confira os dados")),
+    "Teste Z1: foi direto pra 'Confira os dados'",
   );
-  ok(chamadasCriarToken() === 0, "Teste Z1: nenhum token individual criado");
-  ok(getMensagensInterativasEnviadas().length === 0, "Teste Z1: nenhuma confirmacao ACEITO/CANCELAR");
+  ok(
+    body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A &&
+      body?.renovacao?.acessoResolvido?.servidorNome === "BLAZE",
+    "Teste Z1: acesso resolvido e' o BLAZE guardado, nao outro",
+  );
+  ok(chamadasCriarToken() === 1, "Teste Z1: token individual criado para o acesso guardado");
 }
 
-// Peca 1 -- outras formas do verbo devem ter o mesmo efeito.
+// Peca 1, CORRIGIDO -- outras formas do verbo tem o MESMO efeito
+// corrigido de Z1: continuam contando como intencao explicita, mas
+// nao invalidam mais, sozinhas, uma selecao guardada e valida.
 async function testeZ2() {
   for (const frase of ["preciso renovar", "vou renovar", "quero fazer a renovação"]) {
     resetarTudo();
@@ -1390,11 +1408,12 @@ async function testeZ2() {
       data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
     });
     const resp = await handler(req({ telefone: TELEFONE, conteudo: frase }));
-    await resp.json();
-    const enviadas = getMensagensEnviadas();
+    const body = await resp.json();
     ok(
-      enviadas.length === 1 && enviadas[0]?.texto.includes("📋 *Seus acessos*") && chamadasCriarToken() === 0,
-      `Teste Z2: "${frase}" -> relista (nova intencao explicita)`,
+      getMensagensInterativasEnviadas().some((m) => m.texto.includes("Confira os dados")) &&
+        body?.renovacao?.acessoResolvido?.publicId === PUBLIC_ID_A &&
+        chamadasCriarToken() === 1,
+      `Teste Z2: "${frase}" -> honra a selecao guardada (BLAZE), nao relista`,
     );
   }
 }
@@ -1527,12 +1546,18 @@ async function testeZ7() {
 }
 
 // Peca 2 -- UNICO write de sessao: apresentar a lista zera
-// acesso_selecionado.
+// acesso_selecionado. CORRIGIDO (2026-09-11): com a selecao guardada
+// valida (sem operacao terminal), "quero renovar" agora HONRA a
+// selecao (Z1/Z2) em vez de relistar -- entao, pra este teste
+// continuar exercitando um relista de verdade, marca a ultima
+// operacao do acesso guardado como TERMINAL (mesma condicao de Z6),
+// unica forma real de a lista voltar a ser mostrada aqui.
 async function testeZ8() {
   resetarTudo();
   configurarSigmaMaisUnitv();
   getConversaAtual().acesso_selecionado = PUBLIC_ID_A;
   getConversaAtual().intencao_atual = "renovacao";
+  definirUltimaOperacaoTerminalParaPublicId(PUBLIC_ID_A);
   definirProximaRespostaGemini({
     outcome: "success",
     data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
@@ -1551,6 +1576,104 @@ async function testeZ8() {
     ),
     "Teste Z8: ao enviar a lista, acesso_selecionado e' zerado na sessao",
   );
+}
+
+// =====================================================================
+// Teste de regressao dedicado -- reproduz o caso REAL (2026-09-11,
+// Js Informatica Rp, conversation_id 43fcff07-...): 4 acessos
+// (BLAZE/ChannelTV/NewOne/UNITV), cliente escolhe um deles por numero
+// numa mensagem, depois manda "Renovar" ISOLADO (sem citar nenhum
+// servidor) numa mensagem SEPARADA. Antes da correcao, "Renovar"
+// sozinho invalidava a selecao guardada e o Gemini podia propor
+// QUALQUER outro acesso (reproduzido ao vivo: "2" -> ChannelTV
+// persistido, "Renovar" devolveu UNITV -- posicao 4). Depois da
+// correcao, a selecao guardada (sem operacao terminal, TTL valido,
+// public_id ainda no conjunto atual) tem que ser honrada nos 4 casos.
+//
+// getConversaAtual().acesso_selecionado e' pre-setado diretamente
+// (mesmo padrao de Z1/Z3/Z6/Z7) para representar o estado que "2" (ou
+// "1"/"3"/"4") ja deixou persistido, sem depender de simular aqui o
+// parser de prosa do Gemini (mapaNumeroAcesso) -- isso e' testado a
+// parte (mecanismo de persistencia da selecao numerica, ja coberto
+// pelo restante da suite); este teste isola exatamente o ponto que
+// mudou: a validade da selecao guardada diante de "Renovar" isolado.
+// =====================================================================
+const PUBLIC_ID_BLAZE_REAL = "pub-blaze-real";
+const PUBLIC_ID_CHANNELTV_REAL = "pub-channeltv-real";
+const PUBLIC_ID_NEWONE_REAL = "pub-newone-real";
+const PUBLIC_ID_UNITV_REAL = "pub-unitv-real";
+
+function configurarQuatroAcessosCasoReal() {
+  configurarMatch({
+    outcome: "multiple_matches",
+    candidates: [
+      { publicId: PUBLIC_ID_BLAZE_REAL, nome: "Js Informática Rp", usuario: "828667229" },
+      { publicId: PUBLIC_ID_CHANNELTV_REAL, nome: "Js Informática Rp", usuario: "759334773" },
+      { publicId: PUBLIC_ID_NEWONE_REAL, nome: "Js Informática Rp", usuario: "2715749553" },
+      { publicId: PUBLIC_ID_UNITV_REAL, nome: "Js Informática Rp", usuario: "gcnv6v" },
+    ],
+  });
+  configurarStatus(PUBLIC_ID_BLAZE_REAL, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_BLAZE_REAL, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Js Informática Rp", usuario: "828667229", vencimento: "2027-01-13T20:59:00-03:00", planoNome: "Mensal", servidorNome: "BLAZE", telas: 1, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_CHANNELTV_REAL, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_CHANNELTV_REAL, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Js Informática Rp", usuario: "759334773", vencimento: "2026-12-30T20:59:00-03:00", planoNome: "Mensal", servidorNome: "ChannelTV", telas: 2, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_NEWONE_REAL, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_NEWONE_REAL, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Js Informática Rp", usuario: "2715749553", vencimento: "2027-04-08T20:59:00-03:00", planoNome: "Mensal", servidorNome: "NewOne", telas: 1, valor: "35.00" },
+  });
+  configurarStatus(PUBLIC_ID_UNITV_REAL, {
+    outcome: "success", linkState: "linked", publicId: PUBLIC_ID_UNITV_REAL, syncedAt: new Date().toISOString(),
+    cliente: { nome: "Js Informática Rp", usuario: "gcnv6v", vencimento: "2027-01-04T02:31:00-03:00", planoNome: "Mensal", servidorNome: "UNITV", telas: 1, valor: "35.00" },
+  });
+}
+
+async function testeZ9() {
+  const casos = [
+    { publicId: PUBLIC_ID_BLAZE_REAL, servidor: "BLAZE" },
+    { publicId: PUBLIC_ID_CHANNELTV_REAL, servidor: "ChannelTV" }, // caso real exato
+    { publicId: PUBLIC_ID_NEWONE_REAL, servidor: "NewOne" },
+    { publicId: PUBLIC_ID_UNITV_REAL, servidor: "UNITV" },
+  ];
+  for (const caso of casos) {
+    resetarTudo();
+    configurarQuatroAcessosCasoReal();
+    // Estado exatamente como fica logo apos a selecao numerica (via
+    // consulta) ser resolvida e persistida -- SEM nenhuma intencao de
+    // renovacao estabelecida ainda (igual ao caso real: a lista veio
+    // de "quantos acessos tenho", nao de "quero renovar").
+    getConversaAtual().acesso_selecionado = caso.publicId;
+    getConversaAtual().intencao_atual = null;
+    // Gemini NAO cita nenhum servidor no texto -- mesma ambiguidade do
+    // caso real ("Renovar" sozinho, sem rotulo). E' exatamente esta
+    // ambiguidade que so' a selecao guardada (fallback) pode resolver.
+    definirProximaRespostaGemini({
+      outcome: "success",
+      data: { tipo: "propor_renovacao", texto: "Claro, vou providenciar a renovação do seu acesso!", esclarecimento: false },
+    });
+
+    const resp = await handler(req({ telefone: TELEFONE, conteudo: "Renovar" }));
+    const body = await resp.json();
+
+    ok(resp.status === 200, `Teste Z9 (${caso.servidor}): HTTP 200`);
+    ok(
+      body?.renovacao?.acessoResolvido?.publicId === caso.publicId &&
+        body?.renovacao?.acessoResolvido?.servidorNome === caso.servidor,
+      `Teste Z9 (${caso.servidor}): "Renovar" isolado honra o acesso selecionado por numero, nao troca para outro`,
+    );
+    const ultimoArgCriarToken = argsCriarToken().at(-1);
+    ok(
+      chamadasCriarToken() === 1 && ultimoArgCriarToken?.publicId === caso.publicId,
+      `Teste Z9 (${caso.servidor}): token criado com o publicId certo (${caso.publicId})`,
+    );
+    ok(
+      getMensagensInterativasEnviadas().some((m) => m.texto.includes("Confira os dados")),
+      `Teste Z9 (${caso.servidor}): foi direto pra 'Confira os dados' (nao relistou)`,
+    );
+  }
 }
 
 await testeA();
@@ -1593,6 +1716,7 @@ await testeZ5();
 await testeZ6();
 await testeZ7();
 await testeZ8();
+await testeZ9();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);

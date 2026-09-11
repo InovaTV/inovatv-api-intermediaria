@@ -1058,11 +1058,9 @@ Deno.serve(async (req: Request) => {
       conversa.acesso_selecionado,
     ));
 
-  // Reset da selecao/intencao guardada para o CONTEXTO DE RENOVACAO
-  // (Peca 1 + Peca 2). Inalterado -- alimenta ehContextoRenovacao,
-  // intencaoRenovacaoEstabelecida e acessoSelecionadoServidor (e, por
-  // eles, todo o fluxo de renovacao a jusante). ultimaOperacaoRenovacao
-  // EhTerminal() continua sendo consultada exatamente como antes.
+  // Reset da INTENCAO guardada para o CONTEXTO DE RENOVACAO (Peca 1 +
+  // Peca 2). Alimenta ehContextoRenovacao e intencaoRenovacaoEstabelecida
+  // -- nunca mais acessoSelecionadoServidor (ver achado real abaixo).
   const ignorarSelecaoAnterior =
     novaIntencaoRenovacaoExplicita || acessoSelecionadoObsoletoPorOperacaoTerminal;
 
@@ -1274,10 +1272,28 @@ Deno.serve(async (req: Request) => {
   // (public_id guardado) contra o conjunto FRESCO de statusResults
   // desta chamada -- nunca confia no valor guardado sem reconferir. Se
   // o public_id nao existir mais no conjunto atual, e' tratado como se
-  // nao houvesse selecao. A partir de 2026-08-29 tambem: null quando
-  // ignorarSelecaoAnterior (Peca 1/2).
+  // nao houvesse selecao.
+  //
+  // Achado real (2026-09-11, caso Js Informatica Rp "2" -> "Renovar"):
+  // ate' aqui, "null quando ignorarSelecaoAnterior" (Peca 1/2) incluia
+  // novaIntencaoRenovacaoExplicita -- ou seja, a MESMA mensagem que
+  // demonstra intencao de renovar ("Renovar", "quero renovar") tambem
+  // descartava a selecao de acesso feita segundos antes ("2" ->
+  // ChannelTV), mesmo sem nenhuma das condicoes REAIS de invalidacao
+  // (TTL de sessao -- SESSAO_TTL_MS acima, ja' limpa acesso_selecionado
+  // sozinho; public_id que sumiu do conjunto atual -- checado no
+  // .find() abaixo; ou operacao terminal -- Peca 2) terem acontecido.
+  // Sem o hint de servidor, o Gemini ficava sem pista de continuidade
+  // e podia propor um acesso diferente do que o cliente acabou de
+  // escolher (reproduzido ao vivo: "2" -> ChannelTV persistido, depois
+  // "Renovar" isolado devolveu UNITV). Correcao: intencao (Peca 1) e
+  // validade da selecao de acesso (Peca 2 + TTL + existencia no
+  // conjunto atual) sao desacopladas -- so' acessoSelecionadoObsoleto
+  // PorOperacaoTerminal (Peca 2) invalida a selecao aqui; a intencao
+  // explicita da mensagem atual continua alimentando ehContextoRenovacao/
+  // intencaoRenovacaoEstabelecida normalmente, sem nenhuma mudanca.
   const acessoSelecionadoServidor =
-    !ignorarSelecaoAnterior && conversa.acesso_selecionado
+    !acessoSelecionadoObsoletoPorOperacaoTerminal && conversa.acesso_selecionado
       ? (statusResults.find((s) => s.publicId === conversa.acesso_selecionado)?.cliente
           ?.servidorNome ?? null)
       : null;
