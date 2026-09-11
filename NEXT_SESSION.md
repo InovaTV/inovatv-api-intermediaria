@@ -80,6 +80,22 @@
 > nenhum texto de cliente acompanhava a imagem, mas isso precisa de
 > mais amostras e avaliação humana antes de qualquer conclusão) — e só
 > depois definir um checkpoint seguro para eventual uso ativo.
+>
+> **🔚 Fim de sessão 2026-09-11 (fechamento desta máquina) — nada
+> pendente, tudo sincronizado.** `main` local == `origin/main` ==
+> `178a71d`, working tree limpo, sem stash. Único trabalho desta sessão
+> foi o Checkpoint D1 (Fase 4), documentado no bloco acima — nenhum
+> outro checkpoint em aberto além do já registrado ali ("Próximo passo,
+> NÃO iniciado").
+>
+> **O que fica só nesta máquina, por desenho (nunca deve ir pro Git,
+> `.gitignore` já cobre tudo isso):** `.env.local` (raiz e `painel/`),
+> `scripts/ROCKET_SESSIONID.env`, `scripts/UNITV_DEALER.env`,
+> `node_modules/` (raiz, `painel/`, `scripts/`), o Chromium baixado
+> pelo Playwright, e as instalações locais de Deno/Supabase CLI. Isso é
+> esperado, não é pendência — precisa ser reconfigurado na próxima
+> máquina que continuar (mesma checagem de inicialização já feita no
+> começo desta sessão).
 
 > **✅ CHECKPOINT 2026-09-11 (encerramento de máquina) — BASE EVOLUTIVA
 > DE SUPORTE: CHECKPOINT 1 E 2 CONCLUÍDOS E EM PRODUÇÃO (SHADOW MODE).
