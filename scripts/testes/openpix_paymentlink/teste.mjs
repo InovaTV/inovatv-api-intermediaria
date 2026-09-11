@@ -55,7 +55,7 @@ const LINK = "https://woovi-sandbox.com/pay/op-teste-1";
   chamadasFetch = [];
   respostaFetch = () =>
     jsonResp({ charge: { transactionID: "tx1", brCode: BRCODE, paymentLinkUrl: LINK } });
-  const r = await criarCobrancaOpenPix(OP_ID, 3500, "Renovacao InovaTV - Plano Mensal");
+  const r = await criarCobrancaOpenPix(OP_ID, 3500, "Renovacao Tope TV - Plano Mensal");
   ok(r.outcome === "success", "C1: outcome success quando charge.paymentLinkUrl presente");
   ok(r.paymentLinkUrl === LINK, "C1: paymentLinkUrl capturado de charge.paymentLinkUrl");
   ok(r.qrCodeTexto === BRCODE, "C1: brCode continua sendo capturado (guardado em cobrancas_pix)");

@@ -29,7 +29,7 @@ export default function LoginPage() {
   return (
     <div className="container" style={{ maxWidth: 360, marginTop: 80 }}>
       <h1 style={{ fontSize: 20 }}>Painel de Atendimento</h1>
-      <p style={{ color: "#8a8f9a", fontSize: 14 }}>Uso interno InovaTV.</p>
+      <p style={{ color: "#8a8f9a", fontSize: 14 }}>Uso interno Tope TV.</p>
       <form onSubmit={entrar} className="card" style={{ display: "grid", gap: 12, marginTop: 16 }}>
         <input
           type="email"

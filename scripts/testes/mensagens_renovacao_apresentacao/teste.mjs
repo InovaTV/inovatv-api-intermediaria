@@ -306,7 +306,7 @@ checarLista("C3(venc null)", [
     texto.includes("✅ Sua renovação foi concluída com sucesso e seu acesso já está atualizado."),
     "C4: confirmacao clara de que a renovacao foi concluida",
   );
-  ok(texto.includes("InovaTV — Sempre pensando em você! 📺"), "C4: assinatura final presente");
+  ok(texto.includes("Tope TV — Sempre pensando em você! 📺"), "C4: assinatura final presente");
   // Os 6 campos, cada um em sua linha, na ordem pedida.
   const idx = (r) => linhas.findIndex((l) => l.includes(r));
   const [iC, iU, iS, iP, iV, iVenc] = ["*Cliente:*", "*Usuário:*", "*Servidor:*", "*Plano:*", "*Valor:*", "*Novo vencimento:*"].map(idx);

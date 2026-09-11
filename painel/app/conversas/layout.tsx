@@ -38,7 +38,7 @@ import {
 import { apresentarMensagemSistema } from "@/lib/mensagens";
 import type { ConversaEstado } from "@/lib/types";
 
-const TITULO_BASE = "Painel de Atendimento -- InovaTV";
+const TITULO_BASE = "Painel de Atendimento -- Tope TV";
 
 // Fatia 3 -- .painel-detalhe (o elemento com scroll de verdade,
 // flex:1 + overflow-y:auto) e' renderizado aqui no layout, mas quem

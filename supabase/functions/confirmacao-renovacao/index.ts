@@ -40,7 +40,7 @@ function paginaHtml(titulo: string, corpo: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${titulo} - InovaTV</title>
+<title>${titulo} - Tope TV</title>
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; background: #0D1117; color: #E5E7EB; margin: 0; padding: 24px; }
   .card { max-width: 420px; margin: 40px auto; background: #161B22; border-radius: 12px; padding: 24px; }
@@ -155,7 +155,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const operacaoId = crypto.randomUUID();
-    const descricaoItem = `Renovação InovaTV - Plano ${autorizado.plano_nome}`.trim();
+    const descricaoItem = `Renovação Tope TV - Plano ${autorizado.plano_nome}`.trim();
     const criarResultado = await criarCobrancaOpenPix(operacaoId, autorizado.valor_esperado_centavos, descricaoItem);
 
     if (criarResultado.outcome !== "success") {

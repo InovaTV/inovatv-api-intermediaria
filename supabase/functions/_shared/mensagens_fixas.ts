@@ -45,9 +45,9 @@ export const MENSAGEM_SESSAO_EXPIRADA =
 // Esta constante e' o UNICO lugar do texto: reduzir/trocar = editar so'
 // aqui, sem tocar em nenhuma logica de atendimento.
 export const MENSAGEM_SAUDACAO_INICIAL =
-  "👋 Olá! Sou o Assistente Virtual da InovaTV 😊\n\n" +
+  "👋 Olá! Sou o Assistente Virtual da Tope TV 😊\n\n" +
   "Este é o nosso canal oficial no WhatsApp ✅\n\n" +
-  "✨ A InovaTV mudou a forma de atendimento!\n\n" +
+  "✨ A Tope TV mudou a forma de atendimento!\n\n" +
   "Agora você pode resolver tudo de forma rápida e automática por aqui. Você pergunta, eu respondo — sem precisar esperar por um atendente. 😉\n\n" +
   "📅 Quer saber quando seu plano vence? É só perguntar.\n\n" +
   "🔄 Quer renovar seu plano? Eu também posso ajudar você a fazer sua renovação automaticamente por aqui.\n\n" +
@@ -398,7 +398,7 @@ export function montarMensagemResultadoLote(
     blocos.join("\n\n"),
     "",
     "Qualquer dúvida, estamos à disposição.",
-    "InovaTV — Sempre pensando em você! 📺",
+    "Tope TV — Sempre pensando em você! 📺",
   ].join("\n");
 }
 
@@ -513,7 +513,7 @@ export function montarMensagemRenovacaoConcluida(dados: {
     "✅ Sua renovação foi concluída com sucesso e seu acesso já está atualizado.",
     "",
     "Qualquer dúvida, estamos à disposição.",
-    "InovaTV — Sempre pensando em você! 📺",
+    "Tope TV — Sempre pensando em você! 📺",
   ].join("\n");
 }
 

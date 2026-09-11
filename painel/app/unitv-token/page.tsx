@@ -86,7 +86,7 @@ const SNIPPET_CAPTURA = `/* Capturador do dealer_token UniTV -- InovaTV. Passivo
       t = t.toLowerCase();
       console.log("%c  dealer_token capturado  ", "background:#1f5c37;color:#fff;font-weight:bold;padding:3px 8px;border-radius:3px");
       console.log("%c" + t, "font-size:18px;font-family:monospace;color:#6ee7a0;letter-spacing:1px");
-      try { copy(t); console.log('Copiado para a area de transferencia. Cole em "Novo token" no Painel InovaTV.'); }
+      try { copy(t); console.log('Copiado para a area de transferencia. Cole em "Novo token" no Painel Tope TV.'); }
       catch (e) { console.log("Selecione o valor acima e copie (Ctrl+C)."); }
     } else {
       console.warn("Peguei um POST /api/account mas sem dealer_token de 32 hex. Rode o capturador de novo e clique em Consultar.");
@@ -415,7 +415,7 @@ function TokenUnitvConteudo() {
                 Copie esse valor (o capturador já tenta copiá-lo para a área de
                 transferência automaticamente).
               </li>
-              <li>Volte para esta tela do Painel InovaTV.</li>
+              <li>Volte para esta tela do Painel Tope TV.</li>
               <li>
                 Cole o valor no campo <strong>&quot;Novo token&quot;</strong>{" "}
                 (seção acima).

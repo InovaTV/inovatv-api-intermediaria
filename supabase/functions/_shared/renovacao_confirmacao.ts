@@ -84,7 +84,7 @@ export async function confirmarRenovacao(params: {
   }
 
   const operacaoId = crypto.randomUUID();
-  const descricaoItem = `Renovacao InovaTV - Plano ${autorizado.plano_nome}`.trim();
+  const descricaoItem = `Renovacao Tope TV - Plano ${autorizado.plano_nome}`.trim();
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_esperado_centavos, descricaoItem);
   if (cobranca.outcome !== "success") {
     const motivoFalha = "renovacao:falha_criar_cobranca_apos_aceite";
@@ -217,7 +217,7 @@ async function confirmarRenovacaoLote(
   const qtd = filhos.length;
 
   const operacaoId = crypto.randomUUID();
-  const descricaoItem = `Renovacao InovaTV - ${qtd} acessos`;
+  const descricaoItem = `Renovacao Tope TV - ${qtd} acessos`;
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_total_centavos, descricaoItem);
   if (cobranca.outcome !== "success") {
     await tratarFalhaLote(autorizado.grupo_id, autorizado.conversation_id, autorizado.telefone, "renovacao_lote:falha_criar_cobranca_apos_aceite");
