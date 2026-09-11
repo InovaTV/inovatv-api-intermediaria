@@ -1,5 +1,86 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-11 (validação real) — FASE 4, CHECKPOINT D1
+> (SHADOW MODE) CONFIRMADO COM TRÁFEGO REAL.** Pipeline completo
+> A→B→C→D1 (diagnóstico de mídia → decrypt/download via Wasender →
+> shadow → Gemini multimodal) rodou de ponta a ponta contra 2 imagens
+> reais recebidas pelo canal Wasender, com sucesso nas duas. Frente
+> diferente da "BASE EVOLUTIVA DE SUPORTE" logo abaixo — não a
+> substitui, os dois blocos continuam válidos.
+>
+> **Contexto:** `webhook-wasender` v18 (commits `e8651bf` — Checkpoints
+> A/B/C — e `8a739d6` — Checkpoint D1 —, ambos já deployados) processa
+> mensagens de mídia real do WhatsApp em modo sombra total: detecta e
+> loga a estrutura (A), decripta via `POST /api/decrypt-media` do
+> Wasender e valida tamanho/magic bytes (B/C), e, se a mídia validar,
+> chama o Gemini multimodal com a imagem real (D1) — tudo só para
+> observação/log; nada disso chega ao Orchestrator nem muda a resposta
+> ao cliente.
+>
+> **2 imagens reais processadas com sucesso (2026-09-11, ~23:33 UTC):**
+> - **Imagem A** (`3EB0F97C3930EE4E052325`): 27.016 bytes, JPEG válido,
+>   decrypt/download em 536ms. Gemini: `outcome: success`, `tipo:
+>   transferir`, `esclarecimento: false`, resposta de 159 caracteres,
+>   5.833ms.
+> - **Imagem B** (`3EB06160C7B34E77D63B50`): 140.086 bytes, JPEG
+>   válido, decrypt/download em 160ms. Gemini: `outcome: success`,
+>   `tipo: responder`, `esclarecimento: true` (pediu esclarecimento),
+>   resposta de 167 caracteres, 5.882ms.
+>
+> Nas duas, `textoAssociadoPresente: false` — nenhuma legenda detectada
+> dentro do próprio evento de mídia, confirmando a hipótese da
+> investigação original do caso PlaySim: quando o cliente digita uma
+> legenda, ela chega como mensagem de TEXTO separada, nunca embutida no
+> mesmo `imageMessage` — nas 2 amostras reais, o campo `caption`
+> simplesmente não existe no payload. O placeholder `"(sem texto
+> associado a esta midia)"` foi usado como `mensagemCliente` nas duas
+> chamadas ao Gemini, por construção do código
+> (`processarGeminiMultimodalShadow`, `webhook-wasender/index.ts`).
+>
+> **Confirmado: o Gemini recebeu e analisou bytes reais de imagem, não
+> só texto** — `midias[]` com `dadosBase64` real é sempre passado
+> quando `processarMidiaWasender` retorna sucesso (garantia de código,
+> já coberta pelo teste D1.1 da suíte
+> `scripts/testes/webhook_wasender_diagnostico_midia/`); reforçado
+> empiricamente pelo fato de as duas imagens (bytes diferentes) terem
+> produzido decisões estruturadas DIFERENTES (`transferir` vs.
+> `responder` + `esclarecimento`), incompatível com uma resposta fixa
+> que ignorasse a imagem.
+>
+> **Estrutura real do `imageMessage` do WhatsApp/Wasender, observada
+> pela primeira vez em produção** (campo `camposMidia` do diagnóstico
+> do Checkpoint A, idêntica nas 2 amostras — nunca documentada antes
+> neste projeto): `url, mimetype, fileSha256, fileLength, height,
+> width, mediaKey, fileEncSha256, directPath, mediaKeyTimestamp,
+> jpegThumbnail, contextInfo, viewOnce`. Sem `caption` — confirma a
+> ausência desse campo no payload real, não só na documentação.
+> `height`/`width`/`fileLength` são campos novos que podem servir para
+> cortar por tamanho ANTES do decrypt, no futuro; `viewOnce` sinaliza
+> fotos "visualização única" do WhatsApp, ainda sem tratamento
+> especial.
+>
+> **Segurança confirmada nos logs reais:** em nenhuma das linhas
+> (`[webhook-wasender] mensagem de midia...`, `[wasender_media]
+> sucesso`, `[shadow:wasender_media] resultado`,
+> `[shadow:gemini_multimodal] resultado`) apareceu URL, mediaKey,
+> token, telefone, base64 ou o texto integral da resposta do Gemini —
+> só metadados (outcome, tipo, esclarecimento, tamanho em bytes/
+> caracteres, tempo em ms), exatamente como desenhado nos Checkpoints
+> A/B/C/D1.
+>
+> **Esta validação NÃO gerou nenhuma alteração de código** — só
+> observação de logs de produção reais (`git status` limpo antes e
+> depois). **D1 continua exclusivamente em shadow mode:** nenhuma
+> resposta ao cliente foi alterada, nenhum dado chegou ao Orchestrator.
+>
+> **Próximo passo, NÃO iniciado:** não começar o Checkpoint D2 ainda.
+> Primeiro avaliar a QUALIDADE da interpretação multimodal do Gemini
+> nas imagens reais que forem chegando (a decisão `transferir` da
+> Imagem A e o `esclarecimento` da Imagem B parecem razoáveis dado que
+> nenhum texto de cliente acompanhava a imagem, mas isso precisa de
+> mais amostras e avaliação humana antes de qualquer conclusão) — e só
+> depois definir um checkpoint seguro para eventual uso ativo.
+
 > **✅ CHECKPOINT 2026-09-11 (encerramento de máquina) — BASE EVOLUTIVA
 > DE SUPORTE: CHECKPOINT 1 E 2 CONCLUÍDOS E EM PRODUÇÃO (SHADOW MODE).
 > Máquina local encerrada aqui — tudo sincronizado no GitHub, sem
