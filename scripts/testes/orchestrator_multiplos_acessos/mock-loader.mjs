@@ -12,6 +12,10 @@ const MAPA = {
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
   "_shared/rocket_intermediaria.ts": "fake_rocket_intermediaria.mjs",
   "_shared/conhecimento.ts": "fake_conhecimento.mjs",
+  // Fase 3, Checkpoint 2 (shadow mode): sem esta entrada, o orchestrator
+  // carregaria o arquivo REAL, que chama _shared/supabase_client.ts
+  // real -- consulta de rede contra a URL fake deste ambiente de teste.
+  "_shared/conhecimento_suporte.ts": "fake_conhecimento_suporte.mjs",
   "_shared/gemini_client.ts": "fake_gemini_client.mjs",
   // Achado real (2026-09-05, investigacao do "achado D"): o orchestrator
   // ja importa de wasender_client.ts, nao mais whatsapp_client.ts -- sem

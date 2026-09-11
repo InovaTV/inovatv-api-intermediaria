@@ -155,6 +155,11 @@ import {
 } from "../_shared/rocket_intermediaria.ts";
 import { montarContextoCliente, montarContextoConversa } from "../_shared/contexto.ts";
 import { buscarConhecimentoRelevante } from "../_shared/conhecimento.ts";
+// Fase 3, Checkpoint 2 (shadow mode, aprovado 2026-09-11): SOMENTE a
+// funcao de busca da Base Evolutiva de Suporte -- ver bloco de chamada
+// mais abaixo, marcado "[shadow:conhecimento_suporte]". conhecimento.ts
+// acima continua sendo a UNICA fonte que alimenta contextoCompleto/Gemini.
+import { buscarConhecimentoSuporte } from "../_shared/conhecimento_suporte.ts";
 import { chamarGemini } from "../_shared/gemini_client.ts";
 import { validarResposta } from "../_shared/validador.ts";
 // LAB (inovatv-wasender-lab): a via de ENVIO aponta para o cliente
@@ -1307,6 +1312,52 @@ Deno.serve(async (req: Request) => {
     intencaoRenovacaoEstabelecida,
     conversa.esclarecimento_pendente,
   );
+
+  // ────────────────────────────────────────────────────────────────
+  // Fase 3, Checkpoint 2 (shadow mode, aprovado 2026-09-11): chama
+  // buscarConhecimentoSuporte() SOMENTE para observacao/log. O
+  // resultado NAO entra em partesContexto/contextoCompleto/Gemini/
+  // SYSTEM_PROMPT/resposta ao cliente -- nao e' usado em mais nenhum
+  // lugar deste arquivo alem deste bloco. Nao grava tentativas_suporte/
+  // evidencias_suporte/midia_suporte (fora de escopo deste checkpoint).
+  //
+  // Contexto passado: SOMENTE servidor (acessoSelecionadoServidor, ja'
+  // resolvido acima e reconferido contra statusResults FRESCOS desta
+  // chamada). "aplicativo" e "dispositivo" nao existem de forma
+  // estruturada/confiavel no Orquestrador hoje (auditoria 2026-09-11,
+  // "evolucao da IA para suporte tecnico") -- por isso ficam de fora
+  // (undefined), nunca inventados. Se isso significar que um
+  // conhecimento especifico por aplicativo/dispositivo (ex.: o caso
+  // real PlaySim/NewOne/Smart TV) nao aparece aqui por falta desses
+  // eixos, e' o comportamento esperado deste checkpoint, nao um bug.
+  //
+  // Erros da busca nunca podem interromper o atendimento real -- por
+  // isso o try/catch dedicado, isolado do restante do fluxo.
+  try {
+    const shadowConhecimentoSuporte = await buscarConhecimentoSuporte(conteudo, {
+      servidor: acessoSelecionadoServidor,
+    });
+    if (shadowConhecimentoSuporte.outcome === "encontrado") {
+      console.log("[shadow:conhecimento_suporte] encontrado", {
+        conhecimentoId: shadowConhecimentoSuporte.conhecimentoId,
+        titulo: shadowConhecimentoSuporte.titulo,
+        score: shadowConhecimentoSuporte.score,
+        contexto: { servidor: acessoSelecionadoServidor },
+      });
+    } else {
+      console.log(`[shadow:conhecimento_suporte] ${shadowConhecimentoSuporte.outcome}`, {
+        contexto: { servidor: acessoSelecionadoServidor },
+      });
+    }
+  } catch (erroShadowConhecimentoSuporte) {
+    console.log(
+      "[shadow:conhecimento_suporte] erro (ignorado, nao afeta atendimento)",
+      erroShadowConhecimentoSuporte instanceof Error
+        ? erroShadowConhecimentoSuporte.message
+        : String(erroShadowConhecimentoSuporte),
+    );
+  }
+  // ────────────────────────────────────────────────────────────────
 
   // "Regra de ouro" (secao 7 do levantamento): contextoCompleto e' o
   // UNICO texto de contexto a partir daqui -- passado identico para

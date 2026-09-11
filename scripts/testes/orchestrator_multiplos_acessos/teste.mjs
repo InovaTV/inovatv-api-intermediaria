@@ -23,7 +23,18 @@ const {
 const { resetarMensagens, mensagensRegistradas } = await import("./fake_mensagens_atendimento.mjs");
 const { configurarMatch, configurarStatus, resetarRocketIntermediaria } =
   await import("./fake_rocket_intermediaria.mjs");
-const { definirProximaRespostaGemini, resetarGemini } = await import("./fake_gemini_client.mjs");
+const { definirProximaRespostaGemini, resetarGemini, chamadasGemini } = await import("./fake_gemini_client.mjs");
+const {
+  definirProximoResultadoConhecimentoInstitucional,
+  resetarConhecimentoInstitucionalFake,
+  chamadasConhecimentoInstitucional,
+} = await import("./fake_conhecimento.mjs");
+const {
+  definirProximoResultadoConhecimentoSuporte,
+  forcarErroConhecimentoSuporte,
+  resetarConhecimentoSuporteFake,
+  chamadasConhecimentoSuporte,
+} = await import("./fake_conhecimento_suporte.mjs");
 const {
   resetarWhatsapp,
   getMensagensEnviadas,
@@ -87,6 +98,8 @@ function resetarTudo() {
   resetarTokensRenovacao();
   resetarRenovacoesLote();
   resetarUnitvContaClient();
+  resetarConhecimentoInstitucionalFake();
+  resetarConhecimentoSuporteFake();
 }
 
 function req(corpo) {
@@ -1676,6 +1689,229 @@ async function testeZ9() {
   }
 }
 
+// =======================================================================
+// Fase 3, Checkpoint 2 (shadow mode, aprovado 2026-09-11): provam as 6
+// propriedades exigidas -- chamada sombra executada; resultado nunca
+// altera a resposta/Gemini; erro da busca sombra nunca interrompe o
+// atendimento; conhecimento_institucional continua consultado
+// normalmente; e nenhum dado sensivel entra no log. (A exclusao de
+// status='candidato' e' do algoritmo real, ja coberta exaustivamente
+// pela suite isolada scripts/testes/conhecimento_suporte/ -- aqui
+// _shared/conhecimento_suporte.ts e' fake, entao nao ha o que reprovar
+// nesse eixo especifico nesta suite.)
+// =======================================================================
+
+// ---------------------------------------------------------------------
+// Sombra 1 -- a chamada sombra acontece, e recebe SOMENTE servidor
+// (nunca aplicativo/dispositivo, que o Orquestrador nao possui de
+// forma estruturada hoje) -- mesmo cenario base do Teste Z1 (selecao
+// guardada = BLAZE, "quero renovar" isolado).
+// ---------------------------------------------------------------------
+async function testeSombra1() {
+  resetarTudo();
+  configurarSigmaMaisUnitv();
+  getConversaAtual().acesso_selecionado = PUBLIC_ID_A; // BLAZE
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
+  });
+
+  await handler(req({ telefone: TELEFONE, conteudo: "quero renovar" }));
+
+  const chamadas = chamadasConhecimentoSuporte();
+  ok(chamadas.length === 1, "Sombra 1: buscarConhecimentoSuporte foi chamada exatamente 1 vez");
+  ok(chamadas[0]?.pergunta === "quero renovar", "Sombra 1: pergunta passada e' o conteudo real da mensagem");
+  ok(chamadas[0]?.contexto?.servidor === "BLAZE", "Sombra 1: contexto.servidor = BLAZE (selecao guardada)");
+  ok(
+    chamadas[0]?.contexto?.aplicativo === undefined,
+    "Sombra 1: contexto.aplicativo NUNCA e' inventado (nao existe estruturado no Orquestrador)",
+  );
+  ok(
+    chamadas[0]?.contexto?.dispositivo === undefined,
+    "Sombra 1: contexto.dispositivo NUNCA e' inventado (nao existe estruturado no Orquestrador)",
+  );
+}
+
+// ---------------------------------------------------------------------
+// Sombra 2 -- sem selecao guardada nenhuma (fluxo do Teste A), o
+// contexto.servidor passado tambem e' null -- nunca inventa um servidor
+// que o Orquestrador nao tem.
+// ---------------------------------------------------------------------
+async function testeSombra2() {
+  resetarTudo();
+  configurarDoisAcessos();
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
+  });
+
+  await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
+
+  const chamadas = chamadasConhecimentoSuporte();
+  ok(chamadas.length === 1, "Sombra 2: buscarConhecimentoSuporte chamada mesmo sem selecao guardada");
+  ok(
+    chamadas[0]?.contexto?.servidor === null,
+    "Sombra 2: sem selecao guardada, contexto.servidor e' null (nao inventado)",
+  );
+}
+
+// ---------------------------------------------------------------------
+// Sombra 3 -- resultado "encontrado" da busca sombra NAO altera a
+// resposta ao cliente nem o contexto enviado ao Gemini (cenario do
+// Teste A, lista de multiplos acessos).
+// ---------------------------------------------------------------------
+async function testeSombra3() {
+  resetarTudo();
+  configurarDoisAcessos();
+  definirProximoResultadoConhecimentoSuporte({
+    outcome: "encontrado",
+    conhecimentoId: "sombra-nao-deve-aparecer",
+    titulo: "PROCEDIMENTO SOMBRA -- NAO PODE CHEGAR NO CLIENTE",
+    procedimento: "PROCEDIMENTO SOMBRA -- NAO PODE CHEGAR NO CLIENTE NEM NO GEMINI",
+    score: 3,
+  });
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
+  const body = await resp.json();
+  const enviadas = getMensagensEnviadas();
+  const texto = enviadas[0]?.texto ?? "";
+
+  ok(resp.status === 200, "Sombra 3: HTTP 200 (fluxo normal, identico ao Teste A)");
+  ok(
+    body?.validacao?.aprovado === false && body?.validacao?.motivo === "renovacao:acesso_nao_determinado",
+    "Sombra 3: validacao identica ao Teste A -- resultado sombra nao mudou o comportamento",
+  );
+  ok(
+    !texto.includes("PROCEDIMENTO SOMBRA"),
+    "Sombra 3: procedimento/titulo do resultado sombra NUNCA aparece na mensagem ao cliente",
+  );
+  const chamadaGemini = chamadasGemini().at(-1);
+  ok(
+    !String(chamadaGemini?.contexto ?? "").includes("PROCEDIMENTO SOMBRA"),
+    "Sombra 3: contextoCompleto passado ao Gemini NUNCA contem o resultado sombra",
+  );
+}
+
+// ---------------------------------------------------------------------
+// Sombra 4 -- erro na busca sombra (throw) NUNCA interrompe o
+// atendimento real (cenario do Teste B: selecao por servidor citado,
+// fluxo completo ate a mensagem interativa).
+// ---------------------------------------------------------------------
+async function testeSombra4() {
+  resetarTudo();
+  configurarDoisAcessos();
+  forcarErroConhecimentoSuporte(new Error("falha simulada na busca sombra"));
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Perfeito, vou preparar a renovação do BLAZE.", esclarecimento: false },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
+  const body = await resp.json();
+
+  ok(resp.status === 200, "Sombra 4: HTTP 200 mesmo com a busca sombra lançando erro");
+  ok(body?.validacao?.aprovado === true, "Sombra 4: Validador aprova normalmente, erro sombra nao propagou");
+  ok(
+    getMensagensInterativasEnviadas().some((m) => m.texto.includes("Confira os dados")),
+    "Sombra 4: mensagem 2 (interativa) enviada normalmente, atendimento nao foi interrompido",
+  );
+  ok(chamadasConhecimentoSuporte().length === 1, "Sombra 4: a chamada sombra foi de fato tentada (nao pulada)");
+}
+
+// ---------------------------------------------------------------------
+// Sombra 5 -- conhecimento_institucional (conhecimento.ts) continua
+// sendo consultado normalmente e continua sendo o UNICO dos dois a
+// alimentar o contexto do Gemini -- mesmo com a busca sombra tambem
+// retornando "encontrado" ao mesmo tempo.
+// ---------------------------------------------------------------------
+async function testeSombra5() {
+  resetarTudo();
+  configurarDoisAcessos();
+  definirProximoResultadoConhecimentoInstitucional({
+    outcome: "encontrado",
+    titulo: "Titulo institucional real",
+    conteudo: "Conteudo institucional real, precisa continuar chegando ao Gemini.",
+  });
+  definirProximoResultadoConhecimentoSuporte({
+    outcome: "encontrado",
+    conhecimentoId: "sombra-2",
+    titulo: "Titulo da base evolutiva (sombra)",
+    procedimento: "Procedimento da base evolutiva -- nunca deve ir ao Gemini",
+    score: 1,
+  });
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
+  });
+
+  await handler(req({ telefone: TELEFONE, conteudo: "quero renovar meu plano" }));
+
+  ok(
+    chamadasConhecimentoInstitucional().length === 1 &&
+      chamadasConhecimentoInstitucional()[0]?.pergunta === "quero renovar meu plano",
+    "Sombra 5: conhecimento_institucional continua sendo consultado normalmente, com o conteudo real",
+  );
+  const chamadaGemini = chamadasGemini().at(-1);
+  const contextoEnviado = String(chamadaGemini?.contexto ?? "");
+  ok(
+    contextoEnviado.includes("CONHECIMENTO INSTITUCIONAL - Titulo institucional real") &&
+      contextoEnviado.includes("Conteudo institucional real"),
+    "Sombra 5: contexto do Gemini contem o CONHECIMENTO INSTITUCIONAL normalmente",
+  );
+  ok(
+    !contextoEnviado.includes("base evolutiva") && !contextoEnviado.includes("Procedimento da base evolutiva"),
+    "Sombra 5: contexto do Gemini NAO contem nada da Base Evolutiva de Suporte (sombra)",
+  );
+}
+
+// ---------------------------------------------------------------------
+// Sombra 6 -- o log da chamada sombra nao contem dados sensiveis
+// (telefone do cliente, token interno, texto bruto da mensagem).
+// ---------------------------------------------------------------------
+async function testeSombra6() {
+  resetarTudo();
+  configurarDoisAcessos();
+  definirProximoResultadoConhecimentoSuporte({
+    outcome: "encontrado",
+    conhecimentoId: "sombra-3",
+    titulo: "Titulo qualquer",
+    procedimento: "Procedimento qualquer",
+    score: 1,
+  });
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Claro, vou te ajudar a renovar seu acesso!", esclarecimento: false },
+  });
+
+  const logsCapturados = [];
+  const logOriginal = console.log;
+  console.log = (...args) => {
+    logsCapturados.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+  };
+  try {
+    await handler(
+      req({ telefone: TELEFONE, conteudo: "mensagem sensivel do cliente, nao pode vazar no log" }),
+    );
+  } finally {
+    console.log = logOriginal;
+  }
+
+  const linhasSombra = logsCapturados.filter((l) => l.includes("[shadow:conhecimento_suporte]"));
+  ok(linhasSombra.length === 1, "Sombra 6: exatamente 1 linha de log da chamada sombra");
+  const linha = linhasSombra[0] ?? "";
+  ok(!linha.includes(TELEFONE), "Sombra 6: log sombra NAO contem o telefone do cliente");
+  ok(!linha.includes(TOKEN_INTERNO), "Sombra 6: log sombra NAO contem o token interno");
+  ok(
+    !linha.includes("mensagem sensivel do cliente"),
+    "Sombra 6: log sombra NAO contem o texto bruto da mensagem do cliente",
+  );
+}
+
 await testeA();
 await testeB();
 await testeC();
@@ -1717,6 +1953,12 @@ await testeZ6();
 await testeZ7();
 await testeZ8();
 await testeZ9();
+await testeSombra1();
+await testeSombra2();
+await testeSombra3();
+await testeSombra4();
+await testeSombra5();
+await testeSombra6();
 
 console.log(`\n${falhas === 0 ? "TODOS OS TESTES PASSARAM" : `${falhas} FALHA(S)`}`);
 process.exit(falhas === 0 ? 0 : 1);
