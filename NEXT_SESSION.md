@@ -1,5 +1,118 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+> **✅ CHECKPOINT 2026-09-13 — ESPECIFICAÇÃO DO PORTAL DE RENOVAÇÃO
+> TOPE TV (`topetv.com.br/renovacao`) FECHADA. NADA IMPLEMENTADO
+> AINDA.** Projeto parado deliberadamente em etapa de especificação,
+> por pedido explícito do usuário, justamente para poder ser retomado
+> em outra máquina sem depender desta conversa. Sessão inteira foi
+> investigação/leitura: código lido, painel administrativo do Rocket
+> navegado só em modo leitura, página pública do Portal do cliente de
+> teste inspecionada sem clicar em nenhuma ação de renovação/
+> pagamento. Nenhuma Edge Function nova criada, nenhum arquivo de
+> código alterado, nenhuma migration, nenhum deploy.
+>
+> **Decisão arquitetural registrada (ainda não implementada):**
+> ```
+> Rocket "Vence Hoje"
+>    → portal próprio Tope TV (https://topetv.com.br/renovacao)
+>    → cliente informa telefone
+>    → /match (já existe)
+>    → /status (já existe, por candidato)
+>    → 0/1/N resultados (nunca escolhe sozinho -- mesma disciplina já
+>      usada no fluxo de WhatsApp)
+>    → confirmação (nome PARCIALMENTE MASCARADO + plano + valor +
+>      vencimento -- NUNCA usuário/senha)
+>    → tokens_renovacao (já existe, criarTokenRenovacao)
+>    → REDIRECT para confirmacao-renovacao?token=... (já existe, ZERO
+>      alteração)
+>    → Woovi/OpenPix (já existe)
+>    → openpix-webhook (já existe)
+>    → renovacao_em_andamento → GitHub Actions → Playwright →
+>      Rocket/Sigma/UniTV (já existe)
+>    → renovacao-sigma-resultado (já existe)
+>    → tela final: pagamento confirmado → renovação concluída, novo
+>      vencimento
+> ```
+>
+> **Reaproveitar sem alteração nenhuma** (comprovado por leitura de
+> código nesta investigação): `match`/`status`
+> (`_shared/rocket_intermediaria.ts`), `_shared/tokens_renovacao.ts`,
+> `_shared/renovacoes_lote.ts`, `_shared/renovacao_confirmacao.ts`,
+> `confirmacao-renovacao/index.ts`, `_shared/conversas_estado.ts`
+> (`buscarOuCriarConversa`), `_shared/openpix_client.ts` +
+> `_shared/cobrancas_pix.ts`, `openpix-webhook`,
+> `renovacao-sigma-resultado`, `renovacao-sigma-watchdog`, o workflow
+> completo do GitHub Actions/Playwright
+> (`scripts/renovacao-sigma-workflow.mjs` +
+> `.github/workflows/renovacao-sigma.yml`). **Único componente
+> genuinamente novo identificado: 1 Edge Function** (nome provisório
+> `renovacao-iniciar`) -- telefone → identificação → confirmação →
+> criação do token → redirect para a tela que já existe.
+>
+> **Portal do Cliente do Rocket (`pixrocket.net`) -- investigado a
+> fundo e DESCARTADO como via de identificação** (três sessões de
+> investigação somente leitura). Tem link individual por cliente
+> (`/c/{uuid}/dados/`), mas: (a) o campo de link externo disponível
+> ("Contatos do Portal", Tipo Site/Outro) só aceita URL estática, sem
+> variável/tag de cliente -- confirmado pelo próprio texto de ajuda do
+> Rocket ("Informe a URL completa"); (b) a segmentação máxima é por
+> servidor, nunca por cliente individual; (c) a página não tem nenhum
+> JavaScript próprio (só Bootstrap + beacon da Cloudflare); (d) **o
+> próprio Rocket envia `Referrer-Policy: same-origin` no cabeçalho
+> HTTP real da página -- comprovado ao vivo via fetch de leitura** --
+> o que bloquearia até o vazamento acidental do UUID via `Referer` num
+> link externo. Nenhuma tag `{UUID}`/`{PUBLIC_ID}`/`{LINK_PORTAL}`
+> encontrada em nenhuma tela administrativa (Configurações, Alertas,
+> Contatos, Tags Personalizadas). **Conclusão: nenhuma informação do
+> cliente chega de forma confiável a um domínio externo a partir desse
+> Portal. Decisão: usar o Rocket só como remetente da mensagem "Vence
+> Hoje" com o link do nosso próprio portal -- nunca como mecanismo de
+> identificação.**
+>
+> **Infraestrutura preferencial: `topetv.com.br`, já na Hostinger.**
+> Confirmado (achado já registrado nesta mesma seção, "Plano A -- TOPE
+> TV", logo abaixo): domínio registrado, hospedado no mesmo plano que
+> antes atendia `inovatv.pro`, site institucional já publicado com
+> HTTPS ativo (`/`, `/privacidade.html`, `/termos.html` funcionando),
+> `contato@topetv.com.br`. **Não confirmado ainda** (precisa checar na
+> própria Hostinger, não no código): que tecnologia serve esse site
+> hoje; se há acesso de upload (FTP/SFTP/hPanel) já utilizável; se essa
+> conta Hostinger é a mesma (ou diferente) da já usada pelo
+> `inovatv_painel` para armazenamento de APK/ícones/banners; se há
+> DNS/CNAME configurável para apontar `/renovacao` para uma Edge
+> Function do Supabase.
+>
+> **Achado técnico relevante para a implementação futura:** as funções
+> JSON deste projeto usam CORS travado numa única origem
+> (`_shared/http.ts` → só `https://inovatv-api-intermediaria.vercel.app`).
+> Recomendação já registrada: replicar o padrão de
+> `confirmacao-renovacao` (HTML puro, formulário `<form method="POST">`
+> apontando direto pra Edge Function) em vez de `fetch`/AJAX a partir
+> de `topetv.com.br` -- formulário tradicional não é afetado por CORS,
+> evitando ter que abrir CORS pra um domínio novo.
+>
+> **Pendências deliberadas para a próxima sessão, nenhuma decidida
+> ainda:**
+> 1. Verificar tecnicamente a Hostinger/site atual de `topetv.com.br`
+>    (tecnologia, acesso de upload, DNS) -- só então decidir a forma
+>    exata de disponibilizar `/renovacao` sem afetar o site
+>    institucional.
+> 2. Formato exato do mascaramento do nome na tela de confirmação.
+> 3. Rate limiting / proteção contra enumeração de telefone na nova
+>    function pública (hoje não existe nenhum mecanismo assim em
+>    nenhuma função do projeto).
+> 4. Se a v1 já oferece "renovar todos" (lote, já existente em
+>    `_shared/renovacoes_lote.ts`) ou só seleção individual.
+> 5. Confirmar empiricamente (com autorização explícita, ainda não
+>    dada) se a normalização "com/sem o 9" que a documentação OpenAPI
+>    do Rocket promete pro filtro `telefone` (`GET
+>    /gerenciador/api/v1/clientes/`) realmente funciona na prática --
+>    hoje é só documentado pelo Rocket, nunca testado por nós.
+>
+> **PRÓXIMO PASSO, quando retomado: item 1 acima -- verificação técnica
+> da Hostinger/site atual. Só depois disso, especificação final de
+> onde o código novo entra, e só então o primeiro código.**
+
 > **✅ CHECKPOINT 2026-09-11 (validação real) — FASE 4, CHECKPOINT D1
 > (SHADOW MODE) CONFIRMADO COM TRÁFEGO REAL.** Pipeline completo
 > A→B→C→D1 (diagnóstico de mídia → decrypt/download via Wasender →
