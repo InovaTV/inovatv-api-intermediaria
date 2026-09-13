@@ -141,6 +141,14 @@ function clienteDetalhe(overrides = {}) {
   ok(html.includes('name="etapa" value="carrinho"'), "4A single_match: formulario aponta pra etapa=carrinho");
   ok(!html.includes("SENHA-SECRETA-NUNCA-DEVE-APARECER"), "4A single_match: senha NUNCA aparece no HTML");
   ok(!html.includes("DEVKEY-NUNCA-DEVE-APARECER"), "4A single_match: device_key NUNCA aparece no HTML");
+
+  // Correcao de UX (Checkpoint 7, apos teste real): checkbox NUNCA nasce
+  // marcado, e o botao Continuar nasce desabilitado -- nao pode dar a
+  // impressao de "todos serao renovados".
+  ok(!/<input type="checkbox"[^>]*checked/.test(html), "4A single_match: checkbox NUNCA nasce marcado");
+  ok(/id="btn-continuar"[^>]*disabled/.test(html), "4A single_match: botao Continuar nasce desabilitado");
+  ok(html.includes("Selecione abaixo quais acessos"), "4A single_match: texto explicativo de selecao presente");
+  ok(html.includes("Selecione pelo menos um acesso"), "4A single_match: aviso de selecao minima presente");
 }
 
 {
@@ -175,13 +183,16 @@ function clienteDetalhe(overrides = {}) {
 }
 
 {
+  // O card agora usa o SERVIDOR como titulo (correcao de UX, Checkpoint 7)
+  // -- e' o campo relevante para testar escaping aqui, ja que o nome do
+  // cliente deixou de ser exibido por item.
   resetar();
-  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-F", nome: "<script>alert(1)</script>", usuario: "u" }] });
-  respostasDetalhe["pub-F"] = clienteDetalhe({ nome: "<script>alert(1)</script>" });
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-F", nome: "Cliente Teste", usuario: "u" }] });
+  respostasDetalhe["pub-F"] = clienteDetalhe({ servidor: { nome: "<script>alert(1)</script>" } });
   const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
   const html = await resp.text();
-  ok(!html.includes("<script>alert(1)</script>"), "4A escaping: nome com HTML nunca aparece cru na pagina");
-  ok(html.includes("&lt;script&gt;"), "4A escaping: nome com HTML aparece escapado");
+  ok(!html.includes("<script>alert(1)</script>"), "4A escaping: servidor com HTML nunca aparece cru na pagina");
+  ok(html.includes("&lt;script&gt;"), "4A escaping: servidor com HTML aparece escapado");
 }
 
 // =======================================================================
@@ -206,6 +217,10 @@ function clienteDetalhe(overrides = {}) {
   ok(html.includes("Confirme sua renovação"), "4B individual: tela de conferencia renderizada");
   ok(html.includes("BLAZE"), "4B individual: servidor exibido na conferencia");
   ok(html.includes("35,00"), "4B individual: total exibido");
+  ok(html.includes("828667229"), "4B individual: usuario do acesso exibido individualmente na conferencia");
+  ok(html.includes("1 acesso selecionado"), "4B individual: resumo no singular");
+  ok(html.includes("Total a pagar"), "4B individual: rotulo 'Total a pagar' presente");
+  ok(html.includes("gerada uma cobrança Pix"), "4B individual: texto explicativo do Pix presente");
   ok(html.includes('name="etapa" value="confirmar"'), "4B individual: formulario aponta pra etapa=confirmar");
   ok(html.includes('name="acao" value="aceitar"') && html.includes('name="acao" value="cancelar"'), "4B individual: botoes ACEITO e CANCELAR presentes");
 
@@ -248,6 +263,8 @@ function clienteDetalhe(overrides = {}) {
   ok(resp.status === 200, "4B lote: HTTP 200");
   ok(html.includes("BLAZE") && html.includes("NewOne"), "4B lote: os 2 servidores aparecem na conferencia");
   ok(html.includes("70,00"), "4B lote: total somado (35 + 35 = 70,00)");
+  ok(html.includes("2 acessos selecionados"), "4B lote: resumo no plural, com a quantidade certa");
+  ok(html.includes("Total a pagar"), "4B lote: rotulo 'Total a pagar' presente");
 
   const lotes = lerTabela("renovacoes_lote");
   ok(lotes.length === 1, "4B lote: exatamente 1 linha criada em renovacoes_lote (capa)");
@@ -525,6 +542,142 @@ for (const [outcome, textoEsperado] of casos) {
   const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
   const html = await resp.text();
   ok(html.includes("BLAZE") && html.includes('value="pub-1"'), "5) rate limit permitido: fluxo normal do Portal continua identico");
+}
+
+// =======================================================================
+// Regra de exibicao do nome (revisao de UX pos-Checkpoint 7, antes do
+// deploy) -- puramente apresentacao, nao muda identificacao/consulta/
+// selecao/token/Pix. Regra: nomes DISTINTOS entre os acessos -> mostra
+// "Nome — Servidor"; nomes IGUAIS -> so' o servidor (layout atual).
+// Testado nas duas telas (carrinho e conferencia).
+// =======================================================================
+
+// -----------------------------------------------------------------------
+// Cenario A -- mesmo cliente em todos os acessos -> nome NAO repetido,
+// so' o servidor como titulo (carrinho).
+// -----------------------------------------------------------------------
+{
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-jose-1", nome: "José", usuario: "u1" },
+      { id: "pub-jose-2", nome: "José", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-jose-1"] = clienteDetalhe({ servidor: { nome: "ChannelTV" } });
+  respostasDetalhe["pub-jose-2"] = clienteDetalhe({ servidor: { nome: "UNITV" } });
+
+  const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
+  const html = await resp.text();
+  ok(html.includes("<strong>ChannelTV</strong>"), "cenario A (carrinho): titulo e' so' o servidor, sem nome repetido");
+  ok(html.includes("<strong>UNITV</strong>"), "cenario A (carrinho): idem pro segundo acesso");
+  ok(!html.includes("José — "), "cenario A (carrinho): nome NAO aparece no titulo quando e' o mesmo em todos os acessos");
+}
+
+// -----------------------------------------------------------------------
+// Cenario B -- clientes DIFERENTES compartilhando o telefone -> nome
+// aparece em cada card, junto com o servidor (carrinho).
+// -----------------------------------------------------------------------
+{
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-joao", nome: "João", usuario: "u1" },
+      { id: "pub-maria", nome: "Maria", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-joao"] = clienteDetalhe({ nome: "João", servidor: { nome: "ChannelTV" } });
+  respostasDetalhe["pub-maria"] = clienteDetalhe({ nome: "Maria", servidor: { nome: "UNITV" } });
+
+  const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
+  const html = await resp.text();
+  ok(html.includes("<strong>João — ChannelTV</strong>"), "cenario B (carrinho): nome + servidor quando os nomes sao diferentes");
+  ok(html.includes("<strong>Maria — UNITV</strong>"), "cenario B (carrinho): idem pro segundo cliente/acesso");
+}
+
+// -----------------------------------------------------------------------
+// Mesma regra na tela de CONFERENCIA (2 itens do mesmo cliente -> sem
+// nome; usa o fluxo real de carrinho -> conferencia, nao so' a
+// identificacao).
+// -----------------------------------------------------------------------
+{
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-mesmo-1", nome: "Ana", usuario: "u1" },
+      { id: "pub-mesmo-2", nome: "Ana", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-mesmo-1"] = clienteDetalhe({ nome: "Ana", servidor: { nome: "BLAZE" } });
+  respostasDetalhe["pub-mesmo-2"] = clienteDetalhe({ nome: "Ana", servidor: { nome: "NewOne" } });
+
+  const resp = await handler(reqPostForm([
+    ["etapa", "carrinho"], ["telefone", "5517999999999"],
+    ["publicId", "pub-mesmo-1"], ["publicId", "pub-mesmo-2"],
+  ]));
+  const html = await resp.text();
+  ok(html.includes("<strong>BLAZE</strong>"), "cenario A (conferencia): titulo e' so' o servidor");
+  ok(!html.includes("Ana — "), "cenario A (conferencia): nome NAO repetido quando e' o mesmo cliente");
+}
+
+// -----------------------------------------------------------------------
+// Mesma regra na tela de CONFERENCIA, clientes diferentes -> nome
+// aparece em cada card.
+// -----------------------------------------------------------------------
+{
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-dif-1", nome: "Carlos", usuario: "u1" },
+      { id: "pub-dif-2", nome: "Beatriz", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-dif-1"] = clienteDetalhe({ nome: "Carlos", servidor: { nome: "BLAZE" } });
+  respostasDetalhe["pub-dif-2"] = clienteDetalhe({ nome: "Beatriz", servidor: { nome: "NewOne" } });
+
+  const resp = await handler(reqPostForm([
+    ["etapa", "carrinho"], ["telefone", "5517999999999"],
+    ["publicId", "pub-dif-1"], ["publicId", "pub-dif-2"],
+  ]));
+  const html = await resp.text();
+  ok(html.includes("<strong>Carlos — BLAZE</strong>"), "cenario B (conferencia): nome + servidor exibidos quando diferentes");
+  ok(html.includes("<strong>Beatriz — NewOne</strong>"), "cenario B (conferencia): idem pro segundo cliente/acesso");
+}
+
+// -----------------------------------------------------------------------
+// Nenhum acesso selecionado inicialmente / botao desabilitado / logica
+// de habilitacao presente no HTML gerado. NOTA HONESTA: este teste roda
+// em Node, sem DOM real -- prova que (a) nenhum checkbox nasce marcado,
+// (b) o botao nasce "disabled", (c) a logica de habilitacao (JS) esta'
+// presente e correta no HTML gerado. Nao executa um clique real num
+// navegador -- isso so' um teste manual/E2E provaria de verdade.
+// -----------------------------------------------------------------------
+{
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-x1", nome: "Cliente X", usuario: "u1" },
+      { id: "pub-x2", nome: "Cliente X", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-x1"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  respostasDetalhe["pub-x2"] = clienteDetalhe({ servidor: { nome: "NewOne" } });
+
+  const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
+  const html = await resp.text();
+
+  const totalCheckboxes = (html.match(/<input type="checkbox" name="publicId"/g) || []).length;
+  const totalMarcados = (html.match(/<input type="checkbox" name="publicId"[^>]*checked/g) || []).length;
+  ok(totalCheckboxes === 2, "nenhum-selecionado: os 2 checkboxes existem");
+  ok(totalMarcados === 0, "nenhum-selecionado: NENHUM checkbox nasce marcado (nem com 2 acessos)");
+  ok(/id="btn-continuar"[^>]*disabled/.test(html), "botao desabilitado: 'Continuar' nasce desabilitado");
+  ok(html.includes("botao.disabled = !algumMarcado"), "botao habilita apos selecao: logica de habilitacao presente e correta no HTML gerado");
+  ok(html.includes("addEventListener('change', atualizar)"), "botao habilita apos selecao: listener de mudanca ligado a cada checkbox");
 }
 
 console.log(`\n${total - falhas}/${total} passaram`);

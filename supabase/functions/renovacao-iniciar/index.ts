@@ -57,11 +57,15 @@ function paginaHtml(titulo: string, corpo: string): string {
   input[type="tel"] { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 8px; border: 1px solid #30363D; background: #0D1117; color: #E5E7EB; font-size: 16px; margin-bottom: 16px; }
   button { padding: 12px 24px; border-radius: 8px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
   .primario { background: #22C55E; color: #0D1117; width: 100%; }
+  .primario:disabled { background: #374151; color: #9CA3AF; cursor: not-allowed; }
   .acesso { border: 1px solid #30363D; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
   .acesso .linha { display: flex; justify-content: space-between; font-size: 14px; margin: 3px 0; }
   .acesso .rotulo { color: #9CA3AF; }
   .acesso label { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #E5E7EB; margin-bottom: 10px; cursor: pointer; }
   .acesso input[type="checkbox"] { width: 18px; height: 18px; }
+  .nota { color: #9CA3AF; font-size: 13px; }
+  .resumo { margin-top: 16px; }
+  .linha.total { display: flex; justify-content: space-between; font-weight: 600; margin-top: 8px; border-top: 1px solid #30363D; padding-top: 10px; }
 </style>
 </head>
 <body><div class="card">${corpo}</div></body>
@@ -135,19 +139,37 @@ interface AcessoParaExibir {
   valorFormatado: string;
 }
 
+// Correcao de UX (apos teste real, Checkpoint 7): os checkboxes nascem
+// DESMARCADOS (nunca "checked") -- selecionados por padrao dava a
+// impressao enganosa de "todos esses acessos serao renovados". O botao
+// "Continuar" nasce desabilitado e so' habilita via JS quando pelo menos
+// 1 checkbox estiver marcado -- elimina de vez a possibilidade de
+// avancar sem perceber quantos acessos estao selecionados. O titulo de
+// cada card e' o SERVIDOR (o que realmente distingue um acesso do outro
+// quando todos pertencem ao mesmo cliente) -- SO' quando /match devolveu
+// mais de um NOME distinto (multiple_matches podendo ser clientes
+// DIFERENTES compartilhando o telefone, nao so' o mesmo cliente com
+// varios acessos) o nome tambem entra no titulo ("Nome — Servidor"),
+// porque nesse caso e' informacao necessaria pra reconhecer o cadastro
+// certo. Regra puramente de apresentacao -- nao muda identificacao,
+// consulta ao Rocket, selecao, token ou Pix.
+function tituloDoAcesso(nome: string, servidor: string, mostrarNome: boolean): string {
+  return mostrarNome ? `${escapeHtml(nome)} — ${escapeHtml(servidor)}` : escapeHtml(servidor);
+}
+
 function paginaCarrinho(telefone: string, acessos: AcessoParaExibir[]): Response {
+  const mostrarNome = new Set(acessos.map((a) => a.nome)).size > 1;
   const itensHtml = acessos
     .map(
       (a) => `<div class="acesso">
         <label>
-          <input type="checkbox" name="publicId" value="${escapeHtml(a.publicId)}" checked>
-          ${escapeHtml(a.nome)}
+          <input type="checkbox" name="publicId" value="${escapeHtml(a.publicId)}">
+          <strong>${tituloDoAcesso(a.nome, a.servidor, mostrarNome)}</strong>
         </label>
         <div class="linha"><span class="rotulo">Usuário</span><span>${escapeHtml(a.usuario)}</span></div>
-        <div class="linha"><span class="rotulo">Servidor</span><span>${escapeHtml(a.servidor)}</span></div>
         <div class="linha"><span class="rotulo">Plano</span><span>${escapeHtml(a.plano)}</span></div>
         <div class="linha"><span class="rotulo">Vencimento</span><span>${escapeHtml(a.vencimentoFormatado)}</span></div>
-        <div class="linha"><span class="rotulo">Valor</span><span>R$ ${escapeHtml(a.valorFormatado)}</span></div>
+        <div class="linha"><span class="rotulo">Valor da renovação</span><span>R$ ${escapeHtml(a.valorFormatado)}</span></div>
       </div>`,
     )
     .join("\n");
@@ -156,20 +178,36 @@ function paginaCarrinho(telefone: string, acessos: AcessoParaExibir[]): Response
     paginaHtml(
       "Seus acessos",
       `<h1>Seus acessos</h1>
+       <p>Encontramos estes acessos cadastrados para este número de celular. Selecione abaixo quais acessos você deseja renovar. Você pode escolher um ou mais acessos.</p>
        <form method="POST">
          <input type="hidden" name="etapa" value="carrinho">
          <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
          ${itensHtml}
-         <button class="primario" type="submit">Continuar</button>
-       </form>`,
+         <p class="nota">Selecione pelo menos um acesso para continuar.</p>
+         <button class="primario" type="submit" id="btn-continuar" disabled>Continuar</button>
+       </form>
+       <script>
+         (function () {
+           var caixas = document.querySelectorAll('input[name="publicId"]');
+           var botao = document.getElementById('btn-continuar');
+           function atualizar() {
+             var algumMarcado = Array.prototype.some.call(caixas, function (c) { return c.checked; });
+             botao.disabled = !algumMarcado;
+           }
+           for (var i = 0; i < caixas.length; i++) caixas[i].addEventListener('change', atualizar);
+         })();
+       </script>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
 }
 
 interface ItemConferencia {
+  nome: string;
   servidor: string;
+  usuario: string;
   plano: string;
+  vencimentoFormatado: string;
   valorFormatado: string;
 }
 
@@ -177,24 +215,44 @@ interface ItemConferencia {
 // verdade (isso e' o Checkpoint 4C, que vai chamar confirmarRenovacao())
 // -- o formulario ja aponta pra etapa=confirmar, que por enquanto cai no
 // fallback generico do Deno.serve abaixo, sem excecao.
+//
+// Correcao de UX (apos teste real, Checkpoint 7): cada acesso continua
+// identificavel individualmente (usuario/plano/vencimento/valor), nunca
+// so' uma linha "Servidor (Plano) -- Valor" -- essencial numa operacao
+// financeira real. "Resumo da renovacao" deixa explicito quantos acessos
+// foram selecionados e o texto abaixo explica o que o ACEITO realmente
+// faz (gera Pix, renovacao so' apos confirmar o pagamento).
 function paginaConferencia(
   tokenBruto: string,
   telefone: string,
   itens: ItemConferencia[],
   totalFormatado: string,
 ): Response {
+  const mostrarNome = new Set(itens.map((i) => i.nome)).size > 1;
   const itensHtml = itens
     .map(
-      (i) => `<div class="linha"><span class="rotulo">${escapeHtml(i.servidor)} (${escapeHtml(i.plano)})</span><span>R$ ${escapeHtml(i.valorFormatado)}</span></div>`,
+      (i) => `<div class="acesso">
+        <strong>${tituloDoAcesso(i.nome, i.servidor, mostrarNome)}</strong>
+        <div class="linha"><span class="rotulo">Usuário</span><span>${escapeHtml(i.usuario)}</span></div>
+        <div class="linha"><span class="rotulo">Plano</span><span>${escapeHtml(i.plano)}</span></div>
+        <div class="linha"><span class="rotulo">Vencimento atual</span><span>${escapeHtml(i.vencimentoFormatado)}</span></div>
+        <div class="linha"><span class="rotulo">Valor</span><span>R$ ${escapeHtml(i.valorFormatado)}</span></div>
+      </div>`,
     )
     .join("\n");
+
+  const rotuloQuantidade = itens.length === 1 ? "1 acesso selecionado" : `${itens.length} acessos selecionados`;
 
   return new Response(
     paginaHtml(
       "Confirmar renovação",
       `<h1>Confirme sua renovação</h1>
        ${itensHtml}
-       <div class="linha" style="margin-top:14px;font-weight:600;"><span>Total</span><span>R$ ${escapeHtml(totalFormatado)}</span></div>
+       <div class="resumo">
+         <p class="nota">${escapeHtml(rotuloQuantidade)}</p>
+         <div class="linha total"><span>Total a pagar</span><span>R$ ${escapeHtml(totalFormatado)}</span></div>
+       </div>
+       <p class="nota" style="margin-top:14px;">Ao confirmar, será gerada uma cobrança Pix no valor total acima. A renovação será processada após a confirmação do pagamento.</p>
        <form method="POST" style="margin-top:20px;">
          <input type="hidden" name="etapa" value="confirmar">
          <input type="hidden" name="token" value="${escapeHtml(tokenBruto)}">
@@ -486,8 +544,11 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
   }
 
   const itensConferencia: ItemConferencia[] = itensResolvidos.map((i) => ({
+    nome: i.nome,
     servidor: i.servidor,
+    usuario: i.usuario ?? "não informado",
     plano: i.plano,
+    vencimentoFormatado: formatarVencimento(i.vencimento),
     valorFormatado: formatarValorBRL(i.valorCentavos / 100) ?? "0,00",
   }));
   const totalCentavos = itensResolvidos.reduce((soma, i) => soma + i.valorCentavos, 0);
