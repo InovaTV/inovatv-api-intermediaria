@@ -111,6 +111,20 @@ async function teste1() {
   ok(token?.operacao_id != null, "Teste 1: tokens_renovacao.operacao_id foi vinculado (nao fica null)");
   ok(token?.estado === "autorizada", "Teste 1: token permanece 'autorizada' apos ACEITO bem-sucedido");
 
+  // Checkpoint 3 (Portal de Renovacao) -- retorno aditivo: os 3 campos
+  // novos vem exatamente dos dados ja usados nesta mesma chamada, sem
+  // nenhuma cobranca/UUID novo. Caminho WhatsApp (este teste) continua
+  // funcionando identico -- so' passa a ter campos extras disponiveis,
+  // que ele nao le.
+  ok(resultado.outcome === "confirmada" && resultado.operacaoId === token?.operacao_id,
+    "Teste 1 (Checkpoint 3): operacaoId do retorno e' exatamente o mesmo operacao_id vinculado ao token (nenhum segundo UUID)");
+  ok(resultado.outcome === "confirmada" && resultado.brCode === "00020101-fake-qr",
+    "Teste 1 (Checkpoint 3): brCode do retorno e' exatamente o qrCodeTexto ja devolvido por criarCobrancaOpenPix");
+  ok(resultado.outcome === "confirmada" && resultado.paymentLinkUrl === "https://openpix.com.br/pay/fake-link",
+    "Teste 1 (Checkpoint 3): paymentLinkUrl do retorno e' exatamente o ja devolvido por criarCobrancaOpenPix");
+  ok(chamadasOpenpix.criarCobrancaOpenPix.length === 1,
+    "Teste 1 (Checkpoint 3): nenhuma chamada nova a criarCobrancaOpenPix -- os 3 campos vieram da MESMA (e unica) chamada");
+
   const cobranca = lerTabela("cobrancas_pix").find((c) => c.operacao_id === token?.operacao_id);
   ok(!!cobranca, "Teste 1: existe uma linha em cobrancas_pix com o mesmo operacao_id do token");
   ok(cobranca?.status === "pendente", "Teste 1: cobranca criada com status 'pendente'");

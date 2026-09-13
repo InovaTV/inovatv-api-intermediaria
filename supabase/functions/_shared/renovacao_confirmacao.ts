@@ -35,7 +35,11 @@ import {
 
 export type AcaoConfirmacaoRenovacao = "aceitar" | "cancelar";
 export type ResultadoConfirmacaoRenovacao =
-  | { outcome: "confirmada" }
+  // Campos aditivos (Portal de Renovacao, Checkpoint 3): mesmos dados ja
+  // devolvidos por criarCobrancaOpenPix() nesta mesma chamada -- nenhuma
+  // cobranca nova, nenhum segundo operacaoId. Callers existentes (o
+  // caminho WhatsApp, via renovacao-confirmar) simplesmente ignoram.
+  | { outcome: "confirmada"; operacaoId: string; brCode: string; paymentLinkUrl: string }
   | { outcome: "cancelada" }
   | { outcome: "token_inexistente" | "token_expirado" | "ja_decidido" | "telefone_nao_confere" }
   | { outcome: "falha_cobranca" };
@@ -171,7 +175,9 @@ export async function confirmarRenovacao(params: {
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
   }
-  return { outcome: "confirmada" };
+  // Aditivo (Checkpoint 3): mesmos operacaoId/brCode/paymentLinkUrl ja
+  // calculados acima, sem chamada nova -- ver comentario no tipo.
+  return { outcome: "confirmada", operacaoId, brCode: cobranca.qrCodeTexto, paymentLinkUrl: cobranca.paymentLinkUrl };
 }
 
 // ---------------------------------------------------------------------
@@ -263,7 +269,9 @@ async function confirmarRenovacaoLote(
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
   }
-  return { outcome: "confirmada" };
+  // Aditivo (Checkpoint 3): mesmos operacaoId/brCode/paymentLinkUrl ja
+  // calculados acima, sem chamada nova -- ver comentario no tipo.
+  return { outcome: "confirmada", operacaoId, brCode: cobranca.qrCodeTexto, paymentLinkUrl: cobranca.paymentLinkUrl };
 }
 
 async function tratarFalhaLote(
