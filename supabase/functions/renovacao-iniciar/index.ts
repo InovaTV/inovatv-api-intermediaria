@@ -117,6 +117,11 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
     --rosa: #E23F87;
     --rosa-tinta: #FDE9F2;
 
+    --ambar: #B4740E;
+    --ambar-tinta: #FBF0DC;
+    --erro: #D23B47;
+    --erro-tinta: #FCEAEC;
+
     --sombra: 0 1px 2px rgba(15,20,40,.05), 0 12px 28px -18px rgba(15,20,40,.28);
   }
   * { box-sizing: border-box; }
@@ -359,6 +364,91 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
   @keyframes pulso { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
 
   .rodape-ajuda { text-align: center; font-size: 12.5px; color: var(--ink-fraco); margin-top: 4px; }
+
+  /* ---------- PROCESSANDO / CONCLUIDO ---------- */
+  .estado-central { text-align: center; margin: 8px 0 22px; }
+  .status-icone {
+    width: 76px; height: 76px; border-radius: 50%; background: var(--azul-tinta);
+    display: flex; align-items: center; justify-content: center; margin: 0 auto 18px;
+    position: relative; color: var(--azul);
+  }
+  .status-icone.ok { background: var(--verde-tinta); color: var(--verde-escuro); }
+  .status-icone.atencao { background: var(--ambar-tinta); color: var(--ambar); }
+  .status-icone.ok::before {
+    content: ""; position: absolute; inset: -6px; border-radius: 50%;
+    border: 2px solid var(--verde-tinta); animation: aro 2.2s ease-out infinite;
+  }
+  @keyframes aro { 0% { transform: scale(.85); opacity: .8; } 100% { transform: scale(1.35); opacity: 0; } }
+  .status-icone svg { width: 36px; height: 36px; position: relative; }
+
+  .titulo-processando { font-size: 23px; font-weight: 800; color: var(--ink); margin: 0 0 8px; letter-spacing: -.4px; }
+  .subtitulo-central { font-size: 14.5px; color: var(--ink-suave); max-width: 42ch; margin: 0 auto; }
+  .subtitulo-processando {
+    display: inline-flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600;
+    color: var(--ink-suave); background: var(--card); border: 1px solid var(--line);
+    border-radius: 100px; padding: 9px 18px; box-shadow: var(--sombra);
+  }
+  .spinner {
+    width: 15px; height: 15px; border-radius: 50%; flex: none;
+    border: 2.5px solid var(--azul-tinta); border-top-color: var(--azul);
+    animation: girar .8s linear infinite;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+
+  .aviso-espera {
+    display: flex; align-items: flex-start; gap: 10px; background: var(--azul-tinta);
+    border-radius: 14px; padding: 14px 16px; font-size: 13px; color: #1E3A6E; margin: 22px 0 22px;
+  }
+  .aviso-espera svg { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--azul); }
+
+  .subtitulo-lista { font-size: 12px; font-weight: 700; color: var(--ink-fraco); text-transform: uppercase; letter-spacing: .3px; margin: 0 0 10px; }
+  .lista-processando, .lista-resultado { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+  .item-processando {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; box-shadow: var(--sombra);
+  }
+  .item-processando strong { font-size: 15px; font-weight: 700; }
+  .badge-processando {
+    display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--azul);
+    background: var(--azul-tinta); border-radius: 100px; padding: 5px 11px; flex: none; white-space: nowrap;
+  }
+  .badge-processando .spinner { width: 11px; height: 11px; border-width: 2px; }
+
+  .resumo-contagem { display: flex; justify-content: center; gap: 10px; margin: 18px 0 4px; }
+  .contagem-chip { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; border-radius: 100px; padding: 7px 14px; }
+  .contagem-chip.ok { background: var(--verde-tinta); color: var(--verde-escuro); }
+  .contagem-chip.falha { background: var(--erro-tinta); color: var(--erro); }
+  .contagem-chip .ponto { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .item-resultado {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 16px; box-shadow: var(--sombra);
+  }
+  .item-resultado.item-falha { border-color: #F3C6CA; background: linear-gradient(180deg, var(--erro-tinta) 0%, #fff 60%); }
+  .item-topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .item-topo strong { font-size: 16px; font-weight: 700; }
+  .badge-resultado { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; border-radius: 100px; padding: 5px 11px; flex: none; white-space: nowrap; }
+  .badge-resultado.ok { color: var(--verde-escuro); background: var(--verde-tinta); }
+  .badge-resultado.falha { color: var(--erro); background: var(--erro-tinta); }
+  .badge-resultado svg { width: 12px; height: 12px; }
+
+  .item-ajuda {
+    display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid #F3C6CA; font-size: 12.5px; color: var(--erro);
+  }
+  .item-ajuda svg { width: 15px; height: 15px; flex: none; }
+  .item-ajuda a { color: inherit; font-weight: 700; text-decoration: underline; }
+
+  .encerramento {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 18px; text-align: center; box-shadow: var(--sombra); margin-bottom: 4px;
+  }
+  .encerramento p { margin: 0; font-size: 13.5px; color: var(--ink-suave); }
+  .encerramento a { color: var(--verde-escuro); font-weight: 700; text-decoration: none; }
+  .encerramento a:hover { text-decoration: underline; }
+  .voltar-site { display: block; text-align: center; margin-top: 16px; font-size: 13px; color: var(--ink-fraco); text-decoration: none; }
+  .voltar-site:hover { text-decoration: underline; }
 
   /* ---------- RODAPE ---------- */
   .onda-rodape { display: block; line-height: 0; }
@@ -759,7 +849,7 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
   return new Response(
     paginaHtmlClaro(
       "Pagamento",
-      `<div class="tela-pagamento">
+      `<div id="tela-conteudo" class="tela-pagamento">
        <p class="elo">Renovação · Pagamento</p>
        <p class="saudacao">Pague com Pix</p>
        <p class="intro">Escaneie o QR Code abaixo ou copie o código Pix para concluir sua renovação pelo aplicativo do seu banco.</p>
@@ -786,6 +876,7 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
        <div class="status-pagamento"><span class="status-ponto"></span> <span id="status-pagamento">Aguardando pagamento…</span></div>
        <p class="rodape-ajuda">Assim que o pagamento for identificado, sua renovação será processada automaticamente.</p>
        <p style="text-align:center;margin-top:4px;"><a href="${escapeHtml(paymentLinkUrl)}" target="_blank" rel="noopener" style="color:var(--ink-fraco);font-size:12.5px;">ou abra a página de pagamento</a></p>
+       </div>
 
        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
        <script>
@@ -814,21 +905,119 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              if (valorTag) {
                var numero = parseFloat(valorTag);
                if (!isNaN(numero)) {
-                 document.getElementById("pix-total").textContent =
-                   "R$ " + numero.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                 var elTotal = document.getElementById("pix-total");
+                 if (elTotal) {
+                   elTotal.textContent =
+                     "R$ " + numero.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                 }
                }
              }
            } catch (e) {}
          })();
+
+         // A partir daqui: telas "Processando" e "Concluida" (Checkpoint
+         // seguinte, so' apresentacao) -- o CONTEUDO exibido troca de
+         // acordo com o MESMO estado que o polling ja consultava antes
+         // (renovacao-status, sem nenhuma mudanca de contrato/logica).
+         // Servidor + resultado por item ja' eram devolvidos por essa
+         // function -- nao inventamos usuario/plano/vencimento aqui, so'
+         // o que realmente existe na resposta.
+         function escaparHtml(s) {
+           return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+             return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\\"": "&quot;" }[c];
+           });
+         }
+         var SVG_CHECK_MINI = '<svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.2 11.5L13 4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+         var SVG_X_MINI = '<svg viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+         var SVG_CHECK_GRANDE = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 12.6l5.2 5.2L20 6.6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+         var SVG_ATENCAO = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 8v5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/></svg>';
+         var LINK_WHATSAPP = "https://wa.me/5517996242415";
+
+         function badgeItem(resultado) {
+           if (resultado === "sucesso") return '<span class="badge-resultado ok">' + SVG_CHECK_MINI + " Renovado</span>";
+           if (resultado === "falha") return '<span class="badge-resultado falha">' + SVG_X_MINI + " Não renovado</span>";
+           return '<span class="badge-processando"><span class="spinner"></span> Processando</span>';
+         }
+
+         function telaProcessando(dados) {
+           var itens = Array.isArray(dados.itens) ? dados.itens : [];
+           var itensHtml = itens.map(function (it) {
+             return '<div class="item-processando"><strong>' + escaparHtml(it.servidor) + "</strong>" + badgeItem(it.resultado) + "</div>";
+           }).join("");
+           return (
+             '<p class="elo">Renovação · Processando</p>' +
+             '<div class="estado-central">' +
+               '<div class="status-icone ok">' + SVG_CHECK_GRANDE + "</div>" +
+               '<p class="titulo-processando">Pagamento confirmado!</p>' +
+               '<span class="subtitulo-processando"><span class="spinner"></span> Estamos processando sua renovação…</span>' +
+             "</div>" +
+             '<div class="aviso-espera"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v5l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Isso pode levar alguns instantes. Não é necessário fechar ou atualizar esta página — assim que terminar, mostramos o resultado aqui.</div>' +
+             (itensHtml ? '<p class="subtitulo-lista">Renovando</p><div class="lista-processando">' + itensHtml + "</div>" : "")
+           );
+         }
+
+         function telaConcluido(dados) {
+           var itens = Array.isArray(dados.itens) ? dados.itens : [];
+           var okCount = itens.filter(function (it) { return it.resultado === "sucesso"; }).length;
+           var falhaCount = itens.filter(function (it) { return it.resultado === "falha"; }).length;
+           var total = itens.length;
+
+           var titulo, subtitulo, iconeSvg, iconeClasse, chipsHtml = "";
+           if (dados.estado === "falhou") {
+             titulo = "Não conseguimos concluir a renovação";
+             subtitulo = "Fale com a gente pelo WhatsApp pra resolver rapidinho.";
+             iconeSvg = SVG_ATENCAO;
+             iconeClasse = " atencao";
+           } else if (dados.estado === "parcial") {
+             titulo = "Renovação concluída";
+             subtitulo = okCount + " de " + total + " acesso(s) foi renovado com sucesso. Veja o detalhe de cada um abaixo.";
+             iconeSvg = SVG_ATENCAO;
+             iconeClasse = " atencao";
+             chipsHtml =
+               '<div class="resumo-contagem">' +
+                 '<span class="contagem-chip ok"><span class="ponto"></span> ' + okCount + " renovado(s)</span>" +
+                 '<span class="contagem-chip falha"><span class="ponto"></span> ' + falhaCount + " não renovado(s)</span>" +
+               "</div>";
+           } else {
+             titulo = "Renovação concluída! 🎉";
+             subtitulo = "Seus acessos foram renovados com sucesso.";
+             iconeSvg = SVG_CHECK_GRANDE;
+             iconeClasse = " ok";
+           }
+
+           var itensHtml = itens.map(function (it) {
+             var ok = it.resultado === "sucesso";
+             var classeExtra = ok ? "" : " item-falha";
+             var ajuda = ok
+               ? ""
+               : '<div class="item-ajuda"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v5M12 16v.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Não conseguimos concluir este acesso. <a href="' + LINK_WHATSAPP + '" target="_blank" rel="noopener">Fale com a gente pelo WhatsApp</a></div>';
+             return (
+               '<div class="item-resultado' + classeExtra + '">' +
+                 '<div class="item-topo"><strong>' + escaparHtml(it.servidor) + "</strong>" + badgeItem(it.resultado) + "</div>" +
+                 ajuda +
+               "</div>"
+             );
+           }).join("");
+
+           return (
+             '<p class="elo">Renovação · Concluída</p>' +
+             '<div class="estado-central">' +
+               '<div class="status-icone' + iconeClasse + '">' + iconeSvg + "</div>" +
+               '<p class="titulo-processando">' + titulo + "</p>" +
+               '<p class="subtitulo-central">' + subtitulo + "</p>" +
+               chipsHtml +
+             "</div>" +
+             (itensHtml ? '<p class="subtitulo-lista">Seus acessos</p><div class="lista-resultado">' + itensHtml + "</div>" : "") +
+             '<div class="encerramento"><p>Obrigado por renovar com a <strong>Tope TV</strong>! Qualquer dúvida, é só chamar a gente pelo <a href="' + LINK_WHATSAPP + '" target="_blank" rel="noopener">WhatsApp</a>.</p></div>' +
+             '<a class="voltar-site" href="https://topetv.com.br">← Voltar para topetv.com.br</a>'
+           );
+         }
+
          var token = ${tokenJs};
-         var statusEl = document.getElementById("status-pagamento");
+         var conteudoEl = document.getElementById("tela-conteudo");
          var textos = {
            aguardando_confirmacao: "Aguardando pagamento…",
            aguardando_pagamento: "Aguardando pagamento…",
-           processando_renovacao: "Pagamento confirmado! Processando sua renovação…",
-           concluido: "Renovação concluída com sucesso!",
-           parcial: "Alguns acessos foram renovados, outros não. Veja abaixo.",
-           falhou: "Não conseguimos concluir a renovação. Fale com a gente pelo WhatsApp.",
            cancelado: "Renovação cancelada.",
            expirado: "O tempo para pagamento expirou.",
            nao_encontrado: "Aguardando pagamento…"
@@ -842,22 +1031,19 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
                body: JSON.stringify({ token: token }),
              });
              var dados = await resp.json();
-             statusEl.textContent = textos[dados.estado] || "Aguardando pagamento…";
-             if (dados.estado === "concluido" || dados.estado === "parcial" || dados.estado === "falhou") {
+             if (dados.estado === "processando_renovacao") {
+               conteudoEl.innerHTML = telaProcessando(dados);
+             } else if (dados.estado === "concluido" || dados.estado === "parcial" || dados.estado === "falhou") {
+               conteudoEl.innerHTML = telaConcluido(dados);
                clearInterval(intervalo);
-               if (Array.isArray(dados.itens)) {
-                 var linhas = dados.itens.map(function (i) {
-                   var r = i.resultado === "sucesso" ? "renovado" : i.resultado === "falha" ? "falhou" : "processando";
-                   return (i.servidor || "") + ": " + r;
-                 });
-                 statusEl.textContent += " (" + linhas.join(", ") + ")";
-               }
+             } else {
+               var statusEl = document.getElementById("status-pagamento");
+               if (statusEl) statusEl.textContent = textos[dados.estado] || "Aguardando pagamento…";
              }
            } catch (e) {}
          }
          sondar();
-       </script>
-       </div>`,
+       </script>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
