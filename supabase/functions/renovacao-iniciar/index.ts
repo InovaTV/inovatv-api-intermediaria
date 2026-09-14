@@ -308,6 +308,58 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
 
   .acoes-confirmacao { display: flex; flex-direction: column; gap: 10px; }
 
+  /* ---------- PAGAMENTO PIX ---------- */
+  .total-destaque {
+    background: linear-gradient(135deg, var(--verde-escuro), var(--verde) 75%);
+    border-radius: 20px; padding: 22px 20px; box-shadow: 0 14px 28px -14px rgba(8,122,54,.5);
+    color: #fff; text-align: center; margin-bottom: 16px;
+  }
+  .total-destaque .rotulo { font-size: 12px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; opacity: .85; }
+  .total-destaque .valor { font-size: 36px; font-weight: 800; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+
+  .qr-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+    padding: 24px 20px; box-shadow: var(--sombra); text-align: center; margin-bottom: 16px;
+  }
+  .qr-caixa { display: inline-flex; padding: 14px; background: #fff; border-radius: 16px; border: 1px solid var(--line); }
+  .qr-caixa img, .qr-caixa canvas { display: block; width: 208px; height: 208px; }
+  .qr-legenda { margin-top: 14px; font-size: 13px; color: var(--ink-suave); }
+
+  .pix-codigo-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; box-shadow: var(--sombra); margin-bottom: 12px; }
+  .pix-codigo-label {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+    color: var(--ink-suave); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .pix-codigo-label svg { width: 14px; height: 14px; color: var(--verde); }
+  .pix-codigo-texto {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; color: var(--ink); background: var(--paper); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; word-break: break-all; line-height: 1.55;
+    max-height: 92px; overflow-y: auto;
+  }
+
+  .btn-copiar {
+    width: 100%; border: none; border-radius: 12px; padding: 15px 24px; font-size: 16px;
+    font-weight: 700; font-family: inherit; color: #fff; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    background: linear-gradient(135deg, var(--verde-escuro), var(--verde) 60%, #5CE666);
+    box-shadow: 0 10px 22px -10px rgba(8,122,54,.55); margin-bottom: 20px;
+    transition: filter .15s ease, transform .05s ease;
+  }
+  .btn-copiar:active { transform: scale(.99); }
+  .btn-copiar:hover { filter: brightness(1.05); }
+  .btn-copiar.copiado { background: var(--verde-escuro); }
+
+  .status-pagamento {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    background: var(--azul-tinta); border-radius: 100px; padding: 11px 18px;
+    font-size: 13px; font-weight: 600; color: #1E3A6E; margin: 0 auto 8px; width: fit-content;
+  }
+  .status-ponto { width: 9px; height: 9px; border-radius: 50%; background: var(--azul); animation: pulso 1.4s ease-in-out infinite; }
+  @keyframes pulso { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+
+  .rodape-ajuda { text-align: center; font-size: 12.5px; color: var(--ink-fraco); margin-top: 4px; }
+
   /* ---------- RODAPE ---------- */
   .onda-rodape { display: block; line-height: 0; }
   .onda-rodape svg { display: block; width: 100%; height: 20px; }
@@ -348,6 +400,9 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
 
     .acoes-confirmacao { flex-direction: row; justify-content: flex-end; gap: 12px; }
     .acoes-confirmacao .btn-continuar, .acoes-confirmacao .btn-secundario { width: auto; min-width: 190px; }
+
+    .tela-pagamento { max-width: 480px; margin: 0 auto; }
+    .total-destaque .valor { font-size: 42px; }
 
     footer.rodape-portal { flex-direction: row; justify-content: space-between; text-align: left; padding: 20px 32px; }
   }
@@ -690,29 +745,81 @@ function paginaConferencia(
 // aparecer na barra de enderecos. O polling chama renovacao-status por
 // caminho RELATIVO (/functions/v1/renovacao-status) -- same-origin com
 // esta propria pagina, confirmado na revisao de seguranca do Portal.
+// Mesma identidade visual do resto do Portal (paginaHtmlClaro). O QR
+// Code continua gerado NO NAVEGADOR a partir do brCode (qrcodejs via
+// CDN, sem VPS/geracao de imagem no backend) -- so' a apresentacao
+// mudou, nenhuma linha da logica de polling/copia foi alterada: mesmo
+// endpoint relativo /functions/v1/renovacao-status, mesmo fetch, mesmo
+// mapeamento de estados, mesmo token embutido so' no corpo/JS (nunca
+// href/URL), mesmo paymentLinkUrl como alternativa.
 function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): Response {
   const brCodeJs = JSON.stringify(brCode).replaceAll("<", "\\u003c");
   const tokenJs = JSON.stringify(tokenBruto).replaceAll("<", "\\u003c");
 
   return new Response(
-    paginaHtml(
+    paginaHtmlClaro(
       "Pagamento",
-      `<h1>Pague com Pix</h1>
-       <p>Escaneie o QR Code ou copie o código abaixo no app do seu banco.</p>
-       <div id="qrcode" style="display:flex;justify-content:center;margin:16px 0;"></div>
-       <label for="brcode">Pix copia e cola</label>
-       <textarea id="brcode" readonly rows="3" style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363D;background:#0D1117;color:#E5E7EB;font-size:12px;">${escapeHtml(brCode)}</textarea>
-       <button id="copiar" type="button" style="margin-top:8px;width:100%;background:#374151;color:#E5E7EB;">Copiar código</button>
-       <p id="status-pagamento" style="margin-top:20px;color:#9CA3AF;font-size:14px;">Aguardando pagamento…</p>
-       <a href="${escapeHtml(paymentLinkUrl)}" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:8px;color:#9CA3AF;font-size:13px;">ou abra a página de pagamento</a>
+      `<div class="tela-pagamento">
+       <p class="elo">Renovação · Pagamento</p>
+       <p class="saudacao">Pague com Pix</p>
+       <p class="intro">Escaneie o QR Code abaixo ou copie o código Pix para concluir sua renovação pelo aplicativo do seu banco.</p>
+
+       <div class="total-destaque">
+         <span class="rotulo">Total a pagar</span>
+         <div class="valor" id="pix-total">…</div>
+       </div>
+
+       <div class="qr-card">
+         <div class="qr-caixa"><div id="qrcode"></div></div>
+         <p class="qr-legenda">Abra o app do seu banco, escolha pagar com Pix e escaneie o código acima</p>
+       </div>
+
+       <div class="pix-codigo-card">
+         <div class="pix-codigo-label">
+           <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><path d="M14 14h2.5M14 17.5h6M19 14v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+           Pix copia e cola
+         </div>
+         <div class="pix-codigo-texto" id="brcode">${escapeHtml(brCode)}</div>
+       </div>
+       <button class="btn-copiar" id="copiar" type="button">Copiar código Pix <span aria-hidden="true">⧉</span></button>
+
+       <div class="status-pagamento"><span class="status-ponto"></span> <span id="status-pagamento">Aguardando pagamento…</span></div>
+       <p class="rodape-ajuda">Assim que o pagamento for identificado, sua renovação será processada automaticamente.</p>
+       <p style="text-align:center;margin-top:4px;"><a href="${escapeHtml(paymentLinkUrl)}" target="_blank" rel="noopener" style="color:var(--ink-fraco);font-size:12.5px;">ou abra a página de pagamento</a></p>
+
        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
        <script>
-         new QRCode(document.getElementById("qrcode"), { text: ${brCodeJs}, width: 220, height: 220 });
+         var brCode = ${brCodeJs};
+         new QRCode(document.getElementById("qrcode"), { text: brCode, width: 208, height: 208, correctLevel: QRCode.CorrectLevel.M });
          document.getElementById("copiar").addEventListener("click", function () {
-           navigator.clipboard.writeText(${brCodeJs}).then(function () {
-             document.getElementById("copiar").textContent = "Copiado!";
+           var btn = document.getElementById("copiar");
+           navigator.clipboard.writeText(brCode).then(function () {
+             btn.classList.add("copiado");
+             btn.textContent = "Código copiado ✓";
+             setTimeout(function () { btn.classList.remove("copiado"); btn.innerHTML = "Copiar código Pix <span aria-hidden=\\"true\\">⧉</span>"; }, 2200);
            });
          });
+         (function () {
+           // Valor total exibido em destaque -- lido do proprio brCode (tag
+           // EMV "54", Transaction Amount), nunca de uma consulta nova: o
+           // valor ja esta' presente no Pix real gerado, so' apresentacao.
+           try {
+             var i = 0, valorTag = null;
+             while (i + 4 <= brCode.length) {
+               var id = brCode.substr(i, 2);
+               var len = parseInt(brCode.substr(i + 2, 2), 10);
+               if (id === "54") { valorTag = brCode.substr(i + 4, len); break; }
+               i += 4 + len;
+             }
+             if (valorTag) {
+               var numero = parseFloat(valorTag);
+               if (!isNaN(numero)) {
+                 document.getElementById("pix-total").textContent =
+                   "R$ " + numero.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+               }
+             }
+           } catch (e) {}
+         })();
          var token = ${tokenJs};
          var statusEl = document.getElementById("status-pagamento");
          var textos = {
@@ -749,7 +856,8 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
            } catch (e) {}
          }
          sondar();
-       </script>`,
+       </script>
+       </div>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
