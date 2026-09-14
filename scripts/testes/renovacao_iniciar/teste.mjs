@@ -134,7 +134,7 @@ function clienteDetalhe(overrides = {}) {
 {
   resetar();
   respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-1", nome: "José Antônio", usuario: "828667229" }] });
-  respostasDetalhe["pub-1"] = clienteDetalhe();
+  respostasDetalhe["pub-1"] = clienteDetalhe({ nome: "José Antônio" });
   const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
   const html = await resp.text();
   ok(html.includes("BLAZE") && html.includes('value="pub-1"'), "4A single_match: carrinho renderizado");
@@ -149,6 +149,10 @@ function clienteDetalhe(overrides = {}) {
   ok(/id="btn-continuar"[^>]*disabled/.test(html), "4A single_match: botao Continuar nasce desabilitado");
   ok(html.includes("Selecione abaixo quais acessos"), "4A single_match: texto explicativo de selecao presente");
   ok(html.includes("Selecione pelo menos um acesso"), "4A single_match: aviso de selecao minima presente");
+
+  // Proxima melhoria de UX: saudacao pessoal com o nome ja obtido do
+  // Rocket, sem nenhuma consulta nova.
+  ok(html.includes("Olá, José Antônio! 👋"), "4A single_match: saudacao com nome do cliente");
 }
 
 {
@@ -193,6 +197,17 @@ function clienteDetalhe(overrides = {}) {
   const html = await resp.text();
   ok(!html.includes("<script>alert(1)</script>"), "4A escaping: servidor com HTML nunca aparece cru na pagina");
   ok(html.includes("&lt;script&gt;"), "4A escaping: servidor com HTML aparece escapado");
+}
+
+{
+  // Nome do cliente tambem alimenta a saudacao -- precisa ser escapado la'.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-G", nome: "<script>alert(2)</script>", usuario: "u" }] });
+  respostasDetalhe["pub-G"] = clienteDetalhe({ nome: "<script>alert(2)</script>" });
+  const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
+  const html = await resp.text();
+  ok(!html.includes("<script>alert(2)</script>"), "4A escaping: nome na saudacao nunca aparece cru na pagina");
+  ok(html.includes("Olá, &lt;script&gt;alert(2)&lt;/script&gt;! 👋"), "4A escaping: nome na saudacao aparece escapado");
 }
 
 // =======================================================================
@@ -565,14 +580,15 @@ for (const [outcome, textoEsperado] of casos) {
       { id: "pub-jose-2", nome: "José", usuario: "u2" },
     ],
   });
-  respostasDetalhe["pub-jose-1"] = clienteDetalhe({ servidor: { nome: "ChannelTV" } });
-  respostasDetalhe["pub-jose-2"] = clienteDetalhe({ servidor: { nome: "UNITV" } });
+  respostasDetalhe["pub-jose-1"] = clienteDetalhe({ nome: "José", servidor: { nome: "ChannelTV" } });
+  respostasDetalhe["pub-jose-2"] = clienteDetalhe({ nome: "José", servidor: { nome: "UNITV" } });
 
   const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"]]));
   const html = await resp.text();
   ok(html.includes("<strong>ChannelTV</strong>"), "cenario A (carrinho): titulo e' so' o servidor, sem nome repetido");
   ok(html.includes("<strong>UNITV</strong>"), "cenario A (carrinho): idem pro segundo acesso");
   ok(!html.includes("José — "), "cenario A (carrinho): nome NAO aparece no titulo quando e' o mesmo em todos os acessos");
+  ok(html.includes("Olá, José! 👋"), "cenario A (carrinho): saudacao com o nome do cliente");
 }
 
 // -----------------------------------------------------------------------
@@ -595,6 +611,8 @@ for (const [outcome, textoEsperado] of casos) {
   const html = await resp.text();
   ok(html.includes("<strong>João — ChannelTV</strong>"), "cenario B (carrinho): nome + servidor quando os nomes sao diferentes");
   ok(html.includes("<strong>Maria — UNITV</strong>"), "cenario B (carrinho): idem pro segundo cliente/acesso");
+  ok(html.includes("Olá! 👋"), "cenario B (carrinho): saudacao generica quando ha' clientes diferentes");
+  ok(!html.includes("Olá, João") && !html.includes("Olá, Maria"), "cenario B (carrinho): nenhum nome escolhido arbitrariamente na saudacao");
 }
 
 // -----------------------------------------------------------------------
