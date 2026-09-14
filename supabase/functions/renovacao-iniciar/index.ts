@@ -276,6 +276,38 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
   .btn-continuar:hover:not(:disabled) { filter: brightness(1.05); }
   .btn-continuar:disabled { background: #E6E9F0; color: var(--ink-fraco); box-shadow: none; cursor: not-allowed; }
 
+  .btn-secundario {
+    width: 100%; border: 1.5px solid var(--line-forte); border-radius: 12px; padding: 13px 24px;
+    font-size: 15px; font-weight: 700; font-family: inherit; color: var(--ink-suave);
+    background: #fff; cursor: pointer; transition: background .15s ease, border-color .15s ease;
+  }
+  .btn-secundario:hover { background: var(--paper); border-color: var(--ink-fraco); }
+
+  /* ---------- CONFIRMACAO ---------- */
+  .acesso.estatico { cursor: default; }
+  .resumo-confirmacao {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 18px 20px; box-shadow: var(--sombra); margin: 4px 0 16px;
+  }
+  .resumo-qtd-label {
+    display: inline-block; margin: 0 0 12px; font-size: 12px; font-weight: 700;
+    color: var(--verde-escuro); background: var(--verde-tinta); border-radius: 100px; padding: 5px 12px;
+  }
+  .resumo-total-linha {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding-top: 12px; border-top: 1px solid var(--line);
+  }
+  .resumo-total-linha span { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+  .resumo-total-linha strong { font-size: 24px; font-weight: 800; color: var(--verde-escuro); font-variant-numeric: tabular-nums; }
+
+  .explicacao {
+    display: flex; align-items: flex-start; gap: 10px; margin: 0 0 20px;
+    font-size: 13px; color: var(--ink-suave);
+  }
+  .explicacao svg { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--verde); }
+
+  .acoes-confirmacao { display: flex; flex-direction: column; gap: 10px; }
+
   /* ---------- RODAPE ---------- */
   .onda-rodape { display: block; line-height: 0; }
   .onda-rodape svg { display: block; width: 100%; height: 20px; }
@@ -313,6 +345,9 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
     .resumo-barra { flex-direction: row; align-items: center; justify-content: space-between; }
     .resumo-total { flex: 1 1 auto; }
     .btn-continuar { width: auto; }
+
+    .acoes-confirmacao { flex-direction: row; justify-content: flex-end; gap: 12px; }
+    .acoes-confirmacao .btn-continuar, .acoes-confirmacao .btn-secundario { width: auto; min-width: 190px; }
 
     footer.rodape-portal { flex-direction: row; justify-content: space-between; text-align: left; padding: 20px 32px; }
   }
@@ -571,6 +606,16 @@ interface ItemConferencia {
 // financeira real. "Resumo da renovacao" deixa explicito quantos acessos
 // foram selecionados e o texto abaixo explica o que o ACEITO realmente
 // faz (gera Pix, renovacao so' apos confirmar o pagamento).
+// Mesma identidade visual de "Seus acessos" e "Renove sua assinatura"
+// (paginaHtmlClaro) -- pedido explicito: o cliente nao pode sentir que
+// saiu do Portal ao chegar aqui. Cada card reaproveita literalmente as
+// mesmas classes CSS dos cards de "Seus acessos" (.acesso, .acesso-
+// linha1, .acesso-cabeca, .acesso-principal, .acesso-meta, .acesso-
+// preco) so' que sem checkbox -- aqui e' so' conferencia, a selecao ja
+// aconteceu na tela anterior. Todos os precos usam a MESMA cor (verde),
+// nunca uma cor diferente por servidor/plano/valor. Regra puramente de
+// apresentacao -- nao muda calculo, token, lote, Pix ou qualquer outra
+// logica de processarEtapaConfirmar.
 function paginaConferencia(
   tokenBruto: string,
   telefone: string,
@@ -580,12 +625,21 @@ function paginaConferencia(
   const mostrarNome = new Set(itens.map((i) => i.nome)).size > 1;
   const itensHtml = itens
     .map(
-      (i) => `<div class="acesso">
-        <strong>${tituloDoAcesso(i.nome, i.servidor, mostrarNome)}</strong>
-        <div class="linha"><span class="rotulo">Usuário</span><span>${escapeHtml(i.usuario)}</span></div>
-        <div class="linha"><span class="rotulo">Plano</span><span>${escapeHtml(i.plano)}</span></div>
-        <div class="linha"><span class="rotulo">Vencimento atual</span><span>${escapeHtml(i.vencimentoFormatado)}</span></div>
-        <div class="linha"><span class="rotulo">Valor</span><span>R$ ${escapeHtml(i.valorFormatado)}</span></div>
+      (i) => `<div class="acesso estatico">
+        <div class="acesso-linha1">
+          <div class="acesso-cabeca">
+            <div class="acesso-principal">
+              <strong>${tituloDoAcesso(i.nome, i.servidor, mostrarNome)}</strong>
+              <small>Usuário: ${escapeHtml(i.usuario)}</small>
+            </div>
+          </div>
+          <div class="acesso-preco"><span class="rotulo">Valor da renovação</span><span class="valor">R$ ${escapeHtml(i.valorFormatado)}</span></div>
+        </div>
+        <div class="acesso-meta">
+          <div class="acesso-campo"><span class="rotulo">Plano</span><span class="valor">${escapeHtml(i.plano)}</span></div>
+          <div class="acesso-divisor"></div>
+          <div class="acesso-campo"><span class="rotulo">Vencimento atual</span><span class="valor">${escapeHtml(i.vencimentoFormatado)}</span></div>
+        </div>
       </div>`,
     )
     .join("\n");
@@ -593,29 +647,36 @@ function paginaConferencia(
   const rotuloQuantidade = itens.length === 1 ? "1 acesso selecionado" : `${itens.length} acessos selecionados`;
 
   return new Response(
-    paginaHtml(
+    paginaHtmlClaro(
       "Confirmar renovação",
-      `<h1>Confirme sua renovação</h1>
-       ${itensHtml}
-       <div class="resumo">
-         <p class="nota">${escapeHtml(rotuloQuantidade)}</p>
-         <div class="linha total"><span>Total a pagar</span><span>R$ ${escapeHtml(totalFormatado)}</span></div>
+      `<p class="elo">Renovação · Confirmação</p>
+       <p class="saudacao">Confirme sua renovação</p>
+       <p class="intro">Revise os acessos selecionados antes de continuar.</p>
+       <div class="lista">${itensHtml}</div>
+       <div class="resumo-confirmacao">
+         <span class="resumo-qtd-label">${escapeHtml(rotuloQuantidade)}</span>
+         <div class="resumo-total-linha"><span>Total a pagar</span><strong>R$ ${escapeHtml(totalFormatado)}</strong></div>
        </div>
-       <p class="nota" style="margin-top:14px;">Ao confirmar, será gerada uma cobrança Pix no valor total acima. A renovação será processada após a confirmação do pagamento.</p>
-       <form method="POST" style="margin-top:20px;">
-         <input type="hidden" name="etapa" value="confirmar">
-         <input type="hidden" name="token" value="${escapeHtml(tokenBruto)}">
-         <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
-         <input type="hidden" name="acao" value="aceitar">
-         <button class="primario" type="submit">ACEITO</button>
-       </form>
-       <form method="POST" style="margin-top:8px;">
-         <input type="hidden" name="etapa" value="confirmar">
-         <input type="hidden" name="token" value="${escapeHtml(tokenBruto)}">
-         <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
-         <input type="hidden" name="acao" value="cancelar">
-         <button type="submit">CANCELAR</button>
-       </form>`,
+       <p class="explicacao">
+         <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="9" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M8 9V6.5a4 4 0 0 1 8 0V9" stroke="currentColor" stroke-width="1.6"/><path d="M12 13.2v2.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+         Ao confirmar, será gerada uma cobrança Pix no valor total acima. A renovação será processada após a confirmação do pagamento.
+       </p>
+       <div class="acoes-confirmacao">
+         <form method="POST">
+           <input type="hidden" name="etapa" value="confirmar">
+           <input type="hidden" name="token" value="${escapeHtml(tokenBruto)}">
+           <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
+           <input type="hidden" name="acao" value="aceitar">
+           <button class="btn-continuar" type="submit">ACEITO</button>
+         </form>
+         <form method="POST">
+           <input type="hidden" name="etapa" value="confirmar">
+           <input type="hidden" name="token" value="${escapeHtml(tokenBruto)}">
+           <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
+           <input type="hidden" name="acao" value="cancelar">
+           <button class="btn-secundario" type="submit">CANCELAR</button>
+         </form>
+       </div>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
