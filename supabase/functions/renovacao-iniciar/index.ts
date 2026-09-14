@@ -217,6 +217,28 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
   .acesso-campo .valor { font-size: 13.5px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
   .acesso-divisor { width: 1px; align-self: stretch; background: var(--line); }
 
+  /* ---------- TELA DE TELEFONE (formulario inicial) ---------- */
+  .voltar-link {
+    display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px;
+    color: var(--ink-suave); font-size: 13px; text-decoration: none;
+  }
+  .voltar-link:hover { text-decoration: underline; }
+  .titulo-tela { margin: 0 0 10px; font-size: 29px; font-weight: 800; letter-spacing: -.5px; color: var(--ink); text-wrap: balance; }
+
+  .form-card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 22px; box-shadow: var(--sombra); margin-top: 22px; }
+  .campo-label { display: block; font-size: 13px; font-weight: 700; color: var(--ink-suave); margin-bottom: 8px; }
+  .campo-telefone { position: relative; margin-bottom: 18px; }
+  .campo-telefone svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--ink-fraco); pointer-events: none; }
+  .campo-telefone input[type="tel"] {
+    width: 100%; box-sizing: border-box; padding: 14px 14px 14px 42px; border-radius: 12px;
+    border: 1.5px solid var(--line-forte); background: #fff; color: var(--ink); font-size: 16px; font-family: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .campo-telefone input[type="tel"]:focus { outline: none; border-color: var(--azul); box-shadow: 0 0 0 3px var(--azul-tinta); }
+
+  .seguranca { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: 12.5px; color: var(--ink-fraco); }
+  .seguranca svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--ink-fraco); }
+
   /* ---------- AVISO ---------- */
   .aviso {
     display: flex; align-items: center; gap: 10px;
@@ -278,6 +300,9 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
 
     main.conteudo { padding: 32px 32px 48px; }
     .saudacao { font-size: 25px; }
+    .titulo-tela { font-size: 34px; }
+    .form-card { max-width: 480px; padding: 28px; }
+    .form-card .btn-continuar { width: 100%; }
 
     .acesso-linha1 { display: contents; }
     .acesso { display: flex; align-items: center; gap: 22px; padding: 16px 20px; }
@@ -332,17 +357,36 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
 </html>`;
 }
 
+// Mesma identidade visual da tela "Seus acessos" (paginaHtmlClaro) --
+// consistencia pedida explicitamente: o cliente que abrir a URL da
+// function direto por GET (fallback/entrada direta; o fluxo real
+// normalmente comeca pela pagina estatica do Hostinger, que aponta pra
+// esta mesma function via POST) deve ver a mesma linguagem visual.
+// Nenhuma mudanca de logica: continua GET puro, mesmo form, mesmo
+// method="POST", mesmo campo telefone, mesmo etapa=telefone.
 function paginaFormularioTelefone(): Response {
   return new Response(
-    paginaHtml(
+    paginaHtmlClaro(
       "Renovação",
-      `<h1>Renovar minha assinatura</h1>
-       <form method="POST">
-         <input type="hidden" name="etapa" value="telefone">
-         <label for="telefone">Seu celular (com DDD)</label>
-         <input type="tel" id="telefone" name="telefone" placeholder="(17) 99999-9999" required autofocus>
-         <button class="primario" type="submit">Continuar</button>
-       </form>`,
+      `<a class="voltar-link" href="https://topetv.com.br">← Voltar para topetv.com.br</a>
+       <p class="elo">Renovação</p>
+       <h1 class="titulo-tela">Renove sua assinatura</h1>
+       <p class="intro">Informe o número de celular cadastrado para localizarmos seus acessos e você renovar em poucos passos, direto por aqui.</p>
+       <div class="form-card">
+         <form method="POST">
+           <input type="hidden" name="etapa" value="telefone">
+           <label class="campo-label" for="telefone">Seu celular (com DDD)</label>
+           <div class="campo-telefone">
+             <svg viewBox="0 0 24 24" fill="none"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.4c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.2 1.1L6.6 10.8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+             <input type="tel" id="telefone" name="telefone" placeholder="(17) 99999-9999" inputmode="tel" autocomplete="tel" required autofocus>
+           </div>
+           <button class="btn-continuar" type="submit">Continuar <span aria-hidden="true">→</span></button>
+         </form>
+         <p class="seguranca">
+           <svg viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="1.6"/></svg>
+           Nenhum dado é salvo neste site — a busca é feita com segurança no momento do envio.
+         </p>
+       </div>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
