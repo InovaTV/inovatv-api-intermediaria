@@ -11,6 +11,7 @@ const MAPA = {
   "_shared/github_actions_dispatch.ts": "fake_github_actions_dispatch.mjs",
   "_shared/wasender_client.ts": "fake_whatsapp_client.mjs",
   "_shared/mensagens_atendimento.ts": "fake_mensagens_atendimento.mjs",
+  "_shared/supabase_client.ts": "fake_supabase_client.mjs",
 };
 export async function resolve(specifier, context, nextResolve) {
   for (const [sufixo, fake] of Object.entries(MAPA)) {

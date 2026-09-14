@@ -61,6 +61,10 @@ globalThis.Deno = {
     ultimoHandlerRegistrado = fn;
   },
 };
+// Trilha de auditoria (Fase 3, 2026-09-14) -- _shared/renovacao_confirmacao.ts
+// agora chama registrarEvento() via EdgeRuntime.waitUntil; mesmo shim de
+// scripts/testes/renovacao_em_andamento/teste.mjs.
+globalThis.EdgeRuntime = { waitUntil: () => {} };
 
 await import("../../../supabase/functions/renovacao-sigma-resultado/index.ts");
 const handlerResultado = ultimoHandlerRegistrado;

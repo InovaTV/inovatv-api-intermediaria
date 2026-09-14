@@ -15,15 +15,23 @@ function novoEstado() {
     // -- buscarLotePorTokenHash retorna null e o fluxo individual segue
     // exatamente como antes.
     renovacoes_lote: new Map(), // chave: grupo_id
+    // Trilha de auditoria (Fase 3, 2026-09-14) -- so' pra
+    // registrarEvento() (_shared/renovacao_eventos.ts) nao lancar
+    // "Cannot read properties of undefined" ao gravar; este teste
+    // verifica a FK de vinculo, nao o catalogo de eventos (ja coberto
+    // em scripts/testes/renovacao_iniciar/teste.mjs).
+    renovacao_eventos: new Map(), // chave: contador sintetico
   };
 }
 
 let estadoAtual = novoEstado();
 let falharProximoInsertCobranca = false;
+let contadorEventos = 0;
 
 export function resetarEstado() {
   estadoAtual = novoEstado();
   falharProximoInsertCobranca = false;
+  contadorEventos = 0;
 }
 
 export function lerTabela(nome) {
@@ -123,7 +131,11 @@ class QueryBuilder {
           },
         };
       }
-      const chave = this.tabela === "cobrancas_pix" ? linha.operacao_id : linha.id;
+      const chave = this.tabela === "cobrancas_pix"
+        ? linha.operacao_id
+        : this.tabela === "renovacao_eventos"
+        ? `evt-${++contadorEventos}`
+        : linha.id;
       estadoAtual[this.tabela].set(chave, linha);
       return { data: [linha], error: null };
     }

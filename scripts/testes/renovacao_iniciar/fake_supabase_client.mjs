@@ -11,6 +11,11 @@ let estado = {};
 // implicitamente e continuam passando sem alteracao). Um teste
 // especifico usa configurarRateLimit(false) pra exercitar o bloqueio.
 let permitirRateLimit = true;
+// Trilha de auditoria (Fase 3, 2026-09-14) -- simula a corrida real
+// documentada em processarEtapaCarrinho (indice unico parcial do banco
+// estourando num insert concorrente), pra exercitar carrinho_erro_corrida
+// sem precisar de concorrencia de verdade.
+let falhaInsertTabela = null;
 
 function tabelaDe(nome) {
   if (!estado[nome]) estado[nome] = [];
@@ -20,9 +25,13 @@ function tabelaDe(nome) {
 export function resetar() {
   estado = {};
   permitirRateLimit = true;
+  falhaInsertTabela = null;
 }
 export function configurarRateLimit(permitir) {
   permitirRateLimit = permitir;
+}
+export function configurarFalhaInsert(tabela) {
+  falhaInsertTabela = tabela;
 }
 export function seed(tabela, linhas) {
   tabelaDe(tabela).push(...linhas.map((l) => ({ ...l })));
@@ -82,6 +91,9 @@ class QB {
   }
   _run() {
     const linhasTabela = tabelaDe(this.t);
+    if (this.op === "insert" && this.t === falhaInsertTabela) {
+      throw new Error(`insert simulado falhou (corrida) -- tabela=${this.t}`);
+    }
     if (this.op === "insert") {
       const criados = this.payload.map((l) => ({
         id: l.id ?? cryptoId(),

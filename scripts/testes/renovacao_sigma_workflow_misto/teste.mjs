@@ -84,6 +84,14 @@ globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   let corpo = null;
   try { corpo = opts.body ? JSON.parse(opts.body) : null; } catch { /* ok */ }
+
+  // Trilha de auditoria (Fase 3, 2026-09-14) -- fora de chamadasFetch de
+  // proposito: esta suite conta/ordena chamadasFetch pra asserções que
+  // datam de antes da instrumentacao existir.
+  if (u.includes("/rest/v1/renovacao_eventos")) {
+    return new Response(null, { status: 201 });
+  }
+
   chamadasFetch.push({ url: u, method: opts.method ?? "GET", corpo, seq: proximoSeq() });
 
   if (u.includes("/rest/v1/renovacoes_lote")) {

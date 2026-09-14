@@ -37,11 +37,25 @@ import { resolverIdInternoDoDom } from "./lib/resolver-id-interno-dom.mjs";
 // ({ resultado, vencimentoConfirmado?, detalhe? }). Nunca repete
 // /api/account/renew (a lib garante 1 unica chamada).
 import { renovarUmAcessoUniTV } from "./lib/unitv-renovar.mjs";
+// Trilha de auditoria (Fase 3, 2026-09-14) -- instrumentacao da
+// principal caixa-preta do projeto: ate agora, o que acontece aqui
+// dentro (Rocket -> Sigma/UniTV) so' existia nos logs do job do GitHub
+// Actions, sem historico persistido no Supabase. registrarEvento()
+// nunca lanca e nunca decide nada -- so' registra, sempre DEPOIS que a
+// operacao real (leitura ou o clique) ja aconteceu. Ver
+// _shared/renovacao_eventos.ts (lado Deno) para o mesmo catalogo.
+import { criarRegistradorDeEventos } from "./lib/renovacao-eventos.mjs";
 
 const OPERACAO_ID = process.env.OPERACAO_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const CALLBACK_TOKEN = process.env.RENOVACAO_SIGMA_CALLBACK_TOKEN;
+
+const registrarEvento = criarRegistradorDeEventos({
+  supabaseUrl: SUPABASE_URL,
+  supabaseServiceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+  origem: "renovacao-sigma-workflow",
+});
 
 // Camada B (Iteracao 1, 2026-08-29 -- revisada 2026-08-29 apos revisao de
 // seguranca): o POST /pagamento/add/ (renovar_painel=true) NAO e'
@@ -277,7 +291,14 @@ async function sincronizarVencimentoRocket(publicId, vencimentoAlvo) {
 // Rocket. Retorna um item de resultado pronto (mesma forma dos itens
 // Sigma de processarLote), com rocketDesync=true quando a renovacao
 // deu certo mas o Rocket nao sincronizou.
-async function renovarUmAcessoUniTVComSync({ sn, id, planoNome, publicId, servidorNome, clienteNome, tokenId }) {
+async function renovarUmAcessoUniTVComSync({ sn, id, planoNome, publicId, servidorNome, clienteNome, tokenId, grupoId }) {
+  await registrarEvento({
+    codigo: "processamento_iniciado",
+    tokenId,
+    grupoId,
+    operacaoId: OPERACAO_ID,
+    servidor: "unitv",
+  });
   // Fase 2A: injeta o token resolvido (Vault -> fallback env). O
   // executor congelado recebe o valor pronto -- seu default
   // process.env.UNITV_DEALER_TOKEN nunca e' exercido, mas o valor
@@ -299,6 +320,14 @@ async function renovarUmAcessoUniTVComSync({ sn, id, planoNome, publicId, servid
     const sync = await sincronizarVencimentoRocket(publicId, r.vencimentoConfirmado);
     if (sync.outcome !== "sincronizado") item.rocketDesync = true;
   }
+  await registrarEvento({
+    codigo: r.resultado === "sucesso" ? "vencimento_confirmado_sucesso" : "vencimento_nao_confirmado_falha",
+    tokenId,
+    grupoId,
+    operacaoId: OPERACAO_ID,
+    servidor: "unitv",
+    detalhe: r.resultado === "sucesso" ? { novo_vencimento: r.vencimentoConfirmado ?? null } : { resultado: r.resultado, motivo: r.detalhe ?? null },
+  });
   return item;
 }
 
@@ -347,9 +376,15 @@ function resolverDuracaoMesesPorPlano(planoNome) {
 // DURACAO da renovacao. Resolvido ANTES de qualquer chamada de rede --
 // plano nao reconhecido -> resultado_ambiguo, zero chamadas ao
 // Rocket/Sigma/Playwright (mesma disciplina do UniTV).
-async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNome, telefone, planoNome }) {
+async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNome, telefone, planoNome, tokenId, grupoId }) {
+  const evt = (codigo, detalhe) =>
+    registrarEvento({ codigo, tokenId, grupoId, operacaoId: OPERACAO_ID, servidor: "sigma", detalhe });
+
+  await evt("processamento_iniciado");
+
   const duracaoMesesAlvo = resolverDuracaoMesesPorPlano(planoNome);
   if (!duracaoMesesAlvo) {
+    await evt("processamento_plano_nao_mapeado", { plano: planoNome ?? null });
     return {
       resultado: "resultado_ambiguo",
       detalhe: `plano "${planoNome ?? ""}" nao mapeado para uma duracao Sigma conhecida (mensal/trimestral/semestral/anual)`,
@@ -358,6 +393,7 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
 
   const { ok: okAntes, cliente: clienteAntes } = await lerClienteRocket(publicId);
   if (!okAntes || !clienteAntes) {
+    await evt("processamento_cliente_rocket_falhou");
     return { resultado: "resultado_ambiguo", detalhe: "falha ao ler cliente no Rocket antes da tentativa" };
   }
   const vencimentoAntes = clienteAntes.vencimento;
@@ -367,6 +403,7 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
   // pagamento. Sem cache/stale/fallback: se nao resolver, transfere.
   const idFresh = await resolverIdInternoFresh(publicId);
   if (idFresh.outcome !== "resolvido") {
+    await evt("processamento_id_interno_falhou", { outcome: idFresh.outcome, motivo: idFresh.motivo ?? null });
     return {
       resultado: "resultado_ambiguo",
       detalhe: `resolucao fresh do id_cliente falhou (${idFresh.outcome}${idFresh.motivo ? ":" + idFresh.motivo : ""})`,
@@ -417,18 +454,21 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       // chamada ja vem com "success" ou com "unavailable" ja esgotado.
       const ctxAntes = await lerContextoSigma(idClienteInterno);
       if (ctxAntes.outcome === "sessao_expirada") {
+        await evt("processamento_sessao_expirada", { etapa: "contexto_antes" });
         return { resultado: "sessao_expirada", detalhe: ctxAntes.detalhe ?? "sessao invalida" };
       }
       if (ctxAntes.outcome === "pacote_vazio") {
         // Pos-reclassificacao (Iteracao 1): pacote_vazio agora SO' significa
         // resposta valida do painel + cliente realmente sem plano -- nunca
         // mais um Unauthenticated disfarcado.
+        await evt("processamento_pacote_vazio");
         return { resultado: "resultado_ambiguo", detalhe: "Sigma nao informou o pacote atual (package vazio)" };
       }
       if (ctxAntes.outcome === "unavailable") {
         // A Camada A ja re-tentou N vezes. Auth do painel Sigma
         // indisponivel -> resultado_ambiguo + sigmaIndisponivel (mensagem
         // de instabilidade temporaria ao cliente). NUNCA "falha".
+        await evt("processamento_painel_indisponivel", { etapa: ctxAntes.etapa ?? "unavailable", tentativas: ctxAntes.tentativas ?? null });
         return {
           resultado: "resultado_ambiguo",
           sigmaIndisponivel: true,
@@ -436,6 +476,7 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
         };
       }
       if (ctxAntes.outcome !== "success" || !ctxAntes.pacoteAtual) {
+        await evt("processamento_contexto_invalido", { etapa: "contexto_antes", outcome: ctxAntes.outcome ?? null });
         return {
           resultado: "resultado_ambiguo",
           detalhe: `falha ao obter contexto Sigma (${ctxAntes.etapa ?? ctxAntes.outcome})`,
@@ -449,6 +490,10 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
       // idempotente -- repetir renovaria 2x. Todo retry desta etapa fica
       // so' na LEITURA (reconsulta), nunca no clique.
       await executarCliqueAddPagamento(page, idClienteInterno, pacoteAtualTexto, duracaoMesesAlvo);
+      // Registrado DEPOIS do clique real (a operacao ja aconteceu) --
+      // ponto nao-idempotente, ver comentario da Camada B no topo do
+      // arquivo. O sensor nunca poderia gatilhar/repetir isto.
+      await evt("processamento_clique_executado", { duracao_meses: duracaoMesesAlvo });
 
       // Reconsulta INDEPENDENTE -- Rocket (via renovacao-sigma-cliente) e
       // Sigma (via renovacao-sigma-contexto), nunca confia no clique/toast
@@ -515,6 +560,19 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
         };
       }
 
+      const codigoVeredito =
+        veredito.resultado === "sucesso"
+          ? "vencimento_confirmado_sucesso"
+          : veredito.resultado === "falha"
+          ? "vencimento_nao_confirmado_falha"
+          : "vencimento_nao_confirmado_ambiguo";
+      await evt(
+        codigoVeredito,
+        veredito.resultado === "sucesso"
+          ? { novo_vencimento: veredito.vencimentoConfirmado ?? null }
+          : { resultado: veredito.resultado, motivo: veredito.detalhe ?? null },
+      );
+
       return veredito;
     } finally {
       await browser.close();
@@ -523,6 +581,7 @@ async function renovarUmAcessoSigma({ sessionid, csrftoken, publicId, clienteNom
     // Qualquer excecao nao prevista (elemento nao encontrado, timeout
     // do Playwright, etc.) -- NUNCA falha/sucesso por suposicao.
     console.error("[renovacao-sigma-workflow] excecao nao prevista", erro);
+    await evt("processamento_excecao", { motivo: (erro?.message ?? String(erro)).slice(0, 500) });
     return { resultado: "resultado_ambiguo", detalhe: `excecao: ${erro.message ?? String(erro)}` };
   }
 }
@@ -795,6 +854,7 @@ async function processarLote(lote, sessionid, csrftoken) {
           servidorNome: filho.servidor_nome,
           clienteNome: filho.cliente_nome,
           tokenId: filho.id,
+          grupoId: lote.grupo_id,
         }),
       );
       continue;
@@ -807,6 +867,8 @@ async function processarLote(lote, sessionid, csrftoken) {
       clienteNome: filho.cliente_nome,
       telefone: filho.telefone,
       planoNome: filho.plano_nome,
+      tokenId: filho.id,
+      grupoId: lote.grupo_id,
     });
     resultados.push({
       token_id: filho.id,
@@ -861,6 +923,17 @@ async function main() {
     // lote, tratamento conservador).
     if (lote) {
       const filhos = await lerFilhosDoLote(lote.grupo_id);
+      await Promise.all(
+        filhos.map((f) =>
+          registrarEvento({
+            codigo: "processamento_sessao_expirada",
+            tokenId: f.id,
+            grupoId: lote.grupo_id,
+            operacaoId: OPERACAO_ID,
+            detalhe: { motivo: "sessao do Vault ausente" },
+          }),
+        ),
+      );
       await reportarResultadoLote(
         lote.grupo_id,
         filhos.map((f) => ({
@@ -874,6 +947,12 @@ async function main() {
       );
       return;
     }
+    await registrarEvento({
+      codigo: "processamento_sessao_expirada",
+      tokenId: token?.id,
+      operacaoId: OPERACAO_ID,
+      detalhe: { motivo: "sessao do Vault ausente" },
+    });
     await reportarResultado("sessao_expirada", { detalhe: "sessao do Vault ausente" });
     return;
   }
@@ -885,6 +964,11 @@ async function main() {
 
   // --- Fluxo individual Sigma (byte a byte o de antes).
   if (!token) {
+    await registrarEvento({
+      codigo: "processamento_contexto_invalido",
+      operacaoId: OPERACAO_ID,
+      detalhe: { motivo: "tokens_renovacao nao encontrado pra este operacao_id" },
+    });
     await reportarResultado("resultado_ambiguo", { detalhe: "tokens_renovacao nao encontrado pra este operacao_id" });
     return;
   }
@@ -896,6 +980,7 @@ async function main() {
     clienteNome: token.cliente_nome,
     telefone: token.telefone,
     planoNome: token.plano_nome,
+    tokenId: token.id,
   });
   const extra = {};
   if (r.vencimentoConfirmado) extra.vencimentoConfirmado = r.vencimentoConfirmado;
@@ -909,6 +994,17 @@ async function main() {
 
 main().catch(async (erro) => {
   console.error("[renovacao-sigma-workflow] erro fatal fora do fluxo principal", erro);
+  try {
+    // So' operacaoId disponivel aqui -- excecao fora do fluxo principal,
+    // antes/entre a resolucao de token/lote (nao da' pra saber qual).
+    await registrarEvento({
+      codigo: "processamento_excecao",
+      operacaoId: OPERACAO_ID,
+      detalhe: { motivo: (erro?.message ?? String(erro)).slice(0, 500), origem: "main" },
+    });
+  } catch {
+    // best-effort -- nunca deve impedir o reportarResultado abaixo.
+  }
   try {
     await reportarResultado("resultado_ambiguo", { detalhe: `erro fatal: ${erro.message ?? String(erro)}` });
   } catch {

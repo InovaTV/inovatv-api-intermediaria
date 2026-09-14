@@ -53,6 +53,12 @@ export interface RenovacaoLote {
   // inexistente na Woovi. O watchdog so' libera o lote apos confirmar
   // o 404 em dois ciclos diferentes.
   cobranca_ausente_em: string | null;
+  // Trilha de auditoria (Fase 2/3, 2026-09-14) -- ver comentario do
+  // campo homonimo em TokenRenovacao (tokens_renovacao.ts). So' gravado
+  // na "capa" do lote -- os filhos (tokens_renovacao com grupo_id)
+  // correlacionam as etapas pre-token pelo grupo_id, nao tem sessao_id
+  // proprio.
+  sessao_id: string | null;
 }
 
 // Cada filho: um acesso do lote. Snapshot dos dados apresentados na
@@ -89,6 +95,9 @@ export async function criarRenovacaoLote(params: {
   valorTotalCentavos: number;
   regraAplicada: string;
   filhos: FilhoLote[];
+  // Trilha de auditoria (Fase 3, 2026-09-14) -- opcional/aditivo, ver
+  // comentario do campo homonimo em RenovacaoLote.
+  sessaoId?: string | null;
 }): Promise<{ tokenBruto: string; lote: RenovacaoLote }> {
   const client = getServiceClient();
   const tokenBruto = crypto.randomUUID();
@@ -105,6 +114,7 @@ export async function criarRenovacaoLote(params: {
       regra_aplicada: params.regraAplicada,
       expira_em: expiraEm,
       estado: "aguardando_confirmacao",
+      sessao_id: params.sessaoId ?? null,
     })
     .select("*")
     .single();

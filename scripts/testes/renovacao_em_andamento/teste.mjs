@@ -28,6 +28,7 @@ const fDisp = await import("./fake_github_actions_dispatch.mjs");
 const fWa = await import("./fake_whatsapp_client.mjs");
 const fMsg = await import("./fake_mensagens_atendimento.mjs");
 const fSeq = await import("./_seq.mjs");
+const fEve = await import("./fake_supabase_client.mjs");
 
 const { MENSAGEM_RENOVACAO_EM_ANDAMENTO } = await import(
   "../../../supabase/functions/_shared/mensagens_fixas.ts"
@@ -50,6 +51,7 @@ function ok(cond, msg) {
 function resetar() {
   fSig.resetar(); fPix.resetar(); fCob.resetar(); fTok.resetar();
   fLote.resetar(); fDisp.resetar(); fWa.resetar(); fMsg.resetar(); fSeq.resetarSeq();
+  fEve.resetarEventos();
   pendentes = [];
 }
 
@@ -117,6 +119,15 @@ function reqRaw(bodyObj) {
     "C1: mensagem enviada ANTES do dispatch");
   ok(fLote.chamadasFeitas().length === 0, "C1: reivindicarInicioRenovacaoLote NAO chamado (individual)");
   ok(fTok.chamadasFeitas().length === 1, "C1: reivindicarInicioRenovacao chamado 1x");
+
+  // Fase 3 (2026-09-14) -- trilha de auditoria: caminho feliz individual.
+  const eventosC1 = fEve.lerEventos();
+  const codigosC1 = eventosC1.map((e) => e.codigo);
+  ok(codigosC1.includes("pagamento_confirmado"), "Fase3 C1: pagamento_confirmado registrado");
+  ok(codigosC1.includes("whatsapp_legado_enviado"), "Fase3 C1: whatsapp_legado_enviado registrado (mensagem intermediaria)");
+  ok(codigosC1.includes("disparo_solicitado"), "Fase3 C1: disparo_solicitado registrado");
+  ok(eventosC1.every((e) => e.operacao_id === "op-c1"), "Fase3 C1: todos os eventos com o operacaoId correto");
+  ok(eventosC1.every((e) => e.grupo_id == null), "Fase3 C1: grupo_id null (individual, nao lote)");
 }
 
 // =====================================================================
@@ -141,6 +152,11 @@ function reqRaw(bodyObj) {
   ok(fTok.chamadasFeitas().length === 0, "C2: reivindicarInicioRenovacao (individual) NAO chamado");
   ok(idx("enviarMensagemWhatsApp") < idx("dispararWorkflowRenovacaoSigma"), "C2: mensagem ANTES do dispatch");
   ok(fDisp.chamadasFeitas().length === 1, "C2: workflow disparado 1x");
+
+  // Fase 3 (2026-09-14) -- caminho feliz de LOTE: eventos com grupo_id.
+  const eventosC2 = fEve.lerEventos();
+  ok(eventosC2.some((e) => e.codigo === "disparo_solicitado" && e.grupo_id === "grp-1"), "Fase3 C2: disparo_solicitado com grupo_id do lote");
+  ok(eventosC2.every((e) => e.operacao_id === "op-c2"), "Fase3 C2: todos os eventos com o operacaoId correto");
 }
 
 // =====================================================================
@@ -159,6 +175,14 @@ function reqRaw(bodyObj) {
   ok(fWa.enviadasFeitas().length === 0, "C3: NENHUMA mensagem intermediaria (reivindicado === null)");
   ok(fMsg.inseridasFeitas().length === 0, "C3: NADA gravado no historico");
   ok(fDisp.chamadasFeitas().length === 0, "C3: workflow NAO disparado");
+
+  // Fase 3 (2026-09-14) -- reivindicacao perdeu a corrida.
+  const eventosC3 = fEve.lerEventos();
+  ok(
+    eventosC3.some((e) => e.codigo === "disparo_reivindicacao_falhou" && e.operacao_id === "op-c3"),
+    "Fase3 C3: disparo_reivindicacao_falhou registrado",
+  );
+  ok(!eventosC3.some((e) => e.codigo === "disparo_solicitado"), "Fase3 C3: disparo_solicitado NUNCA registrado (nada foi disparado)");
 }
 
 // =====================================================================
@@ -270,6 +294,13 @@ function reqRaw(bodyObj) {
   ok(fCob.chamadasFeitas().every((c) => c.fn !== "marcarPaga"), "C9: marcarCobrancaComoPaga NAO chamado");
   ok(fWa.enviadasFeitas().length === 0, "C9: NENHUMA mensagem intermediaria");
   ok(fDisp.chamadasFeitas().length === 0, "C9: workflow NAO disparado");
+
+  // Fase 3 (2026-09-14) -- valor divergente registrado com os dois valores.
+  const eventosC9 = fEve.lerEventos();
+  const divC9 = eventosC9.find((e) => e.codigo === "pagamento_valor_divergente");
+  ok(!!divC9, "Fase3 C9: pagamento_valor_divergente registrado");
+  ok(divC9?.detalhe?.esperado_centavos === 7000 && divC9?.detalhe?.pago_centavos === 5000, "Fase3 C9: detalhe com esperado_centavos e pago_centavos corretos");
+  ok(!eventosC9.some((e) => e.codigo === "pagamento_confirmado"), "Fase3 C9: pagamento_confirmado NUNCA registrado (valor nao bate)");
 }
 
 // =====================================================================
@@ -292,6 +323,12 @@ function reqRaw(bodyObj) {
   await dispararWebhook("op-c10"); // 2a entrega: reenvio
   ok(fWa.enviadasFeitas().length === apos1a, "C10: 2a entrega (reenvio) NAO envia a mensagem de novo");
   ok(fDisp.chamadasFeitas().length === 1, "C10: workflow disparado so' uma vez no total");
+
+  // Fase 3 (2026-09-14) -- as 2 entregas juntas: 1a confirma, 2a e' reenvio.
+  const codigosC10 = fEve.lerEventos().map((e) => e.codigo);
+  ok(codigosC10.includes("pagamento_confirmado"), "Fase3 C10: pagamento_confirmado na 1a entrega");
+  ok(codigosC10.includes("pagamento_reenvio_ja_processado"), "Fase3 C10: pagamento_reenvio_ja_processado na 2a entrega");
+  ok(codigosC10.filter((c) => c === "disparo_solicitado").length === 1, "Fase3 C10: disparo_solicitado registrado so' 1x (reenvio nunca redispara)");
 }
 
 // =====================================================================
@@ -307,6 +344,13 @@ function reqRaw(bodyObj) {
   ok(resp.status === 200, "C11: webhook responde 200 mesmo com dispatch falhando");
   ok(fWa.enviadasFeitas().length === 1, "C11: mensagem intermediaria enviada 1x");
   ok(fDisp.chamadasFeitas().length === 1, "C11: dispatch foi tentado");
+
+  // Fase 3 (2026-09-14) -- disparo_falhou registrado, NUNCA disparo_solicitado.
+  const eventosC11 = fEve.lerEventos();
+  const falhaC11 = eventosC11.find((e) => e.codigo === "disparo_falhou");
+  ok(!!falhaC11, "Fase3 C11: disparo_falhou registrado");
+  ok(falhaC11?.detalhe?.motivo === "HTTP 500", "Fase3 C11: detalhe do erro do dispatch presente no evento");
+  ok(!eventosC11.some((e) => e.codigo === "disparo_solicitado"), "Fase3 C11: disparo_solicitado NUNCA registrado quando o dispatch falha");
 }
 
 // =====================================================================
@@ -339,6 +383,14 @@ function reqRaw(bodyObj) {
   ok(l.some((x) => x.includes("evento ignorado") && x.includes("OPENPIX:TRANSACTION_RECEIVED")), "OBS-1: loga o evento ignorado com o tipo");
   ok(l.some((x) => x.includes("d5241cc0-3a46-401a-bbed-4a00ce3dd8c2")), "OBS-1: loga o correlationID (id nao sensivel)");
   ok(l.some((x) => x.includes("Ecd190030d05b45aaa3d9197e21deebc0")), "OBS-1: loga o endToEndId (id nao sensivel)");
+
+  // Fase 3 (2026-09-14) -- evento ignorado, mas com correlationID no
+  // payload -> registra pagamento_webhook_evento_ignorado.
+  const eventosObs1 = fEve.lerEventos();
+  ok(
+    eventosObs1.some((e) => e.codigo === "pagamento_webhook_evento_ignorado" && e.operacao_id === "d5241cc0-3a46-401a-bbed-4a00ce3dd8c2"),
+    "Fase3 OBS-1: pagamento_webhook_evento_ignorado registrado com o correlationID do payload",
+  );
 }
 
 // =====================================================================
@@ -375,6 +427,11 @@ function reqRaw(bodyObj) {
   ok(resp.status === 200, "OBS-3: 200");
   ok(fCob.chamadasFeitas().length === 0, "OBS-3: nada processado (sem correlationID)");
   ok(logsDoWebhook().some((x) => x.includes("sem correlationID")), "OBS-3: loga 'sem correlationID'");
+
+  // Fase 3 (2026-09-14) -- sem correlationID, NENHUM identificador
+  // possivel -- nenhum evento e' registrado (ponto ciente sem sensor,
+  // nao um bug: nao ha' nada pra correlacionar).
+  ok(fEve.lerEventos().length === 0, "Fase3 OBS-3: nenhum evento registrado (sem correlationID nao ha' o que correlacionar)");
 }
 
 // =====================================================================

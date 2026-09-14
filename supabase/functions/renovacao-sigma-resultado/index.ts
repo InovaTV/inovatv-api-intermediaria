@@ -50,6 +50,9 @@ import {
   formatarValorBRL,
   MENSAGEM_RENOVACAO_INSTABILIDADE,
 } from "../_shared/mensagens_fixas.ts";
+import { registrarEvento } from "../_shared/renovacao_eventos.ts";
+
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 // Etapa 2 (Renovacao UniTV, Bloco 4). Dessincronia: a renovacao UniTV
 // deu certo no painel de revenda mas o vencimento NAO sincronizou no
@@ -59,17 +62,36 @@ import {
 // mensagem ao cliente.
 const MOTIVO_ROCKET_DESYNC = "renovacao_unitv:rocket_desync";
 
-async function avisarRocketDesync(conversationId: string, textoSistema: string): Promise<void> {
+async function avisarRocketDesync(
+  conversationId: string,
+  textoSistema: string,
+  correlacao: { tokenId?: string | null; grupoId?: string | null; operacaoId?: string | null },
+): Promise<void> {
   await inserirMensagem(conversationId, "sistema", textoSistema, null).catch(() => {});
   const numeroJose = Deno.env.get("WHATSAPP_JOSE_NUMERO");
   if (numeroJose) {
-    await enviarTemplateWhatsApp(
+    const envio = await enviarTemplateWhatsApp(
       numeroJose,
       NOME_TEMPLATE_NOVA_TRANSFERENCIA,
       IDIOMA_TEMPLATE_NOVA_TRANSFERENCIA,
       [MOTIVO_ROCKET_DESYNC],
-    ).catch(() => {});
+    ).catch(() => ({ outcome: "falha" as const }));
+    registrarEnvioWhatsappLegado({
+      sucesso: envio.outcome === "success",
+      contexto: "rocket_desync_aviso_jose",
+      tokenId: correlacao.tokenId,
+      grupoId: correlacao.grupoId,
+    });
   }
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "vencimento_rocket_desync",
+      origem: "renovacao-sigma-resultado",
+      tokenId: correlacao.tokenId,
+      grupoId: correlacao.grupoId,
+      operacaoId: correlacao.operacaoId,
+    }),
+  );
 }
 
 const RESULTADOS_VALIDOS: ResultadoRenovacaoSigma[] = [
@@ -101,6 +123,26 @@ interface ItemResultadoLote {
 
 function formatarDataBr(iso: string): string {
   return new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+}
+
+// Trilha de auditoria (Fase 3, 2026-09-14) -- mesmo padrao do helper
+// homonimo em _shared/renovacao_confirmacao.ts. Wasender desativado
+// (premissa fixada 2026-09-14) -- falha aqui nunca e' falha da renovacao.
+function registrarEnvioWhatsappLegado(params: {
+  sucesso: boolean;
+  contexto: string;
+  tokenId?: string | null;
+  grupoId?: string | null;
+}): void {
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: params.sucesso ? "whatsapp_legado_enviado" : "whatsapp_legado_falhou",
+      origem: "renovacao-sigma-resultado",
+      tokenId: params.tokenId,
+      grupoId: params.grupoId,
+      detalhe: { contexto: params.contexto },
+    }),
+  );
 }
 
 Deno.serve(async (req: Request) => {
@@ -154,6 +196,9 @@ Deno.serve(async (req: Request) => {
   const registroAntes = await buscarTokenPorOperacaoId(operacaoId);
   if (!registroAntes) {
     console.log("[renovacao-sigma-resultado] operacao_id sem token correspondente", JSON.stringify({ operacaoId }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "callback_sem_token_correspondente", origem: "renovacao-sigma-resultado", operacaoId }),
+    );
     return jsonResponse({ outcome: "sem_token_correspondente" });
   }
 
@@ -167,8 +212,21 @@ Deno.serve(async (req: Request) => {
     // Ja processado antes (idempotencia) -- nao reenvia mensagem, nao
     // transfere de novo.
     console.log("[renovacao-sigma-resultado] callback duplicado ou fora de estado -- ignorado", JSON.stringify({ operacaoId, resultado }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "callback_ja_processado", origem: "renovacao-sigma-resultado", operacaoId, tokenId: registroAntes.id }),
+    );
     return jsonResponse({ outcome: "ja_processado" });
   }
+
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: resultado === "sucesso" ? "resultado_gravado_sucesso" : "resultado_gravado_falha",
+      origem: "renovacao-sigma-resultado",
+      operacaoId,
+      tokenId: atualizado.id,
+      detalhe: resultado === "sucesso" ? { resultado } : { resultado, motivo: detalhe ?? null },
+    }),
+  );
 
   try {
     await inserirMensagem(
@@ -200,12 +258,23 @@ Deno.serve(async (req: Request) => {
       valorFormatado: formatarValorBRL(atualizado.valor_esperado_centavos / 100),
       vencimentoFormatado,
     });
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: vencimentoConfirmado ? "vencimento_confirmado_sucesso" : "vencimento_nao_confirmado_falha",
+        origem: "renovacao-sigma-resultado",
+        operacaoId,
+        tokenId: atualizado.id,
+        detalhe: vencimentoConfirmado ? { novo_vencimento: vencimentoFormatado } : {},
+      }),
+    );
+
     const envio = await enviarTemplateWhatsApp(
       atualizado.telefone,
       NOME_TEMPLATE_PAGAMENTO_CONFIRMADO,
       IDIOMA_TEMPLATE_PAGAMENTO_CONFIRMADO,
       [textoRenovacaoConcluida],
     );
+    registrarEnvioWhatsappLegado({ sucesso: envio.outcome === "success", contexto: "pagamento_confirmado", tokenId: atualizado.id });
     if (envio.outcome === "success") {
       // Bloco de renovacao 2026-08-28 (C4): grava no historico do
       // Painel exatamente o texto que o cliente recebeu. Best-effort,
@@ -227,6 +296,7 @@ Deno.serve(async (req: Request) => {
       await avisarRocketDesync(
         atualizado.conversation_id,
         "Renovação UniTV concluída no painel; vencimento NÃO sincronizado no Rocket -- requer ajuste manual do vencimento.",
+        { tokenId: atualizado.id, operacaoId },
       );
     }
 
@@ -248,6 +318,7 @@ Deno.serve(async (req: Request) => {
   const sigmaIndisponivel = body.sigmaIndisponivel === true && resultado === "resultado_ambiguo";
   if (sigmaIndisponivel) {
     const envio = await enviarMensagemWhatsApp(atualizado.telefone, MENSAGEM_RENOVACAO_INSTABILIDADE);
+    registrarEnvioWhatsappLegado({ sucesso: envio.outcome === "success", contexto: "instabilidade_sigma", tokenId: atualizado.id });
     if (envio.outcome === "success") {
       await inserirMensagem(atualizado.conversation_id, "ia", MENSAGEM_RENOVACAO_INSTABILIDADE, null).catch(() => {});
     }
@@ -262,6 +333,11 @@ Deno.serve(async (req: Request) => {
       detalhe ?? "",
     );
     transferenciaAcionada = transferencia.outcome === "acionada";
+    if (transferenciaAcionada) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "transferencia_humana_acionada", origem: "renovacao-sigma-resultado", operacaoId, tokenId: atualizado.id, detalhe: { motivo: motivoTransferencia } }),
+      );
+    }
   } catch (erro) {
     console.log("[renovacao-sigma-resultado] falha ao acionar transferencia humana", String(erro));
   }
@@ -312,6 +388,9 @@ async function processarResultadoLote(body: {
   const lote = await buscarLotePorOperacaoId(operacaoId);
   if (!lote) {
     console.log("[renovacao-sigma-resultado] lote sem correspondencia", JSON.stringify({ operacaoId, grupoId }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "callback_sem_token_correspondente", origem: "renovacao-sigma-resultado", operacaoId, grupoId }),
+    );
     return jsonResponse({ outcome: "sem_lote_correspondente" });
   }
 
@@ -325,11 +404,39 @@ async function processarResultadoLote(body: {
       vencimentoConfirmado: it.vencimentoConfirmado ?? null,
       motivo: resultado === "sucesso" ? null : (it.detalhe ?? `renovacao_lote:${resultado}`),
     });
-    if (atualizado) algumAtualizado = true;
+    if (atualizado) {
+      algumAtualizado = true;
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: resultado === "sucesso" ? "resultado_gravado_sucesso" : "resultado_gravado_falha",
+          origem: "renovacao-sigma-resultado",
+          operacaoId,
+          grupoId,
+          tokenId: it.token_id,
+          servidor: it.tipo === "sigma" || it.tipo === "unitv" ? it.tipo : undefined,
+          detalhe: { resultado, servidor_nome: it.servidor_nome ?? null },
+        }),
+      );
+      if (resultado === "sucesso" && it.vencimentoConfirmado) {
+        EdgeRuntime.waitUntil(
+          registrarEvento({
+            codigo: "vencimento_confirmado_sucesso",
+            origem: "renovacao-sigma-resultado",
+            operacaoId,
+            grupoId,
+            tokenId: it.token_id,
+            detalhe: { novo_vencimento: formatarDataBr(it.vencimentoConfirmado) },
+          }),
+        );
+      }
+    }
   }
 
   if (!algumAtualizado) {
     console.log("[renovacao-sigma-resultado] callback de lote duplicado/fora de estado -- ignorado", JSON.stringify({ grupoId }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "callback_ja_processado", origem: "renovacao-sigma-resultado", operacaoId, grupoId }),
+    );
     return jsonResponse({ outcome: "ja_processado" });
   }
 
@@ -341,6 +448,9 @@ async function processarResultadoLote(body: {
   if (!loteFinalizado) {
     // Outra chamada (ou o watchdog) ja finalizou o lote -- nao reenvia
     // mensagem nem transfere de novo.
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "callback_ja_processado", origem: "renovacao-sigma-resultado", operacaoId, grupoId, detalhe: { motivo: "lote_ja_finalizado" } }),
+    );
     return jsonResponse({ outcome: "ja_processado" });
   }
 
@@ -370,6 +480,7 @@ async function processarResultadoLote(body: {
     }),
   );
   const envio = await enviarMensagemWhatsApp(lote.telefone, textoCliente);
+  registrarEnvioWhatsappLegado({ sucesso: envio.outcome === "success", contexto: "resultado_lote", grupoId });
   if (envio.outcome === "success") {
     await inserirMensagem(lote.conversation_id, "ia", textoCliente, null).catch(() => {});
   } else {
@@ -388,6 +499,7 @@ async function processarResultadoLote(body: {
     await avisarRocketDesync(
       lote.conversation_id,
       "Renovação em lote: um ou mais acessos UniTV renovaram no painel mas o vencimento NÃO sincronizou no Rocket -- requer ajuste manual.",
+      { grupoId, operacaoId },
     );
   }
 
@@ -407,6 +519,11 @@ async function processarResultadoLote(body: {
     try {
       const t = await acionarTransferenciaHumana(lote.conversation_id, motivo, "(renovacao em lote pos-pagamento)", resumo);
       transferenciaAcionada = t.outcome === "acionada";
+      if (transferenciaAcionada) {
+        EdgeRuntime.waitUntil(
+          registrarEvento({ codigo: "transferencia_humana_acionada", origem: "renovacao-sigma-resultado", operacaoId, grupoId, detalhe: { motivo } }),
+        );
+      }
     } catch (erro) {
       console.log("[renovacao-sigma-resultado] falha ao acionar transferencia (lote)", String(erro));
     }

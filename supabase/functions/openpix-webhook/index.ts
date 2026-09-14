@@ -64,6 +64,7 @@ import { dispararWorkflowRenovacaoSigma } from "../_shared/github_actions_dispat
 import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
 import { MENSAGEM_RENOVACAO_EM_ANDAMENTO } from "../_shared/mensagens_fixas.ts";
+import { registrarEvento } from "../_shared/renovacao_eventos.ts";
 
 interface OpenPixWebhookPayload {
   event?: string;
@@ -104,6 +105,9 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
       "[openpix-webhook] falha ao reconsultar cobranca -- nada atualizado",
       JSON.stringify({ correlationId, outcome: consulta.outcome }),
     );
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "pagamento_reconsulta_falhou", origem: "openpix-webhook", operacaoId: correlationId }),
+    );
     return;
   }
 
@@ -114,6 +118,14 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
       "[openpix-webhook] reconsulta nao confirma COMPLETED, nada atualizado",
       JSON.stringify({ correlationId, statusReal: consulta.status }),
     );
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "pagamento_reconsulta_nao_confirma",
+        origem: "openpix-webhook",
+        operacaoId: correlationId,
+        detalhe: { status_real: consulta.status },
+      }),
+    );
     return;
   }
 
@@ -122,6 +134,9 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
     console.log(
       "[openpix-webhook] correlationID sem registro local -- nada atualizado",
       JSON.stringify({ correlationId }),
+    );
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "pagamento_sem_registro_local", origem: "openpix-webhook", operacaoId: correlationId }),
     );
     return;
   }
@@ -140,8 +155,19 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
         "[openpix-webhook] cobranca ja processada (reenvio) -- nada a fazer",
         JSON.stringify({ correlationId }),
       );
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "pagamento_reenvio_ja_processado", origem: "openpix-webhook", operacaoId: correlationId }),
+      );
     }
     if (registroPago) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "pagamento_confirmado",
+          origem: "openpix-webhook",
+          operacaoId: correlationId,
+          detalhe: { valor_centavos: consulta.amountCentavos },
+        }),
+      );
       // So' dispara se marcarCobrancaComoPaga afetou uma linha DE
       // VERDADE (nunca em reenvio de webhook ja processado). Async,
       // fora do ciclo de resposta -- ver Deno.serve abaixo.
@@ -166,6 +192,14 @@ async function processarCobrancaCompleted(correlationId: string): Promise<void> 
       }),
     );
     await marcarCobrancaComoDivergente(correlationId);
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "pagamento_valor_divergente",
+        origem: "openpix-webhook",
+        operacaoId: correlationId,
+        detalhe: { esperado_centavos: registro.valor_esperado_centavos, pago_centavos: consulta.amountCentavos },
+      }),
+    );
   }
 }
 
@@ -192,6 +226,9 @@ async function iniciarRenovacaoSigma(
         "[openpix-webhook] token/lote nao estava 'autorizada' no momento do disparo -- nao disparado",
         JSON.stringify({ operacaoId, lote: !!grupoId }),
       );
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "disparo_reivindicacao_falhou", origem: "openpix-webhook", operacaoId, grupoId }),
+      );
       return;
     }
 
@@ -205,6 +242,15 @@ async function iniciarRenovacaoSigma(
     // historico) NUNCA pode impedir o dispatch abaixo.
     try {
       const envio = await enviarMensagemWhatsApp(reivindicado.telefone, MENSAGEM_RENOVACAO_EM_ANDAMENTO);
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: envio.outcome === "success" ? "whatsapp_legado_enviado" : "whatsapp_legado_falhou",
+          origem: "openpix-webhook",
+          operacaoId,
+          grupoId,
+          detalhe: { contexto: "renovacao_em_andamento" },
+        }),
+      );
       if (envio.outcome === "success") {
         await inserirMensagem(
           reivindicado.conversation_id,
@@ -226,9 +272,25 @@ async function iniciarRenovacaoSigma(
         "[openpix-webhook] falha ao disparar workflow renovacao-sigma -- token ficara em renovacao_em_andamento ate o watchdog agir",
         JSON.stringify({ operacaoId, detalhe: disparo.detalhe }),
       );
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "disparo_falhou",
+          origem: "openpix-webhook",
+          operacaoId,
+          grupoId,
+          detalhe: { motivo: disparo.detalhe },
+        }),
+      );
+    } else {
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "disparo_solicitado", origem: "openpix-webhook", operacaoId, grupoId }),
+      );
     }
   } catch (erro) {
     console.log("[openpix-webhook] excecao ao iniciar renovacao Sigma", JSON.stringify({ operacaoId, erro: String(erro) }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "disparo_excecao", origem: "openpix-webhook", operacaoId, grupoId }),
+    );
   }
 }
 
@@ -269,6 +331,20 @@ Deno.serve(async (req: Request) => {
       "[openpix-webhook] evento ignorado (nao e OPENPIX:CHARGE_COMPLETED)",
       JSON.stringify({ event: payload.event ?? null, ...idsNaoSensiveis(payload) }),
     );
+    // So' registra se algum correlationID veio no payload -- sem ele
+    // nao ha' identificador nenhum pra correlacionar (mesma disciplina
+    // do resto do catalogo: nunca gravar um evento orfao).
+    const ccIgnorado = payload.charge?.correlationID ?? payload.pixQrCode?.correlationID;
+    if (ccIgnorado) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "pagamento_webhook_evento_ignorado",
+          origem: "openpix-webhook",
+          operacaoId: ccIgnorado,
+          detalhe: { event: payload.event ?? null },
+        }),
+      );
+    }
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
 

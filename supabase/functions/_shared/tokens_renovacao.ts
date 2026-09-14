@@ -75,6 +75,13 @@ export interface TokenRenovacao {
   // de confirmar o 404 em DOIS ciclos diferentes -- este timestamp e' a
   // 1a deteccao. NULL = nunca detectado / ja limpo.
   cobranca_ausente_em: string | null;
+  // Trilha de auditoria (Fase 2/3, 2026-09-14, migration
+  // 20260914190000_renovacao_eventos.sql): chave de correlacao das
+  // etapas do Portal ANTES deste token existir (entrada/identificacao/
+  // acessos) -- gerada no 1o GET de renovacao-iniciar, carregada por
+  // campo oculto ate' o Carrinho. NULL = token criado antes desta
+  // coluna existir, ou fora do fluxo do Portal (ex.: link do WhatsApp).
+  sessao_id: string | null;
 }
 
 // Janela de pagamento ponta a ponta (2026-09-07, inovatv_central/CLAUDE.md,
@@ -122,6 +129,10 @@ export async function criarTokenRenovacao(params: {
   tipo?: "sigma" | "unitv";
   unitvSn?: string | null;
   unitvId?: number | null;
+  // Trilha de auditoria (Fase 3, 2026-09-14) -- ver comentario do campo
+  // homonimo em TokenRenovacao. Opcional/aditivo: quem nao passa grava
+  // NULL, sem afetar nenhum caminho existente.
+  sessaoId?: string | null;
 }): Promise<{ tokenBruto: string; registro: TokenRenovacao }> {
   const tipo = params.tipo ?? "sigma";
   if (tipo === "unitv" && (!params.unitvSn || params.unitvId == null)) {
@@ -155,6 +166,7 @@ export async function criarTokenRenovacao(params: {
       tipo,
       unitv_sn: tipo === "unitv" ? params.unitvSn : null,
       unitv_id: tipo === "unitv" ? params.unitvId : null,
+      sessao_id: params.sessaoId ?? null,
     })
     .select("*")
     .single();

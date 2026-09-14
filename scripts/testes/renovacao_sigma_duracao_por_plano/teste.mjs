@@ -80,6 +80,11 @@ globalThis.fetch = async (url, opts = {}) => {
   } catch {
     /* ignore */
   }
+  // Trilha de auditoria (Fase 3, 2026-09-14) -- fora de chamadasFetch.
+  if (u.includes("/rest/v1/renovacao_eventos")) {
+    return new Response(null, { status: 201 });
+  }
+
   chamadasFetch.push({ url: u, method: opts.method ?? "GET", corpo });
 
   if (u.includes("/rest/v1/renovacoes_lote")) {

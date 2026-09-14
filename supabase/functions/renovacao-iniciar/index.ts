@@ -32,6 +32,9 @@ import { classificarTipoAcesso } from "../_shared/tipo_acesso.ts";
 import { chamarResolverContaUnitv } from "../_shared/unitv_conta_client.ts";
 import { confirmarRenovacao } from "../_shared/renovacao_confirmacao.ts";
 import { tentativaDeIdentificacaoPermitida } from "../_shared/portal_rate_limit.ts";
+import { registrarEvento } from "../_shared/renovacao_eventos.ts";
+
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 // Logo oficial da Tope TV (arquivo original, D:\projetos\logo_topetv.jpg),
 // embutida em base64 -- usada tal como esta', sem recriar/redesenhar.
@@ -589,7 +592,18 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
 // esta mesma function via POST) deve ver a mesma linguagem visual.
 // Nenhuma mudanca de logica: continua GET puro, mesmo form, mesmo
 // method="POST", mesmo campo telefone, mesmo etapa=telefone.
+// Trilha de auditoria (Fase 2/3, 2026-09-14): sessao_id nasce aqui, no
+// 1o GET -- e' a UNICA chave de correlacao possivel antes do Carrinho
+// criar um tokens_renovacao/renovacoes_lote (que ainda nao existe
+// nesta etapa). Carregado por campo oculto pelos POSTs seguintes
+// (telefone -> carrinho); o Carrinho grava sessao_id na linha criada
+// (criarTokenRenovacao/criarRenovacaoLote) -- dali em diante a
+// correlacao passa a ser feita por token_id/grupo_id.
 function paginaFormularioTelefone(): Response {
+  const sessaoId = crypto.randomUUID();
+  EdgeRuntime.waitUntil(
+    registrarEvento({ codigo: "portal_acessado", origem: "renovacao-iniciar", sessaoId }),
+  );
   return new Response(
     paginaHtmlClaro(
       "Renovação",
@@ -600,6 +614,7 @@ function paginaFormularioTelefone(): Response {
        <div class="form-card">
          <form method="POST">
            <input type="hidden" name="etapa" value="telefone">
+           <input type="hidden" name="sessao_id" value="${sessaoId}">
            <label class="campo-label" for="telefone">Seu celular (com DDD)</label>
            <div class="campo-telefone">
              <svg viewBox="0 0 24 24" fill="none"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.4c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.2 1.1L6.6 10.8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
@@ -693,7 +708,7 @@ function tituloDoAcesso(nome: string, servidor: string, mostrarNome: boolean): s
 // cliente (mesmo `mostrarNome` que decide o titulo dos cards); quando o
 // telefone e' compartilhado por clientes diferentes, a saudacao fica
 // generica ("Olá! 👋") pra nao escolher um nome arbitrariamente.
-function paginaCarrinho(telefone: string, acessos: AcessoParaExibir[]): Response {
+function paginaCarrinho(telefone: string, acessos: AcessoParaExibir[], sessaoId: string): Response {
   const mostrarNome = new Set(acessos.map((a) => a.nome)).size > 1;
   const saudacao = mostrarNome ? "Olá! 👋" : `Olá, ${escapeHtml(acessos[0].nome)}! 👋`;
   const itensHtml = acessos
@@ -728,6 +743,7 @@ function paginaCarrinho(telefone: string, acessos: AcessoParaExibir[]): Response
        <form method="POST">
          <input type="hidden" name="etapa" value="carrinho">
          <input type="hidden" name="telefone" value="${escapeHtml(telefone)}">
+         <input type="hidden" name="sessao_id" value="${escapeHtml(sessaoId)}">
          <div class="lista">${itensHtml}</div>
          <div class="aviso">
            <span class="aviso-icone">i</span>
@@ -1172,6 +1188,12 @@ function formatarVencimento(vencimento: string): string {
 }
 
 async function processarEtapaTelefone(form: FormData): Promise<Response> {
+  // Trilha de auditoria: se o campo oculto nao vier (form antigo em
+  // cache, navegacao atipica), gera um novo -- nunca bloqueia o fluxo
+  // por causa disto (ver _shared/renovacao_eventos.ts).
+  const sessaoIdBruto = form.get("sessao_id");
+  const sessaoId = typeof sessaoIdBruto === "string" && sessaoIdBruto.length > 0 ? sessaoIdBruto : crypto.randomUUID();
+
   const telefoneBruto = form.get("telefone");
   if (typeof telefoneBruto !== "string" || telefoneBruto.trim().length === 0) {
     return paginaNaoEncontrado();
@@ -1185,13 +1207,39 @@ async function processarEtapaTelefone(form: FormData): Promise<Response> {
   // Rocket chegou a ser consultado (estruturalmente nao e' -- o bloqueio
   // acontece ANTES de qualquer chamada ao Rocket).
   const permitido = await tentativaDeIdentificacaoPermitida(telefone);
-  if (!permitido) return paginaNaoEncontrado();
+  if (!permitido) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "identificacao_bloqueada_rate_limit", origem: "renovacao-iniciar", sessaoId }),
+    );
+    return paginaNaoEncontrado();
+  }
 
   const identificacao = await buscarClientesPorTelefone(telefone);
 
   if (identificacao.outcome === "no_match" || identificacao.outcome === "unavailable") {
+    // identificacao_nao_encontrada (info, desfecho normal) vs
+    // identificacao_rocket_indisponivel (erro, falha de infra) -- so'
+    // diferenciados no evento interno. A resposta HTTP ao cliente
+    // continua EXATAMENTE a mesma pra nao violar a disciplina
+    // anti-enumeracao ja documentada acima.
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: identificacao.outcome === "unavailable" ? "identificacao_rocket_indisponivel" : "identificacao_nao_encontrada",
+        origem: "renovacao-iniciar",
+        sessaoId,
+      }),
+    );
     return paginaNaoEncontrado();
   }
+
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "identificacao_sucesso",
+      origem: "renovacao-iniciar",
+      sessaoId,
+      detalhe: { qtd_candidatos: identificacao.candidatos.length },
+    }),
+  );
 
   // Dados completos por candidato -- MESMO helper ja usado pelo
   // Orquestrador (_shared/rocket_valor_cliente.ts), nenhuma logica nova
@@ -1220,9 +1268,23 @@ async function processarEtapaTelefone(form: FormData): Promise<Response> {
       valorCentavos: paraCentavos(c.dados.valor) ?? 0,
     }));
 
-  if (acessos.length === 0) return paginaNaoEncontrado();
+  if (acessos.length === 0) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "acessos_indisponiveis", origem: "renovacao-iniciar", sessaoId }),
+    );
+    return paginaNaoEncontrado();
+  }
 
-  return paginaCarrinho(telefone, acessos);
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "acessos_apresentados",
+      origem: "renovacao-iniciar",
+      sessaoId,
+      detalhe: { qtd_acessos: acessos.length, public_ids: acessos.map((a) => a.publicId) },
+    }),
+  );
+
+  return paginaCarrinho(telefone, acessos, sessaoId);
 }
 
 interface ItemResolvido {
@@ -1252,10 +1314,21 @@ interface ItemResolvido {
 // plano/valor/vencimento usados pra criar o token vem SEMPRE dessa
 // reconsulta, nunca de um campo do formulario.
 async function processarEtapaCarrinho(form: FormData): Promise<Response> {
+  const sessaoIdBruto = form.get("sessao_id");
+  const sessaoId = typeof sessaoIdBruto === "string" && sessaoIdBruto.length > 0 ? sessaoIdBruto : crypto.randomUUID();
+
   const telefoneBruto = form.get("telefone");
   const publicIdsSelecionados = form.getAll("publicId").filter((v): v is string => typeof v === "string");
 
   if (typeof telefoneBruto !== "string" || telefoneBruto.trim().length === 0 || publicIdsSelecionados.length === 0) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "carrinho_erro_generico",
+        origem: "renovacao-iniciar",
+        sessaoId,
+        detalhe: { motivo: "telefone_ou_selecao_ausente" },
+      }),
+    );
     return paginaErroGenerico();
   }
 
@@ -1263,35 +1336,103 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
 
   const identificacao = await buscarClientesPorTelefone(telefone);
   if (identificacao.outcome !== "single_match" && identificacao.outcome !== "multiple_matches") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "carrinho_erro_generico",
+        origem: "renovacao-iniciar",
+        sessaoId,
+        detalhe: { motivo: "identificacao_nao_confirmada_na_revalidacao" },
+      }),
+    );
     return paginaErroGenerico();
   }
 
   const idsValidos = new Set(identificacao.candidatos.map((c) => c.publicId));
   const selecaoValida = [...new Set(publicIdsSelecionados)].filter((id) => idsValidos.has(id));
-  if (selecaoValida.length === 0) return paginaErroGenerico();
+  if (selecaoValida.length === 0) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "carrinho_erro_generico",
+        origem: "renovacao-iniciar",
+        sessaoId,
+        detalhe: { motivo: "selecao_invalida" },
+      }),
+    );
+    return paginaErroGenerico();
+  }
 
   const itensResolvidos: ItemResolvido[] = [];
   for (const publicId of selecaoValida) {
     const dados = await consultarClienteCompletoRocket(publicId);
-    if (dados.outcome !== "success") return paginaErroGenerico();
+    if (dados.outcome !== "success") {
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "carrinho_erro_generico",
+          origem: "renovacao-iniciar",
+          sessaoId,
+          detalhe: { motivo: "reconsulta_rocket_falhou" },
+        }),
+      );
+      return paginaErroGenerico();
+    }
 
     const valorCentavos = paraCentavos(dados.valor);
-    if (!valorCentavos) return paginaErroGenerico();
+    if (!valorCentavos) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "carrinho_erro_generico",
+          origem: "renovacao-iniciar",
+          sessaoId,
+          detalhe: { motivo: "valor_nao_convertivel" },
+        }),
+      );
+      return paginaErroGenerico();
+    }
 
     const [tokenAtivo, loteAtivo] = await Promise.all([
       buscarTokenAtivoPorPublicId(publicId),
       existeLoteAtivoParaPublicId(publicId),
     ]);
-    if (tokenAtivo || loteAtivo) return paginaJaExisteRenovacao(dados.servidorNome);
+    if (tokenAtivo || loteAtivo) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "carrinho_ja_existe_renovacao",
+          origem: "renovacao-iniciar",
+          sessaoId,
+          detalhe: { servidor: dados.servidorNome },
+        }),
+      );
+      return paginaJaExisteRenovacao(dados.servidorNome);
+    }
 
     const tipo = classificarTipoAcesso(dados.servidorNome);
     let unitvSn: string | null = null;
     let unitvId: number | null = null;
     if (tipo === "unitv") {
       const sn = dados.usuario;
-      if (!sn) return paginaErroUnitv(dados.servidorNome);
+      if (!sn) {
+        EdgeRuntime.waitUntil(
+          registrarEvento({
+            codigo: "carrinho_erro_unitv",
+            origem: "renovacao-iniciar",
+            sessaoId,
+            detalhe: { motivo: "usuario_ausente", servidor: dados.servidorNome },
+          }),
+        );
+        return paginaErroUnitv(dados.servidorNome);
+      }
       const resolucao = await chamarResolverContaUnitv(sn);
-      if (resolucao.outcome !== "resolvido") return paginaErroUnitv(dados.servidorNome);
+      if (resolucao.outcome !== "resolvido") {
+        EdgeRuntime.waitUntil(
+          registrarEvento({
+            codigo: "carrinho_erro_unitv",
+            origem: "renovacao-iniciar",
+            sessaoId,
+            detalhe: { motivo: "resolucao_falhou", servidor: dados.servidorNome },
+          }),
+        );
+        return paginaErroUnitv(dados.servidorNome);
+      }
       unitvSn = sn;
       unitvId = resolucao.id;
     }
@@ -1329,8 +1470,18 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
         tipo: item.tipo,
         unitvSn: item.unitvSn,
         unitvId: item.unitvId,
+        sessaoId,
       });
       tokenBruto = criado.tokenBruto;
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "carrinho_token_criado",
+          origem: "renovacao-iniciar",
+          sessaoId,
+          tokenId: criado.registro.id,
+          detalhe: { plano: item.plano, valor_centavos: item.valorCentavos, servidor: item.servidor },
+        }),
+      );
     } else {
       const filhos: FilhoLote[] = itensResolvidos.map((i) => ({
         tipo: i.tipo,
@@ -1351,14 +1502,27 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
         valorTotalCentavos,
         regraAplicada: "soma_valores_rocket",
         filhos,
+        sessaoId,
       });
       tokenBruto = criado.tokenBruto;
+      EdgeRuntime.waitUntil(
+        registrarEvento({
+          codigo: "carrinho_lote_criado",
+          origem: "renovacao-iniciar",
+          sessaoId,
+          grupoId: criado.lote.grupo_id,
+          detalhe: { qtd_itens: itensResolvidos.length, valor_total_centavos: valorTotalCentavos },
+        }),
+      );
     }
   } catch {
     // Corrida real possivel (mesma classe ja tratada no Orquestrador):
     // duas submissoes quase simultaneas pro mesmo acesso esbarram no
     // indice unico parcial do banco. Sem retry sofisticado aqui --
     // portal de baixo trafego, o cliente so' tenta de novo.
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "carrinho_erro_corrida", origem: "renovacao-iniciar", sessaoId }),
+    );
     return paginaErroGenerico();
   }
 

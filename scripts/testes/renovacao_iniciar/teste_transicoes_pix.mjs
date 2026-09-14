@@ -29,6 +29,10 @@ globalThis.Deno = {
   serve: (fn) => { handler = fn; },
   env: { get: (k) => ENV[k] },
 };
+// Trilha de auditoria (Fase 3, 2026-09-14) -- mesmo shim de teste.mjs
+// nesta mesma suite; aqui so' precisa nao lancar (este arquivo nao
+// inspeciona renovacao_eventos, so' as transicoes de tela do Pix).
+globalThis.EdgeRuntime = { waitUntil: () => {} };
 globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
 
 await import("../../../supabase/functions/renovacao-iniciar/index.ts");

@@ -28,6 +28,14 @@ globalThis.Deno = {
   serve: (fn) => { handler = fn; },
   env: { get: (n) => (n === "RENOVACAO_SIGMA_CALLBACK_TOKEN" ? TOKEN_INTERNO : n === "WHATSAPP_JOSE_NUMERO" ? "5511777777777" : undefined) },
 };
+// Trilha de auditoria (Fase 3, 2026-09-14) -- registrarEvento() via
+// EdgeRuntime.waitUntil; mesmo shim ja usado em outras suites.
+let pendentesEventos = [];
+globalThis.EdgeRuntime = { waitUntil: (p) => { pendentesEventos.push(p); } };
+async function aguardarEventos() {
+  await Promise.all(pendentesEventos);
+  pendentesEventos = [];
+}
 
 await import("../../../supabase/functions/renovacao-sigma-resultado/index.ts");
 const { MENSAGEM_RENOVACAO_INSTABILIDADE } = await import("../../../supabase/functions/_shared/mensagens_fixas.ts");
@@ -344,6 +352,7 @@ function blocoDoServidor(texto, servidor) {
 // transferencia com avisarCliente:false; estado/aviso ao Jose inalterados.
 // =====================================================================
 const TOKEN_SIGMA = {
+  id: "tok-sig-1",
   conversation_id: "conv-sig",
   cliente_nome: "Js Informatica Rp",
   plano_nome: "Mensal",

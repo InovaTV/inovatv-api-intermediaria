@@ -32,6 +32,33 @@ import {
   MENSAGEM_CANCELAMENTO_RENOVACAO,
   MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO,
 } from "./mensagens_fixas.ts";
+import { registrarEvento } from "./renovacao_eventos.ts";
+
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
+
+// Trilha de auditoria (Fase 3, 2026-09-14): pequeno helper local para os
+// 6 pontos de enviarMensagemWhatsApp deste arquivo (cancelamento,
+// preparando pagamento, Pix -- x2, individual e lote). Wasender esta
+// desativado (premissa fixada 2026-09-14) -- por isso
+// whatsapp_legado_falhou e' nivel 'info' no catalogo (ver
+// _shared/renovacao_eventos.ts): uma falha aqui NUNCA e' tratada como
+// falha da renovacao, so' um ponto historico/legado.
+function registrarEnvioWhatsappLegado(params: {
+  sucesso: boolean;
+  contexto: string;
+  tokenId?: string | null;
+  grupoId?: string | null;
+}): void {
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: params.sucesso ? "whatsapp_legado_enviado" : "whatsapp_legado_falhou",
+      origem: "renovacao_confirmacao",
+      tokenId: params.tokenId,
+      grupoId: params.grupoId,
+      detalhe: { contexto: params.contexto },
+    }),
+  );
+}
 
 export type AcaoConfirmacaoRenovacao = "aceitar" | "cancelar";
 export type ResultadoConfirmacaoRenovacao =
@@ -58,21 +85,47 @@ export async function confirmarRenovacao(params: {
   if (lote) return await confirmarRenovacaoLote(lote, params);
 
   let token = await buscarTokenPorHash(params.tokenHash);
+  // confirmacao_token_inexistente NAO tem sensor: nesta ramificacao nao
+  // existe NENHUM identificador de correlacao (nem token_id -- o token
+  // nao existe -- nem sessao_id, que este fluxo nunca recebe). Ver
+  // relatorio de instrumentacao da Fase 3 -- ponto ciente, nao esquecido.
   if (!token) return { outcome: "token_inexistente" };
 
   token = await expirarSeVencido(token);
-  if (token.estado === "expirada") return { outcome: "token_expirado" };
-  if (token.estado !== "aguardando_confirmacao") return { outcome: "ja_decidido" };
+  if (token.estado === "expirada") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_expirada", origem: "renovacao_confirmacao", tokenId: token.id }),
+    );
+    return { outcome: "token_expirado" };
+  }
+  if (token.estado !== "aguardando_confirmacao") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", tokenId: token.id }),
+    );
+    return { outcome: "ja_decidido" };
+  }
   if (params.telefoneOrigem && token.telefone !== params.telefoneOrigem) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_telefone_nao_confere", origem: "renovacao_confirmacao", tokenId: token.id }),
+    );
     return { outcome: "telefone_nao_confere" };
   }
 
   const sufixoOrigem = params.origem === "whatsapp" ? "pelo botao do WhatsApp" : "pelo link";
   if (params.acao === "cancelar") {
     const cancelado = await reivindicarCancelamento(params.tokenHash);
-    if (!cancelado) return { outcome: "ja_decidido" };
+    if (!cancelado) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", tokenId: token.id }),
+      );
+      return { outcome: "ja_decidido" };
+    }
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_cancelada", origem: "renovacao_confirmacao", tokenId: cancelado.id }),
+    );
     await inserirMensagem(cancelado.conversation_id, "sistema", `Cliente cancelou a renovacao ${sufixoOrigem}.`, null).catch(() => {});
     const envio = await enviarMensagemWhatsApp(cancelado.telefone, MENSAGEM_CANCELAMENTO_RENOVACAO);
+    registrarEnvioWhatsappLegado({ sucesso: envio.outcome === "success", contexto: "cancelamento", tokenId: cancelado.id });
     if (envio.outcome === "success") {
       await inserirMensagem(cancelado.conversation_id, "ia", MENSAGEM_CANCELAMENTO_RENOVACAO, null).catch(() => {});
     }
@@ -80,10 +133,24 @@ export async function confirmarRenovacao(params: {
   }
 
   const autorizado = await reivindicarAceite(params.tokenHash);
-  if (!autorizado) return { outcome: "ja_decidido" };
+  if (!autorizado) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", tokenId: token.id }),
+    );
+    return { outcome: "ja_decidido" };
+  }
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "confirmacao_aceita",
+      origem: "renovacao_confirmacao",
+      tokenId: autorizado.id,
+      detalhe: { valor_esperado_centavos: autorizado.valor_esperado_centavos },
+    }),
+  );
   await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao ${sufixoOrigem}.`, null).catch(() => {});
 
   const preparando = await enviarMensagemWhatsApp(autorizado.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
+  registrarEnvioWhatsappLegado({ sucesso: preparando.outcome === "success", contexto: "preparando_pagamento", tokenId: autorizado.id });
   if (preparando.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
   }
@@ -92,6 +159,15 @@ export async function confirmarRenovacao(params: {
   const descricaoItem = `Renovacao Tope TV - Plano ${autorizado.plano_nome}`.trim();
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_esperado_centavos, descricaoItem);
   if (cobranca.outcome !== "success") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "cobranca_pix_falhou",
+        origem: "renovacao_confirmacao",
+        tokenId: autorizado.id,
+        operacaoId,
+        detalhe: { motivo: "criacao_openpix_falhou" },
+      }),
+    );
     const motivoFalha = "renovacao:falha_criar_cobranca_apos_aceite";
     let transferenciaAcionada = false;
     try {
@@ -106,6 +182,15 @@ export async function confirmarRenovacao(params: {
     });
     return { outcome: "falha_cobranca" };
   }
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "cobranca_pix_criada",
+      origem: "renovacao_confirmacao",
+      tokenId: autorizado.id,
+      operacaoId,
+      detalhe: { transaction_id_provedor: cobranca.transactionId },
+    }),
+  );
 
   // Ordem corrigida (achado real, homologacao 27/08/2026):
   // tokens_renovacao.operacao_id referencia cobrancas_pix(operacao_id)
@@ -126,6 +211,9 @@ export async function confirmarRenovacao(params: {
     qrCodeTexto: cobranca.qrCodeTexto,
   }).catch((erro) => {
     console.log("[renovacao_confirmacao] falha ao persistir cobranca_pix", JSON.stringify({ operacaoId, transactionId: cobranca.transactionId, erro: String(erro) }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "cobranca_pix_registro_falhou", origem: "renovacao_confirmacao", tokenId: autorizado.id, operacaoId }),
+    );
   });
 
   // Vinculo tratado como condicao FATAL, nunca best-effort -- sem ele,
@@ -140,6 +228,19 @@ export async function confirmarRenovacao(params: {
     console.log(
       "[renovacao_confirmacao] falha fatal ao vincular operacao ao token -- pagamento ficaria orfao sem esta transferencia",
       JSON.stringify({ tokenId: autorizado.id, operacaoId, erro: String(erro) }),
+    );
+    // Reaproveita cobranca_pix_falhou (catalogo fechado na Fase 2) --
+    // do ponto de vista da operacao, a sequencia de cobranca nao
+    // terminou com sucesso, mesmo a OpenPix tendo aceitado a criacao;
+    // detalhe.motivo distingue este caso do de criacao_openpix_falhou.
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "cobranca_pix_falhou",
+        origem: "renovacao_confirmacao",
+        tokenId: autorizado.id,
+        operacaoId,
+        detalhe: { motivo: "falha_vincular_operacao" },
+      }),
     );
     const motivoFalha = "renovacao:falha_vincular_operacao_token";
     let transferenciaAcionada = false;
@@ -172,6 +273,7 @@ export async function confirmarRenovacao(params: {
   // (ver _shared/envio_seguro.ts).
   await aguardarIntervaloSeguroEntreEnvios();
   const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
+  registrarEnvioWhatsappLegado({ sucesso: envioPix.outcome === "success", contexto: "pix", tokenId: autorizado.id });
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
   }
@@ -197,9 +299,22 @@ async function confirmarRenovacaoLote(
   },
 ): Promise<ResultadoConfirmacaoRenovacao> {
   const lote = await expirarLoteSeVencido(loteInicial);
-  if (lote.estado === "expirada") return { outcome: "token_expirado" };
-  if (lote.estado !== "aguardando_confirmacao") return { outcome: "ja_decidido" };
+  if (lote.estado === "expirada") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_expirada", origem: "renovacao_confirmacao", grupoId: lote.grupo_id }),
+    );
+    return { outcome: "token_expirado" };
+  }
+  if (lote.estado !== "aguardando_confirmacao") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", grupoId: lote.grupo_id }),
+    );
+    return { outcome: "ja_decidido" };
+  }
   if (params.telefoneOrigem && lote.telefone !== params.telefoneOrigem) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_telefone_nao_confere", origem: "renovacao_confirmacao", grupoId: lote.grupo_id }),
+    );
     return { outcome: "telefone_nao_confere" };
   }
 
@@ -207,9 +322,18 @@ async function confirmarRenovacaoLote(
 
   if (params.acao === "cancelar") {
     const cancelado = await reivindicarCancelamentoLote(params.tokenHash);
-    if (!cancelado) return { outcome: "ja_decidido" };
+    if (!cancelado) {
+      EdgeRuntime.waitUntil(
+        registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", grupoId: lote.grupo_id }),
+      );
+      return { outcome: "ja_decidido" };
+    }
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_cancelada", origem: "renovacao_confirmacao", grupoId: cancelado.grupo_id }),
+    );
     await inserirMensagem(cancelado.conversation_id, "sistema", `Cliente cancelou a renovacao em lote ${sufixoOrigem}.`, null).catch(() => {});
     const envio = await enviarMensagemWhatsApp(cancelado.telefone, MENSAGEM_CANCELAMENTO_RENOVACAO);
+    registrarEnvioWhatsappLegado({ sucesso: envio.outcome === "success", contexto: "cancelamento_lote", grupoId: cancelado.grupo_id });
     if (envio.outcome === "success") {
       await inserirMensagem(cancelado.conversation_id, "ia", MENSAGEM_CANCELAMENTO_RENOVACAO, null).catch(() => {});
     }
@@ -217,24 +341,57 @@ async function confirmarRenovacaoLote(
   }
 
   const autorizado = await reivindicarAceiteLote(params.tokenHash);
-  if (!autorizado) return { outcome: "ja_decidido" };
-  await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao em lote ${sufixoOrigem}.`, null).catch(() => {});
-
-  const preparando = await enviarMensagemWhatsApp(autorizado.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
-  if (preparando.outcome === "success") {
-    await inserirMensagem(autorizado.conversation_id, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
+  if (!autorizado) {
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "confirmacao_ja_decidida", origem: "renovacao_confirmacao", grupoId: lote.grupo_id }),
+    );
+    return { outcome: "ja_decidido" };
   }
 
   const filhos = await buscarFilhosDoLote(autorizado.grupo_id);
   const qtd = filhos.length;
 
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "confirmacao_aceita",
+      origem: "renovacao_confirmacao",
+      grupoId: autorizado.grupo_id,
+      detalhe: { valor_total_centavos: autorizado.valor_total_centavos, qtd_itens: qtd },
+    }),
+  );
+  await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao em lote ${sufixoOrigem}.`, null).catch(() => {});
+
+  const preparando = await enviarMensagemWhatsApp(autorizado.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
+  registrarEnvioWhatsappLegado({ sucesso: preparando.outcome === "success", contexto: "preparando_pagamento_lote", grupoId: autorizado.grupo_id });
+  if (preparando.outcome === "success") {
+    await inserirMensagem(autorizado.conversation_id, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
+  }
+
   const operacaoId = crypto.randomUUID();
   const descricaoItem = `Renovacao Tope TV - ${qtd} acessos`;
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_total_centavos, descricaoItem);
   if (cobranca.outcome !== "success") {
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "cobranca_pix_falhou",
+        origem: "renovacao_confirmacao",
+        grupoId: autorizado.grupo_id,
+        operacaoId,
+        detalhe: { motivo: "criacao_openpix_falhou" },
+      }),
+    );
     await tratarFalhaLote(autorizado.grupo_id, autorizado.conversation_id, autorizado.telefone, "renovacao_lote:falha_criar_cobranca_apos_aceite");
     return { outcome: "falha_cobranca" };
   }
+  EdgeRuntime.waitUntil(
+    registrarEvento({
+      codigo: "cobranca_pix_criada",
+      origem: "renovacao_confirmacao",
+      grupoId: autorizado.grupo_id,
+      operacaoId,
+      detalhe: { transaction_id_provedor: cobranca.transactionId, qtd_itens: qtd },
+    }),
+  );
 
   // Mesma ordem do individual: linha em cobrancas_pix ANTES do vinculo
   // (FK renovacoes_lote.operacao_id -> cobrancas_pix.operacao_id).
@@ -250,12 +407,24 @@ async function confirmarRenovacaoLote(
     qrCodeTexto: cobranca.qrCodeTexto,
   }).catch((erro) => {
     console.log("[renovacao_confirmacao] falha ao persistir cobranca_pix (lote)", JSON.stringify({ operacaoId, erro: String(erro) }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({ codigo: "cobranca_pix_registro_falhou", origem: "renovacao_confirmacao", grupoId: autorizado.grupo_id, operacaoId }),
+    );
   });
 
   try {
     await vincularOperacaoAoLote(autorizado.grupo_id, operacaoId);
   } catch (erro) {
     console.log("[renovacao_confirmacao] falha fatal ao vincular operacao ao lote", JSON.stringify({ grupoId: autorizado.grupo_id, operacaoId, erro: String(erro) }));
+    EdgeRuntime.waitUntil(
+      registrarEvento({
+        codigo: "cobranca_pix_falhou",
+        origem: "renovacao_confirmacao",
+        grupoId: autorizado.grupo_id,
+        operacaoId,
+        detalhe: { motivo: "falha_vincular_operacao" },
+      }),
+    );
     await tratarFalhaLote(autorizado.grupo_id, autorizado.conversation_id, autorizado.telefone, "renovacao_lote:falha_vincular_operacao");
     return { outcome: "falha_cobranca" };
   }
@@ -266,6 +435,7 @@ async function confirmarRenovacaoLote(
   // _shared/envio_seguro.ts).
   await aguardarIntervaloSeguroEntreEnvios();
   const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
+  registrarEnvioWhatsappLegado({ sucesso: envioPix.outcome === "success", contexto: "pix_lote", grupoId: autorizado.grupo_id });
   if (envioPix.outcome === "success") {
     await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
   }

@@ -65,6 +65,18 @@ function novaPromessaResultado() {
   });
 }
 
+// Trilha de auditoria (Fase 3, 2026-09-14) -- eventos de
+// renovacao_eventos ficam numa lista SEPARADA (eventosRegistrados),
+// nunca em chamadasFetch: essa suite faz asserções de CONTAGEM/ORDEM
+// exatas sobre chamadasFetch (ex.: "chamado 3x", sequencia $$eval antes
+// de contexto) que datam de antes da instrumentacao existir -- misturar
+// os dois quebraria essas asserções sem relação nenhuma com o que elas
+// verificam.
+let eventosRegistrados = [];
+function lerEventosRegistrados() {
+  return eventosRegistrados;
+}
+
 globalThis.fetch = async (url, opts = {}) => {
   const urlStr = String(url);
   const headers = opts.headers ?? {};
@@ -76,6 +88,12 @@ globalThis.fetch = async (url, opts = {}) => {
       /* ignore */
     }
   }
+
+  if (urlStr.includes("/rest/v1/renovacao_eventos")) {
+    eventosRegistrados.push(corpo);
+    return new Response(null, { status: 201 });
+  }
+
   chamadasFetch.push({ url: urlStr, method: opts.method ?? "GET", headers, corpo, seq: proximoSeq() });
 
   // Renovacao em lote (Etapa 1): o workflow consulta renovacoes_lote
@@ -127,6 +145,7 @@ const TIMEOUT_CENARIO_MS = 20000;
 async function rodarCenario(nome, { cliente, contexto, dom, opcoesSelect } = {}) {
   seq = 0;
   chamadasFetch = [];
+  eventosRegistrados = [];
   configCliente = cliente ?? { status: 200, body: { outcome: "unavailable" } };
   configContexto = contexto ?? { status: 200, body: { outcome: "unavailable" } };
   configurarPlaywright({ proximoSeq, dom: dom ?? [], opcoesSelect: opcoesSelect ?? [] });
@@ -137,7 +156,7 @@ async function rodarCenario(nome, { cliente, contexto, dom, opcoesSelect } = {})
 
   const resultado = await Promise.race([promessaResultado, timeout(TIMEOUT_CENARIO_MS)]);
   await new Promise((r) => setTimeout(r, 15)); // deixa o finally (browser.close) assentar
-  return { resultado, chamadas: [...chamadasFetch], eventos: [...eventosPlaywright()] };
+  return { resultado, chamadas: [...chamadasFetch], eventos: [...eventosPlaywright()], eventosRegistrados: lerEventosRegistrados() };
 }
 
 function checarInvariantes(rotulo, chamadas) {

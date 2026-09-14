@@ -16,7 +16,7 @@
 import { register } from "node:module";
 register("./mock-loader.mjs", import.meta.url);
 
-const { resetar: resetarDb, seed, lerTabela, configurarRateLimit } = await import("./fake_supabase_client.mjs");
+const { resetar: resetarDb, seed, lerTabela, configurarRateLimit, configurarFalhaInsert } = await import("./fake_supabase_client.mjs");
 const { resetar: resetarConfirmacao, configurar: configurarConfirmacao, chamadas: chamadasConfirmacao } =
   await import("./fake_renovacao_confirmacao.mjs");
 
@@ -37,6 +37,17 @@ globalThis.Deno = {
   serve: (fn) => { handler = fn; },
   env: { get: (k) => ENV[k] },
 };
+// Trilha de auditoria (Fase 3, 2026-09-14): registrarEvento() e' sempre
+// disparado via EdgeRuntime.waitUntil (nunca bloqueia a resposta) --
+// mesmo shim ja usado em scripts/testes/renovacao_em_andamento/teste.mjs.
+// aguardarEventos() espera essas promises pendentes antes de inspecionar
+// a tabela fake renovacao_eventos.
+let pendentesEventos = [];
+globalThis.EdgeRuntime = { waitUntil: (p) => { pendentesEventos.push(p); } };
+async function aguardarEventos() {
+  await Promise.all(pendentesEventos);
+  pendentesEventos = [];
+}
 
 function fetchPadrao() {
   return async (url) => {
@@ -696,6 +707,206 @@ for (const [outcome, textoEsperado] of casos) {
   ok(/id="btn-continuar"[^>]*disabled/.test(html), "botao desabilitado: 'Continuar' nasce desabilitado");
   ok(html.includes("botao.disabled = !algumMarcado"), "botao habilita apos selecao: logica de habilitacao presente e correta no HTML gerado");
   ok(html.includes("addEventListener('change', atualizar)"), "botao habilita apos selecao: listener de mudanca ligado a cada checkbox");
+}
+
+// =======================================================================
+// Fase 3 (2026-09-14) -- trilha de auditoria: sessao_id propagado pelo
+// Portal + registrarEvento() nas etapas 1 (entrada), 2 (identificacao),
+// 3 (acessos) e 5 (carrinho). So' verifica o EFEITO ADITIVO (linhas
+// novas em renovacao_eventos, campo sessao_id propagado) -- nenhuma das
+// asserções de HTML/comportamento acima muda.
+// =======================================================================
+
+// -----------------------------------------------------------------------
+// Etapa 1 -- GET gera sessao_id novo e registra portal_acessado.
+// -----------------------------------------------------------------------
+{
+  resetar();
+  const resp = await handler(reqGet());
+  const html = await resp.text();
+  await aguardarEventos();
+
+  const m = html.match(/name="sessao_id" value="([0-9a-f-]{36})"/);
+  ok(!!m, "Fase3 GET: campo oculto sessao_id presente no formulario de telefone, formato uuid");
+
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1, "Fase3 GET: registra exatamente 1 evento");
+  ok(eventos[0].codigo === "portal_acessado", "Fase3 GET: codigo correto");
+  ok(eventos[0].etapa === "entrada", "Fase3 GET: etapa derivada do catalogo");
+  ok(eventos[0].nivel === "info", "Fase3 GET: nivel derivado do catalogo");
+  ok(eventos[0].sessao_id === m[1], "Fase3 GET: sessao_id do evento bate com o do campo oculto");
+  ok(eventos[0].token_id == null && eventos[0].grupo_id == null, "Fase3 GET: sem token_id/grupo_id (ainda nao existem)");
+}
+
+// -----------------------------------------------------------------------
+// Etapa 2/3 -- identificacao + acessos, cobrindo os 4 desfechos.
+// -----------------------------------------------------------------------
+{
+  // no_match -- identificacao_nao_encontrada (info).
+  resetar();
+  respostasLista.push({ paginacao: { total: 0 }, itens: [] });
+  await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"], ["sessao_id", "sessao-nomatch"]]));
+  await aguardarEventos();
+  const eventos1 = lerTabela("renovacao_eventos");
+  ok(eventos1.length === 1 && eventos1[0].codigo === "identificacao_nao_encontrada", "Fase3 identificacao: no_match -> identificacao_nao_encontrada");
+  ok(eventos1[0].nivel === "info", "Fase3 identificacao: no_match e' nivel info (desfecho normal, nao falha)");
+  ok(eventos1[0].sessao_id === "sessao-nomatch", "Fase3 identificacao: sessao_id do form propagado ao evento");
+}
+{
+  // unavailable (Rocket fora do ar) -- identificacao_rocket_indisponivel
+  // (erro) -- MESMO HTML de no_match (anti-enumeracao preservada), so'
+  // o evento interno diferencia.
+  resetar();
+  globalThis.fetch = async () => { throw new Error("Rocket fora do ar"); };
+  await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"], ["sessao_id", "sessao-indisp"]]));
+  await aguardarEventos();
+  globalThis.fetch = fetchPadrao();
+  const eventos2 = lerTabela("renovacao_eventos");
+  ok(eventos2.length === 1 && eventos2[0].codigo === "identificacao_rocket_indisponivel", "Fase3 identificacao: unavailable -> identificacao_rocket_indisponivel (distinto de no_match so' internamente)");
+  ok(eventos2[0].nivel === "erro", "Fase3 identificacao: rocket_indisponivel e' nivel erro (falha real de infra)");
+}
+{
+  // Rate limit bloqueado -- identificacao_bloqueada_rate_limit, ANTES
+  // de qualquer consulta ao Rocket.
+  resetar();
+  configurarRateLimit(false);
+  await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"], ["sessao_id", "sessao-rl"]]));
+  await aguardarEventos();
+  configurarRateLimit(true);
+  const eventos3 = lerTabela("renovacao_eventos");
+  ok(eventos3.length === 1 && eventos3[0].codigo === "identificacao_bloqueada_rate_limit", "Fase3 identificacao: rate limit -> identificacao_bloqueada_rate_limit");
+}
+{
+  // Sucesso -- identificacao_sucesso + acessos_apresentados, e a
+  // sessao_id continua no campo oculto da pagina do carrinho seguinte.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-1", nome: "José Antônio", usuario: "828667229" }] });
+  respostasDetalhe["pub-1"] = clienteDetalhe();
+  const resp = await handler(reqPostForm([["etapa", "telefone"], ["telefone", "17999999999"], ["sessao_id", "sessao-ok"]]));
+  const html = await resp.text();
+  await aguardarEventos();
+
+  ok(html.includes('name="sessao_id" value="sessao-ok"'), "Fase3 acessos: sessao_id propagado como campo oculto no carrinho");
+
+  const eventos4 = lerTabela("renovacao_eventos");
+  ok(eventos4.length === 2, "Fase3 acessos: 2 eventos (identificacao_sucesso + acessos_apresentados)");
+  ok(eventos4[0].codigo === "identificacao_sucesso" && eventos4[0].detalhe.qtd_candidatos === 1, "Fase3 acessos: identificacao_sucesso com qtd_candidatos");
+  ok(eventos4[1].codigo === "acessos_apresentados" && eventos4[1].detalhe.qtd_acessos === 1, "Fase3 acessos: acessos_apresentados com qtd_acessos");
+  ok(Array.isArray(eventos4[1].detalhe.public_ids) && eventos4[1].detalhe.public_ids[0] === "pub-1", "Fase3 acessos: public_ids no detalhe (nunca nome/senha)");
+  ok(eventos4.every((e) => e.sessao_id === "sessao-ok"), "Fase3 acessos: os 2 eventos com a mesma sessao_id");
+}
+
+// -----------------------------------------------------------------------
+// Etapa 5 (Carrinho) -- individual, lote, e os ramos de erro.
+// -----------------------------------------------------------------------
+{
+  // Individual -- carrinho_token_criado, com token_id real e sessao_id
+  // propagado ate' a linha de tokens_renovacao.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-1", nome: "José Antônio", usuario: "828667229" }] });
+  respostasDetalhe["pub-1"] = clienteDetalhe();
+  await handler(reqPostForm([
+    ["etapa", "carrinho"],
+    ["telefone", "5517999999999"],
+    ["publicId", "pub-1"],
+    ["sessao_id", "sessao-carrinho-1"],
+  ]));
+  await aguardarEventos();
+
+  const tokens = lerTabela("tokens_renovacao");
+  ok(tokens.length === 1 && tokens[0].sessao_id === "sessao-carrinho-1", "Fase3 carrinho individual: sessao_id gravado na linha de tokens_renovacao");
+
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_token_criado", "Fase3 carrinho individual: carrinho_token_criado");
+  ok(eventos[0].token_id === tokens[0].id, "Fase3 carrinho individual: token_id do evento bate com o id real criado");
+  ok(eventos[0].grupo_id == null, "Fase3 carrinho individual: grupo_id null (nao e' lote)");
+  ok(eventos[0].detalhe.servidor === "BLAZE" && eventos[0].detalhe.valor_centavos === 3500, "Fase3 carrinho individual: detalhe com plano/servidor/valor");
+}
+{
+  // Lote (2+ itens) -- carrinho_lote_criado, com grupo_id real e
+  // sessao_id propagado ate' a linha de renovacoes_lote.
+  resetar();
+  respostasLista.push({
+    paginacao: { total: 2 },
+    itens: [
+      { id: "pub-x1", nome: "Cliente X", usuario: "u1" },
+      { id: "pub-x2", nome: "Cliente X", usuario: "u2" },
+    ],
+  });
+  respostasDetalhe["pub-x1"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  respostasDetalhe["pub-x2"] = clienteDetalhe({ servidor: { nome: "NewOne" } });
+  await handler(reqPostForm([
+    ["etapa", "carrinho"],
+    ["telefone", "5517999999999"],
+    ["publicId", "pub-x1"],
+    ["publicId", "pub-x2"],
+    ["sessao_id", "sessao-carrinho-lote"],
+  ]));
+  await aguardarEventos();
+
+  const lotes = lerTabela("renovacoes_lote");
+  ok(lotes.length === 1 && lotes[0].sessao_id === "sessao-carrinho-lote", "Fase3 carrinho lote: sessao_id gravado na linha de renovacoes_lote");
+
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_lote_criado", "Fase3 carrinho lote: carrinho_lote_criado");
+  ok(eventos[0].grupo_id === lotes[0].grupo_id, "Fase3 carrinho lote: grupo_id do evento bate com o grupo_id real criado");
+  ok(eventos[0].token_id == null, "Fase3 carrinho lote: token_id null no evento da capa");
+  ok(eventos[0].detalhe.qtd_itens === 2, "Fase3 carrinho lote: detalhe com qtd_itens");
+}
+{
+  // Erro generico -- telefone/selecao ausente.
+  resetar();
+  await handler(reqPostForm([["etapa", "carrinho"], ["sessao_id", "sessao-erro-1"]]));
+  await aguardarEventos();
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_erro_generico" && eventos[0].detalhe.motivo === "telefone_ou_selecao_ausente", "Fase3 carrinho erro: telefone/selecao ausente");
+}
+{
+  // Ja existe renovacao ativa para o acesso.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-dup", nome: "Cliente Dup", usuario: "u" }] });
+  respostasDetalhe["pub-dup"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-dup", estado: "autorizada", grupo_id: null }]);
+  await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-dup"], ["sessao_id", "sessao-dup"]]));
+  await aguardarEventos();
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_ja_existe_renovacao" && eventos[0].detalhe.servidor === "BLAZE", "Fase3 carrinho erro: ja_existe_renovacao com servidor no detalhe");
+}
+{
+  // UniTV -- usuario ausente no cadastro.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-un1", nome: "Cliente UniTV", usuario: "" }] });
+  respostasDetalhe["pub-un1"] = clienteDetalhe({ servidor: { nome: "UNITV" }, usuario: "" });
+  await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-un1"], ["sessao_id", "sessao-unitv-1"]]));
+  await aguardarEventos();
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_erro_unitv" && eventos[0].detalhe.motivo === "usuario_ausente", "Fase3 carrinho erro: unitv usuario ausente");
+}
+{
+  // UniTV -- resolucao da conta falhou (fetchPadrao devolve
+  // outcome:'indisponivel' por padrao pra /renovacao-unitv-conta).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-un2", nome: "Cliente UniTV", usuario: "sn-123" }] });
+  respostasDetalhe["pub-un2"] = clienteDetalhe({ servidor: { nome: "UNITV" }, usuario: "sn-123" });
+  await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-un2"], ["sessao_id", "sessao-unitv-2"]]));
+  await aguardarEventos();
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_erro_unitv" && eventos[0].detalhe.motivo === "resolucao_falhou", "Fase3 carrinho erro: unitv resolucao falhou");
+}
+{
+  // Corrida -- insert em tokens_renovacao falha (indice unico parcial
+  // estourando numa submissao concorrente, simulado via configurarFalhaInsert).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-race", nome: "Cliente Race", usuario: "u" }] });
+  respostasDetalhe["pub-race"] = clienteDetalhe();
+  configurarFalhaInsert("tokens_renovacao");
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-race"], ["sessao_id", "sessao-race"]]));
+  await aguardarEventos();
+  configurarFalhaInsert(null);
+  const html = await resp.text();
+  ok(html.includes("Não foi possível continuar"), "Fase3 carrinho erro: corrida ainda cai na pagina de erro generico (comportamento inalterado)");
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_erro_corrida", "Fase3 carrinho erro: carrinho_erro_corrida registrado");
 }
 
 console.log(`\n${total - falhas}/${total} passaram`);

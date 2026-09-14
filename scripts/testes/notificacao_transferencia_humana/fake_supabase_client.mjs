@@ -23,15 +23,21 @@ function novoEstado() {
     // aqui (todos os casos deste suite sao renovacao avulsa) ->
     // buscarLotePorTokenHash retorna null, fluxo individual inalterado.
     renovacoes_lote: new Map(),
+    // Trilha de auditoria (Fase 3, 2026-09-14) -- so' pra
+    // registrarEvento() nao lancar ao gravar; catalogo de eventos ja
+    // coberto em scripts/testes/renovacao_iniciar/teste.mjs.
+    renovacao_eventos: new Map(),
   };
 }
 
 let estadoAtual = novoEstado();
 let falharProximoInsertCobranca = false;
+let contadorEventos = 0;
 
 export function resetarEstado() {
   estadoAtual = novoEstado();
   falharProximoInsertCobranca = false;
+  contadorEventos = 0;
 }
 
 // Forca uma falha real de banco (nao relacionada a FK) na proxima
@@ -48,6 +54,7 @@ export function lerTabela(nome) {
 function chavePara(tabela, linha) {
   if (tabela === "cobrancas_pix") return linha.operacao_id;
   if (tabela === "renovacoes_lote") return linha.grupo_id;
+  if (tabela === "renovacao_eventos") return `evt-${++contadorEventos}`;
   return linha.id;
 }
 
