@@ -440,6 +440,12 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
   .item-ajuda svg { width: 15px; height: 15px; flex: none; }
   .item-ajuda a { color: inherit; font-weight: 700; text-decoration: underline; }
 
+  .item-vencimento {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--ink-fraco);
+  }
+  .item-comprovante-vencimento { font-size: 12.5px; color: var(--ink-fraco); margin-top: 4px; }
+
   .encerramento {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
     padding: 18px; text-align: center; box-shadow: var(--sombra); margin-bottom: 4px;
@@ -1030,9 +1036,13 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              var ajuda = ok
                ? ""
                : '<div class="item-ajuda"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v5M12 16v.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Não conseguimos concluir este acesso. <a href="' + LINK_WHATSAPP + '" target="_blank" rel="noopener">Fale com a gente pelo WhatsApp</a></div>';
+             var vencimento = (ok && it.vencimentoFormatado)
+               ? '<div class="item-vencimento">Novo vencimento: ' + escaparHtml(it.vencimentoFormatado) + "</div>"
+               : "";
              return (
                '<div class="item-resultado' + classeExtra + '">' +
                  '<div class="item-topo"><strong>' + escaparHtml(it.servidor) + "</strong>" + badgeItem(it.resultado) + "</div>" +
+                 vencimento +
                  ajuda +
                "</div>"
              );
@@ -1078,14 +1088,19 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              );
            }).join("");
 
-           // Nota: renovacao-status so' devolve { servidor, resultado } por
-           // item -- sem usuario/plano/vencimento (nenhuma mudanca feita
-           // naquele endpoint pra nao inventar dado que nao existe). O
-           // card por isso fica mais enxuto que a previa ilustrativa.
+           // Nota: renovacao-status devolve { servidor, resultado,
+           // vencimentoFormatado } por item -- usuario/plano continuam
+           // fora (nenhuma mudanca feita pra nao inventar dado que nao
+           // existe nessa resposta). O card por isso fica mais enxuto
+           // que a previa ilustrativa.
            var itensHtml = itens.map(function (it) {
+             var vencimento = (it.resultado === "sucesso" && it.vencimentoFormatado)
+               ? '<div class="item-comprovante-vencimento">Novo vencimento: ' + escaparHtml(it.vencimentoFormatado) + "</div>"
+               : "";
              return (
                '<div class="item-comprovante">' +
                  '<div class="item-comprovante-topo"><strong>' + escaparHtml(it.servidor) + "</strong>" + badgeItem(it.resultado) + "</div>" +
+                 vencimento +
                "</div>"
              );
            }).join("");

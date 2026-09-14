@@ -47,6 +47,13 @@ type EstadoPortal =
 interface ItemStatus {
   servidor: string;
   resultado: "sucesso" | "falha" | null;
+  // Preenchido so' quando a renovacao daquele item teve sucesso E o
+  // callback (renovacao-sigma-resultado) confirmou vencimento_confirmado
+  // -- mesmo dado ja usado hoje na mensagem de WhatsApp
+  // (montarMensagemRenovacaoConcluida/montarMensagemResultadoLote,
+  // _shared/mensagens_fixas.ts). Formatado aqui (servidor), nunca no
+  // cliente -- Portal Checkpoint "novo vencimento nas Telas 6/7".
+  vencimentoFormatado: string | null;
 }
 
 const MAPA_ESTADO_TOKEN: Record<EstadoTokenRenovacao, EstadoPortal> = {
@@ -80,6 +87,25 @@ function resultadoDoToken(estado: EstadoTokenRenovacao): "sucesso" | "falha" | n
   return null;
 }
 
+// DD/MM/AAAA as HH:mm, America/Sao_Paulo -- via formatToParts (nunca
+// toLocaleString direto) para nao herdar o mesmo problema de
+// virgula/segundos ja documentado no projeto pro formato livre do
+// toLocaleString (docs/renovacao_automatica/levantamentos/
+// 2026-08-22_desenho_substituicao_rocketzap.md, secao 13, item 1).
+function formatarDataHoraBr(iso: string): string {
+  const partes = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const parte = (tipo: string) => partes.find((p) => p.type === tipo)?.value ?? "";
+  return `${parte("day")}/${parte("month")}/${parte("year")} às ${parte("hour")}:${parte("minute")}`;
+}
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -109,6 +135,7 @@ Deno.serve(async (req: Request) => {
     const itens: ItemStatus[] = filhos.map((f) => ({
       servidor: f.servidor_nome,
       resultado: resultadoDoToken(f.estado),
+      vencimentoFormatado: f.vencimento_confirmado ? formatarDataHoraBr(f.vencimento_confirmado) : null,
     }));
     return jsonResponse({ estado: MAPA_ESTADO_LOTE[lote.estado], itens });
   }
@@ -116,7 +143,11 @@ Deno.serve(async (req: Request) => {
   const token = await buscarTokenPorHash(tokenHash);
   if (token) {
     const itens: ItemStatus[] = [
-      { servidor: token.servidor_nome, resultado: resultadoDoToken(token.estado) },
+      {
+        servidor: token.servidor_nome,
+        resultado: resultadoDoToken(token.estado),
+        vencimentoFormatado: token.vencimento_confirmado ? formatarDataHoraBr(token.vencimento_confirmado) : null,
+      },
     ];
     return jsonResponse({ estado: MAPA_ESTADO_TOKEN[token.estado], itens });
   }

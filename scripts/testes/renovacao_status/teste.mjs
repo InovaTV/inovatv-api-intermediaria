@@ -73,6 +73,7 @@ const AGORA = new Date().toISOString();
   ok(Array.isArray(corpo.itens) && corpo.itens.length === 1, "individual: 1 item");
   ok(corpo.itens[0].servidor === "BLAZE", "individual: servidor correto");
   ok(corpo.itens[0].resultado === null, "individual autorizada: resultado ainda null (nao terminal)");
+  ok(corpo.itens[0].vencimentoFormatado === null, "individual autorizada: sem vencimento_confirmado -> vencimentoFormatado null");
 }
 
 // ---------------------------------------------------------------------
@@ -93,6 +94,7 @@ const AGORA = new Date().toISOString();
     plano_nome: "Mensal",
     valor_esperado_centavos: 3500,
     vencimento_atual: "2027-01-13T23:59:00-03:00",
+    vencimento_confirmado: "2027-02-13T23:59:00-03:00",
     estado: "renovacao_concluida",
     criado_em: AGORA,
     expira_em: AGORA,
@@ -103,6 +105,28 @@ const AGORA = new Date().toISOString();
   const corpo = await (await handler(reqPost({ token: tokenBruto }))).json();
   ok(corpo.estado === "concluido", "individual concluida: estado concluido");
   ok(corpo.itens[0].resultado === "sucesso", "individual concluida: resultado sucesso");
+  ok(corpo.itens[0].vencimentoFormatado === "13/02/2027 às 23:59", "individual concluida: vencimentoFormatado no formato DD/MM/AAAA às HH:mm");
+}
+
+// ---------------------------------------------------------------------
+// Token individual -- 'renovacao_concluida' SEM vencimento_confirmado
+// (token anterior a coluna existir, ou callback sem o campo) --
+// vencimentoFormatado precisa ser null, nunca lancar excecao.
+// ---------------------------------------------------------------------
+{
+  resetar();
+  const tokenBruto = crypto.randomUUID();
+  const tokenHash = await hashToken(tokenBruto);
+  seed("tokens_renovacao", [{
+    id: "tok-2b", token_hash: tokenHash, conversation_id: "conv-2b", public_id: "pub-2b",
+    telefone: "5517981625486", cliente_nome: "Cliente Teste", servidor_nome: "BLAZE",
+    plano_nome: "Mensal", valor_esperado_centavos: 3500, vencimento_atual: "2027-01-13T23:59:00-03:00",
+    estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: null, tipo: "sigma",
+  }]);
+
+  const corpo = await (await handler(reqPost({ token: tokenBruto }))).json();
+  ok(corpo.itens[0].resultado === "sucesso", "individual concluida sem vencimento_confirmado: resultado ainda sucesso");
+  ok(corpo.itens[0].vencimentoFormatado === null, "individual concluida sem vencimento_confirmado: vencimentoFormatado null, sem excecao");
 }
 
 // ---------------------------------------------------------------------
@@ -122,6 +146,7 @@ const AGORA = new Date().toISOString();
   const corpo = await (await handler(reqPost({ token: tokenBruto }))).json();
   ok(corpo.estado === "falhou", "individual falhou: estado falhou");
   ok(corpo.itens[0].resultado === "falha", "individual falhou: resultado falha");
+  ok(corpo.itens[0].vencimentoFormatado === null, "individual falhou: vencimentoFormatado null");
 }
 
 // ---------------------------------------------------------------------
@@ -148,6 +173,7 @@ const AGORA = new Date().toISOString();
       id: "filho-1", token_hash: "hash-filho-1", conversation_id: "conv-lote", public_id: "pub-A",
       telefone: "5517981625486", cliente_nome: "Cliente Teste", servidor_nome: "BLAZE",
       plano_nome: "Mensal", valor_esperado_centavos: 3500, vencimento_atual: AGORA,
+      vencimento_confirmado: "2027-03-08T20:59:00-03:00",
       estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-1", tipo: "sigma",
     },
     {
@@ -165,6 +191,8 @@ const AGORA = new Date().toISOString();
   const newone = corpo.itens.find((i) => i.servidor === "NewOne");
   ok(blaze.resultado === "sucesso", "lote: filho ja concluido mostra resultado sucesso mesmo com lote ainda em andamento");
   ok(newone.resultado === null, "lote: filho ainda em andamento mostra resultado null");
+  ok(blaze.vencimentoFormatado === "08/03/2027 às 20:59", "lote: filho concluido mostra vencimentoFormatado formatado");
+  ok(newone.vencimentoFormatado === null, "lote: filho ainda em andamento mostra vencimentoFormatado null");
 }
 
 // ---------------------------------------------------------------------
@@ -182,15 +210,18 @@ const AGORA = new Date().toISOString();
   seed("tokens_renovacao", [
     { id: "f3", token_hash: "h3", conversation_id: "conv-lote2", public_id: "pub-C", telefone: "5517981625486",
       cliente_nome: "Cliente Teste", servidor_nome: "BLAZE", plano_nome: "Mensal", valor_esperado_centavos: 3500,
-      vencimento_atual: AGORA, estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-2", tipo: "sigma" },
+      vencimento_atual: AGORA, vencimento_confirmado: "2027-03-08T20:59:00-03:00",
+      estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-2", tipo: "sigma" },
     { id: "f4", token_hash: "h4", conversation_id: "conv-lote2", public_id: "pub-D", telefone: "5517981625486",
       cliente_nome: "Cliente Teste", servidor_nome: "UNITV", plano_nome: "Mensal", valor_esperado_centavos: 3500,
-      vencimento_atual: AGORA, estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-2", tipo: "unitv" },
+      vencimento_atual: AGORA, vencimento_confirmado: "2027-04-10T12:00:00-03:00",
+      estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-2", tipo: "unitv" },
   ]);
 
   const corpo = await (await handler(reqPost({ token: tokenBruto }))).json();
   ok(corpo.estado === "concluido", "lote concluida: estado concluido");
   ok(corpo.itens.every((i) => i.resultado === "sucesso"), "lote concluida: todos os itens com sucesso");
+  ok(corpo.itens.every((i) => typeof i.vencimentoFormatado === "string"), "lote concluida: todos os itens (sigma e unitv) com vencimentoFormatado");
 }
 
 // ---------------------------------------------------------------------
@@ -208,7 +239,8 @@ const AGORA = new Date().toISOString();
   seed("tokens_renovacao", [
     { id: "f5", token_hash: "h5", conversation_id: "conv-lote3", public_id: "pub-E", telefone: "5517981625486",
       cliente_nome: "Cliente Teste", servidor_nome: "BLAZE", plano_nome: "Mensal", valor_esperado_centavos: 3500,
-      vencimento_atual: AGORA, estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-3", tipo: "sigma" },
+      vencimento_atual: AGORA, vencimento_confirmado: "2027-03-08T20:59:00-03:00",
+      estado: "renovacao_concluida", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-3", tipo: "sigma" },
     { id: "f6", token_hash: "h6", conversation_id: "conv-lote3", public_id: "pub-F", telefone: "5517981625486",
       cliente_nome: "Cliente Teste", servidor_nome: "NewOne", plano_nome: "Mensal", valor_esperado_centavos: 3500,
       vencimento_atual: AGORA, estado: "renovacao_falhou", criado_em: AGORA, expira_em: AGORA, grupo_id: "grupo-3", tipo: "sigma" },
@@ -219,6 +251,8 @@ const AGORA = new Date().toISOString();
   const okItem = corpo.itens.find((i) => i.servidor === "BLAZE");
   const falhaItem = corpo.itens.find((i) => i.servidor === "NewOne");
   ok(okItem.resultado === "sucesso" && falhaItem.resultado === "falha", "lote parcial: um sucesso, um falha");
+  ok(okItem.vencimentoFormatado === "08/03/2027 às 20:59", "lote parcial: item com sucesso mostra vencimentoFormatado");
+  ok(falhaItem.vencimentoFormatado === null, "lote parcial: item com falha mostra vencimentoFormatado null");
 }
 
 // ---------------------------------------------------------------------

@@ -106,9 +106,9 @@ const browser = await chromium.launch();
 // ---------------------------------------------------------------------
 {
   const sequencia = [
-    { estado: "aguardando_pagamento", itens: [{ servidor: "ChannelTV", resultado: null }, { servidor: "BLAZE", resultado: null }] },
-    { estado: "processando_renovacao", itens: [{ servidor: "ChannelTV", resultado: "sucesso" }, { servidor: "BLAZE", resultado: null }] },
-    { estado: "parcial", itens: [{ servidor: "ChannelTV", resultado: "sucesso" }, { servidor: "BLAZE", resultado: "falha" }] },
+    { estado: "aguardando_pagamento", itens: [{ servidor: "ChannelTV", resultado: null, vencimentoFormatado: null }, { servidor: "BLAZE", resultado: null, vencimentoFormatado: null }] },
+    { estado: "processando_renovacao", itens: [{ servidor: "ChannelTV", resultado: "sucesso", vencimentoFormatado: "08/03/2027 às 20:59" }, { servidor: "BLAZE", resultado: null, vencimentoFormatado: null }] },
+    { estado: "parcial", itens: [{ servidor: "ChannelTV", resultado: "sucesso", vencimentoFormatado: "08/03/2027 às 20:59" }, { servidor: "BLAZE", resultado: "falha", vencimentoFormatado: null }] },
   ];
   const { server, port, chamadas } = await subirServidor(html, sequencia);
   const page = await browser.newPage();
@@ -137,7 +137,9 @@ const browser = await chromium.launch();
   ok(await page.locator(".contagem-chip.ok:has-text('1 renovado')").isVisible(), "cenario parcial: chip verde '1 renovado(s)'");
   ok(await page.locator(".contagem-chip.falha:has-text('1 não renovado')").isVisible(), "cenario parcial: chip vermelho '1 não renovado(s)'");
   ok(await page.locator(".item-resultado:has-text('ChannelTV') .badge-resultado.ok").isVisible(), "cenario parcial: card ChannelTV com badge verde 'Renovado'");
+  ok((await page.locator(".item-resultado:has-text('ChannelTV') .item-vencimento").textContent()).includes("08/03/2027 às 20:59"), "cenario parcial: card ChannelTV (sucesso) mostra o novo vencimento");
   ok(await page.locator(".item-resultado.item-falha:has-text('BLAZE')").isVisible(), "cenario parcial: card BLAZE com estilo de falha");
+  ok(await page.locator(".item-resultado.item-falha:has-text('BLAZE') .item-vencimento").count() === 0, "cenario parcial: card BLAZE (falha) NAO mostra vencimento");
   ok(await page.locator(".item-ajuda a[href*='wa.me']").isVisible(), "cenario parcial: link do WhatsApp aparece no item com falha");
   ok(await page.locator(".voltar-site").isVisible(), "cenario parcial: link 'Voltar para topetv.com.br' presente no encerramento");
 
@@ -153,7 +155,9 @@ const browser = await chromium.launch();
   ok(await page.locator(".etapa").count() === 6, "historico: linha do tempo com as 6 etapas");
   ok((await page.locator(".etapa").nth(1).locator("span").textContent()).includes("2 acessos selecionados"), "historico: etapa 'Acessos selecionados' usa a quantidade real (2)");
   ok(await page.locator(".item-comprovante:has-text('ChannelTV') .badge-resultado.ok").isVisible(), "historico: card ChannelTV com badge 'Renovado'");
+  ok((await page.locator(".item-comprovante:has-text('ChannelTV') .item-comprovante-vencimento").textContent()).includes("08/03/2027 às 20:59"), "historico: card ChannelTV (sucesso) mostra o novo vencimento");
   ok(await page.locator(".item-comprovante:has-text('BLAZE') .badge-resultado.falha").isVisible(), "historico: card BLAZE mostra o badge 'Nao renovado' (mesmo dado do resultado final)");
+  ok(await page.locator(".item-comprovante:has-text('BLAZE') .item-comprovante-vencimento").count() === 0, "historico: card BLAZE (falha) NAO mostra vencimento");
   ok(await page.locator(".btn-voltar-inicio[href='https://topetv.com.br']").isVisible(), "historico: botao 'Voltar para o inicio' aponta pro site real");
   ok(await page.locator(".ajuda-final a[href='https://wa.me/5517996242415']").isVisible(), "historico: link 'Fale com a Tope TV' com o numero oficial");
   ok(chamadas.length === chamadasAntesDoHistorico, "historico: nenhuma consulta nova a renovacao-status foi feita so' pra ver o historico");
@@ -167,7 +171,10 @@ const browser = await chromium.launch();
 // ---------------------------------------------------------------------
 {
   const sequencia = [
-    { estado: "concluido", itens: [{ servidor: "ChannelTV", resultado: "sucesso" }, { servidor: "UNITV", resultado: "sucesso" }] },
+    { estado: "concluido", itens: [
+      { servidor: "ChannelTV", resultado: "sucesso", vencimentoFormatado: "08/03/2027 às 20:59" },
+      { servidor: "UNITV", resultado: "sucesso", vencimentoFormatado: "10/04/2027 às 12:00" },
+    ] },
   ];
   const { server, port } = await subirServidor(html, sequencia);
   const page = await browser.newPage();
@@ -180,6 +187,9 @@ const browser = await chromium.launch();
   ok(await page.locator(".resumo-contagem").count() === 0, "cenario sucesso: NAO mostra chips de contagem (so' faz sentido no parcial)");
   ok(await page.locator(".badge-resultado.falha").count() === 0, "cenario sucesso: nenhum badge de falha aparece");
   ok(await page.locator(".badge-resultado.ok").count() === 2, "cenario sucesso: os 2 acessos aparecem com badge verde");
+  ok(await page.locator(".item-vencimento").count() === 2, "cenario sucesso: os 2 acessos mostram o novo vencimento");
+  ok((await page.locator(".item-resultado:has-text('ChannelTV') .item-vencimento").textContent()).includes("08/03/2027 às 20:59"), "cenario sucesso: vencimento correto por item (ChannelTV)");
+  ok((await page.locator(".item-resultado:has-text('UNITV') .item-vencimento").textContent()).includes("10/04/2027 às 12:00"), "cenario sucesso: vencimento correto por item (UNITV)");
 
   await page.close();
   await pararServidor(server);
@@ -190,7 +200,7 @@ const browser = await chromium.launch();
 // ---------------------------------------------------------------------
 {
   const sequencia = [
-    { estado: "falhou", itens: [{ servidor: "BLAZE", resultado: "falha" }] },
+    { estado: "falhou", itens: [{ servidor: "BLAZE", resultado: "falha", vencimentoFormatado: null }] },
   ];
   const { server, port } = await subirServidor(html, sequencia);
   const page = await browser.newPage();
@@ -201,6 +211,7 @@ const browser = await chromium.launch();
   ok(await page.locator(".status-icone.atencao").isVisible(), "cenario falha: icone fica ambar (classe 'atencao')");
   ok(await page.locator(".item-resultado.item-falha").count() === 1, "cenario falha: card unico aparece com estilo de falha");
   ok(await page.locator(".item-ajuda a[href='https://wa.me/5517996242415']").isVisible(), "cenario falha: link do WhatsApp com o numero oficial correto");
+  ok(await page.locator(".item-vencimento").count() === 0, "cenario falha: nenhum vencimento aparece (falha nunca tem vencimentoFormatado)");
 
   await page.close();
   await pararServidor(server);
@@ -213,7 +224,7 @@ const browser = await chromium.launch();
 // ---------------------------------------------------------------------
 {
   const sequencia = [
-    { estado: "concluido", itens: [{ servidor: "<img src=x onerror=alert(1)>", resultado: "sucesso" }] },
+    { estado: "concluido", itens: [{ servidor: "<img src=x onerror=alert(1)>", resultado: "sucesso", vencimentoFormatado: null }] },
   ];
   const { server, port } = await subirServidor(html, sequencia);
   const page = await browser.newPage();
@@ -225,6 +236,39 @@ const browser = await chromium.launch();
 
   ok(!dialogApareceu, "cenario seguranca: nome malicioso do servidor NUNCA executa como HTML/JS (escapado)");
   ok((await page.locator(".item-resultado strong").innerHTML()).includes("&lt;img"), "cenario seguranca: nome aparece escapado (&lt;img) no DOM");
+
+  await page.close();
+  await pararServidor(server);
+}
+
+// ---------------------------------------------------------------------
+// Cenario 5 -- seguranca: mesmo teste do Cenario 4, mas para o campo
+// novo vencimentoFormatado (Tela 6 e Tela 7) -- ele passa pelo mesmo
+// escaparHtml usado para servidor, mesmo vindo do nosso proprio
+// backend (defesa em profundidade, mesma disciplina do resto do
+// arquivo).
+// ---------------------------------------------------------------------
+{
+  const payload = "<img src=x onerror=alert(1)>";
+  const sequencia = [
+    { estado: "concluido", itens: [{ servidor: "ChannelTV", resultado: "sucesso", vencimentoFormatado: payload }] },
+  ];
+  const { server, port } = await subirServidor(html, sequencia);
+  const page = await browser.newPage();
+  let dialogApareceu = false;
+  page.on("dialog", async (d) => { dialogApareceu = true; await d.dismiss(); });
+  await page.goto("http://127.0.0.1:" + port + "/");
+  await page.waitForSelector(".item-resultado", { timeout: 8000 });
+  await page.waitForTimeout(500);
+
+  ok(!dialogApareceu, "cenario seguranca (vencimento): valor malicioso do vencimento NUNCA executa como HTML/JS (escapado)");
+  ok((await page.locator(".item-vencimento").innerHTML()).includes("&lt;img"), "cenario seguranca (vencimento): valor aparece escapado (&lt;img) no DOM");
+
+  // Tela 7 (historico) reaproveita o mesmo ultimoDados, sem nova
+  // consulta -- confirma que o escape tambem se aplica la'.
+  await page.click("#ver-historico");
+  await page.waitForSelector(".linha-tempo", { timeout: 3000 });
+  ok((await page.locator(".item-comprovante-vencimento").innerHTML()).includes("&lt;img"), "cenario seguranca (vencimento): historico tambem escapa o valor");
 
   await page.close();
   await pararServidor(server);
