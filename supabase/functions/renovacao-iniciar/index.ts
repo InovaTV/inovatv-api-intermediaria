@@ -449,6 +449,45 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
   .encerramento a:hover { text-decoration: underline; }
   .voltar-site { display: block; text-align: center; margin-top: 16px; font-size: 13px; color: var(--ink-fraco); text-decoration: none; }
   .voltar-site:hover { text-decoration: underline; }
+  .link-historico { display: block; text-align: center; margin-top: 10px; font-size: 13px; color: var(--verde-escuro); font-weight: 700; text-decoration: none; background: none; border: none; cursor: pointer; font-family: inherit; width: 100%; }
+  .link-historico:hover { text-decoration: underline; }
+
+  /* ---------- HISTORICO (linha do tempo) ---------- */
+  .linha-tempo { position: relative; margin: 26px 0 30px; }
+  .linha-tempo::before {
+    content: ""; position: absolute; left: 15px; top: 15px; bottom: 15px; width: 2px;
+    background: var(--verde-tinta);
+  }
+  .etapa { display: flex; gap: 14px; position: relative; margin-bottom: 20px; }
+  .etapa:last-child { margin-bottom: 0; }
+  .etapa-marcador {
+    flex: none; width: 30px; height: 30px; border-radius: 50%;
+    background: var(--verde); color: #fff; display: flex; align-items: center; justify-content: center;
+    position: relative; z-index: 1; box-shadow: 0 0 0 4px var(--paper);
+  }
+  .etapa-marcador svg { width: 15px; height: 15px; }
+  .etapa-corpo { padding-top: 4px; }
+  .etapa-corpo strong { display: block; font-size: 15px; font-weight: 700; color: var(--ink); }
+  .etapa-corpo span { display: block; font-size: 13px; color: var(--ink-fraco); margin-top: 1px; }
+
+  .lista-comprovante { display: flex; flex-direction: column; gap: 12px; margin-bottom: 22px; }
+  .item-comprovante {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 16px; box-shadow: var(--sombra);
+  }
+  .item-comprovante-topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .item-comprovante-topo strong { font-size: 16px; font-weight: 700; }
+
+  .btn-voltar-inicio {
+    width: 100%; border: none; border-radius: 12px; padding: 15px 24px; font-size: 16px;
+    font-weight: 700; font-family: inherit; color: #fff; cursor: pointer; text-decoration: none;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: linear-gradient(135deg, var(--verde-escuro), var(--verde) 60%, #5CE666);
+    box-shadow: 0 10px 22px -10px rgba(8,122,54,.55);
+  }
+  .ajuda-final { text-align: center; font-size: 13px; color: var(--ink-fraco); margin: 14px 0 4px; }
+  .ajuda-final a { color: var(--verde-escuro); font-weight: 700; text-decoration: none; }
+  .ajuda-final a:hover { text-decoration: underline; }
 
   /* ---------- RODAPE ---------- */
   .onda-rodape { display: block; line-height: 0; }
@@ -1009,12 +1048,62 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              "</div>" +
              (itensHtml ? '<p class="subtitulo-lista">Seus acessos</p><div class="lista-resultado">' + itensHtml + "</div>" : "") +
              '<div class="encerramento"><p>Obrigado por renovar com a <strong>Tope TV</strong>! Qualquer dúvida, é só chamar a gente pelo <a href="' + LINK_WHATSAPP + '" target="_blank" rel="noopener">WhatsApp</a>.</p></div>' +
+             '<button type="button" class="link-historico" id="ver-historico">Ver histórico completo desta renovação</button>' +
              '<a class="voltar-site" href="https://topetv.com.br">← Voltar para topetv.com.br</a>'
+           );
+         }
+
+         // Tela 7 -- historico/comprovante. So' um resumo visual do MESMO
+         // resultado ja' recebido (ultimoDados, guardado em memoria);
+         // nenhuma consulta nova. As 6 etapas da linha do tempo sao
+         // sempre "concluidas" por construcao -- so' e' possivel chegar
+         // aqui depois de passar por todas elas.
+         function telaHistorico(dados) {
+           var itens = Array.isArray(dados.itens) ? dados.itens : [];
+           var qtdTexto = itens.length === 1 ? "1 acesso selecionado" : itens.length + " acessos selecionados";
+           var etapas = [
+             ["Identificação", "Telefone confirmado"],
+             ["Acessos selecionados", qtdTexto],
+             ["Renovação confirmada", "Solicitação confirmada"],
+             ["Pagamento Pix", "Pagamento identificado"],
+             ["Processamento", "Acessos processados"],
+             ["Renovação concluída", "Resultado final"],
+           ];
+           var etapasHtml = etapas.map(function (e) {
+             return (
+               '<div class="etapa">' +
+                 '<div class="etapa-marcador">' + SVG_CHECK_MINI + "</div>" +
+                 '<div class="etapa-corpo"><strong>' + e[0] + "</strong><span>" + e[1] + "</span></div>" +
+               "</div>"
+             );
+           }).join("");
+
+           // Nota: renovacao-status so' devolve { servidor, resultado } por
+           // item -- sem usuario/plano/vencimento (nenhuma mudanca feita
+           // naquele endpoint pra nao inventar dado que nao existe). O
+           // card por isso fica mais enxuto que a previa ilustrativa.
+           var itensHtml = itens.map(function (it) {
+             return (
+               '<div class="item-comprovante">' +
+                 '<div class="item-comprovante-topo"><strong>' + escaparHtml(it.servidor) + "</strong>" + badgeItem(it.resultado) + "</div>" +
+               "</div>"
+             );
+           }).join("");
+
+           return (
+             '<p class="elo">Renovação · Histórico</p>' +
+             '<p class="saudacao">Histórico da renovação</p>' +
+             '<p class="intro">Acompanhe o que aconteceu com sua renovação.</p>' +
+             '<div class="linha-tempo">' + etapasHtml + "</div>" +
+             (itensHtml ? '<p class="subtitulo-lista">Acessos desta renovação</p><div class="lista-comprovante">' + itensHtml + "</div>" : "") +
+             '<div class="acoes-historico"><a class="btn-voltar-inicio" href="https://topetv.com.br">Voltar para o início</a></div>' +
+             '<p class="ajuda-final">Precisa de ajuda? <a href="' + LINK_WHATSAPP + '" target="_blank" rel="noopener">Fale com a Tope TV</a></p>'
            );
          }
 
          var token = ${tokenJs};
          var conteudoEl = document.getElementById("tela-conteudo");
+         var ultimoDados = null;
          var textos = {
            aguardando_confirmacao: "Aguardando pagamento…",
            aguardando_pagamento: "Aguardando pagamento…",
@@ -1022,6 +1111,15 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
            expirado: "O tempo para pagamento expirou.",
            nao_encontrado: "Aguardando pagamento…"
          };
+         // "Ver historico completo" (Tela 7) so' aparece depois que a
+         // renovacao termina -- delegacao de evento porque o botao e'
+         // recriado a cada innerHTML novo. Reaproveita ultimoDados (o
+         // mesmo resultado ja' recebido do polling): nenhuma consulta
+         // nova a' renovacao-status so' pra mostrar o historico.
+         conteudoEl.addEventListener("click", function (ev) {
+           var btn = ev.target.closest ? ev.target.closest("#ver-historico") : null;
+           if (btn && ultimoDados) conteudoEl.innerHTML = telaHistorico(ultimoDados);
+         });
          var intervalo = setInterval(sondar, 4000);
          async function sondar() {
            try {
@@ -1034,6 +1132,7 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              if (dados.estado === "processando_renovacao") {
                conteudoEl.innerHTML = telaProcessando(dados);
              } else if (dados.estado === "concluido" || dados.estado === "parcial" || dados.estado === "falhou") {
+               ultimoDados = dados;
                conteudoEl.innerHTML = telaConcluido(dados);
                clearInterval(intervalo);
              } else {

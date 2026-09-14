@@ -110,7 +110,7 @@ const browser = await chromium.launch();
     { estado: "processando_renovacao", itens: [{ servidor: "ChannelTV", resultado: "sucesso" }, { servidor: "BLAZE", resultado: null }] },
     { estado: "parcial", itens: [{ servidor: "ChannelTV", resultado: "sucesso" }, { servidor: "BLAZE", resultado: "falha" }] },
   ];
-  const { server, port } = await subirServidor(html, sequencia);
+  const { server, port, chamadas } = await subirServidor(html, sequencia);
   const page = await browser.newPage();
   await page.goto("http://127.0.0.1:" + port + "/");
 
@@ -143,6 +143,20 @@ const browser = await chromium.launch();
 
   await page.waitForTimeout(4500);
   ok(await page.locator(".item-resultado").count() === 2, "cenario parcial: polling parou (tela final nao mudou apos esperar mais um ciclo)");
+
+  // ---- Tela 7: "Ver historico completo" a partir da tela concluida ----
+  const chamadasAntesDoHistorico = chamadas.length;
+  ok(await page.locator("#ver-historico").isVisible(), "historico: botao 'Ver historico completo' aparece na tela concluida");
+  await page.click("#ver-historico");
+  await page.waitForSelector(".linha-tempo", { timeout: 3000 });
+
+  ok(await page.locator(".etapa").count() === 6, "historico: linha do tempo com as 6 etapas");
+  ok((await page.locator(".etapa").nth(1).locator("span").textContent()).includes("2 acessos selecionados"), "historico: etapa 'Acessos selecionados' usa a quantidade real (2)");
+  ok(await page.locator(".item-comprovante:has-text('ChannelTV') .badge-resultado.ok").isVisible(), "historico: card ChannelTV com badge 'Renovado'");
+  ok(await page.locator(".item-comprovante:has-text('BLAZE') .badge-resultado.falha").isVisible(), "historico: card BLAZE mostra o badge 'Nao renovado' (mesmo dado do resultado final)");
+  ok(await page.locator(".btn-voltar-inicio[href='https://topetv.com.br']").isVisible(), "historico: botao 'Voltar para o inicio' aponta pro site real");
+  ok(await page.locator(".ajuda-final a[href='https://wa.me/5517996242415']").isVisible(), "historico: link 'Fale com a Tope TV' com o numero oficial");
+  ok(chamadas.length === chamadasAntesDoHistorico, "historico: nenhuma consulta nova a renovacao-status foi feita so' pra ver o historico");
 
   await page.close();
   await pararServidor(server);
