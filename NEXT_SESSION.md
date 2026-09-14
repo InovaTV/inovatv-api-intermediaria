@@ -1,5 +1,114 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+## CHECKPOINT 2026-09-14 (b) — Novo vencimento nas Telas 6/7 do Portal: implementado, testado, commitado e publicado (renovacao-status v2 / renovacao-iniciar v9)
+
+> **Leia isto primeiro.** Este checkpoint é posterior, na mesma data,
+> ao checkpoint `2026-09-14` logo abaixo ("Tela 7 em produção, TESTE
+> REAL... ChannelTV") — aquele registrava a única lacuna observada no
+> teste real: a Tela 6/7 não mostravam a nova data de vencimento. Este
+> checkpoint fecha exatamente essa lacuna. O restante do checkpoint
+> anterior (arquitetura das 7 telas, decisão de Portal standalone,
+> tabela de versões de outras functions) continua válido e não é
+> repetido aqui.
+
+### 1. O que foi feito nesta sessão
+
+- **Auditoria read-only** (a pedido do usuário) de onde estava
+  desativado o envio de comprovante pelo RocketZap
+  (`scripts/renovacao-sigma-workflow.mjs:616-619`, campo
+  `enviar_mensagem` do modal "Add Pagamento" do Rocket) — confirmado
+  que a desativação (07/09/2026) existe para evitar mensagem
+  duplicada, já que a nossa própria infraestrutura
+  (`renovacao-sigma-resultado`) já envia a confirmação por Cloud API
+  com o vencimento incluso. **Conclusão: reativar isso não era o
+  caminho certo** para resolver a exibição no Portal — decisão
+  confirmada, não reabrir.
+- **Levantamento read-only** de como fazer `renovacao-status` devolver
+  o novo vencimento sem esse acoplamento: confirmado que
+  `tokens_renovacao.vencimento_confirmado` já existe, já é gravado com
+  sucesso (Sigma e UniTV, individual e lote) e já era lido (`select
+  "*"`) por `renovacao-status` — só não era repassado na resposta.
+- **Plano aprovado** (formatar a data no servidor, `DD/MM/AAAA às
+  HH:mm`, `America/Sao_Paulo`) e **implementado**:
+  - `supabase/functions/renovacao-status/index.ts`: novo campo
+    `vencimentoFormatado` no contrato (`ItemStatus`), formatado via
+    `formatarDataHoraBr` (usa `Intl.DateTimeFormat(...).formatToParts`,
+    não `toLocaleString` direto — evita o problema de vírgula/segundos
+    já documentado no projeto).
+  - `supabase/functions/renovacao-iniciar/index.ts`: Tela 6
+    (`telaConcluido`) e Tela 7 (`telaHistorico`) passam a mostrar
+    "Novo vencimento: ..." só quando `resultado === "sucesso" &&
+    vencimentoFormatado`, sempre via `escaparHtml`.
+  - Testes atualizados: `scripts/testes/renovacao_status/teste.mjs`
+    (23/23 → **33/33**) e
+    `scripts/testes/renovacao_iniciar/teste_transicoes_pix.mjs` (35/35
+    → **46/46**, incluindo cenário de XSS dedicado ao campo novo).
+    `scripts/testes/renovacao_iniciar/teste.mjs` confirmado sem
+    regressão, **104/104**.
+- **Commit `b8c6b82`** ("feat: exibe novo vencimento no portal de
+  renovacao") — só os 4 arquivos de código/teste acima, nenhum dos 5
+  `.html` untracked de sessões anteriores incluído.
+- **Push para `origin/main`** — local == origin/main em `b8c6b82`.
+- **Deploy — só as 2 functions deste commit**: `renovacao-status`
+  v1→**v2**, `renovacao-iniciar` v8→**v9**. Confirmado por
+  `updated_at` que nenhuma das outras 34 functions ativas foi tocada.
+- **Auditoria read-only em produção** (SQL direto no Supabase Studio,
+  sem uso/extração da `service_role key` pelo Claude — essa tentativa
+  foi bloqueada pelo classificador de segurança e abandonada
+  corretamente): confirmado que o registro real do teste ChannelTV
+  (`estado = renovacao_concluida`, `tipo = sigma`, `grupo_id = null`)
+  tem `vencimento_confirmado = 28/02/2027 23:59:59 UTC` — ou seja,
+  `28/02/2027 às 20:59` no fuso `America/Sao_Paulo`, exatamente o que
+  `renovacao-status v2` deveria devolver. Outros registros concluídos
+  (Sigma e UniTV, individual e lote) também têm o campo preenchido —
+  reforça que a gravação do dado é normal, não um caso isolado.
+
+### 2. O que NÃO foi validado (e por quê isso é aceitável)
+
+- **Chamada HTTP real ponta a ponta** (`tokens_renovacao.vencimento_confirmado`
+  → `renovacao-status v2` → JSON `vencimentoFormatado` → renderização
+  na Tela 6/7) **não foi exercitada contra produção** com um token
+  real. O `tokenBruto` daquele teste nunca foi persistido (só o hash
+  SHA-256, por desenho — ver `_shared/tokens_renovacao.ts:6-8`) e não
+  ficou disponível nesta sessão (nem aba de navegador, nem link
+  salvo).
+- **Decisão explícita do usuário, registrada aqui para não ser
+  reaberta sem necessidade:** não criar uma renovação nova só para
+  testar isso — geraria cobrança/custo real sem necessidade. A
+  validação indireta (mesma lógica testada localmente 33/33+104/104+46/46,
+  publicada byte a byte no commit `b8c6b82`, dado de origem confirmado
+  real em produção) foi considerada suficiente para fechar esta etapa.
+- **Se um link de renovação real (Sigma ou UniTV, concluído) aparecer
+  organicamente no futuro** (próximo cliente real usando o Portal),
+  vale aproveitar esse acesso real para uma chamada `renovacao-status`
+  de leitura pura (sem reabrir nada) e confirmar a Tela 6/7 exibindo a
+  data — não é bloqueador, é só uma confirmação visual pendente.
+
+### 3. Regra explícita para a próxima sessão
+
+- **Não reativar `enviar_mensagem` do RocketZap** para resolver a
+  questão do vencimento — decisão já tomada e fechada nesta sessão
+  (seção 1). Se a dúvida for levantada de novo, este checkpoint já
+  tem a resposta.
+- **Não criar renovação/cobrança nova só para testar a exibição do
+  vencimento** — só fazer isso se surgir naturalmente (cliente real
+  usando o Portal) ou com autorização explícita nova.
+- Esta sessão não tocou `renovacao-sigma-resultado`, `openpix-webhook`,
+  `renovacao-confirmar`, Rocket, Sigma, UniTV nem a mensagem de
+  WhatsApp — nenhuma dessas peças precisa de atenção por causa desta
+  mudança.
+
+### 4. Estado do Git ao final desta sessão
+
+- Commit mais recente: **`b8c6b82`** — "feat: exibe novo vencimento no
+  portal de renovacao".
+- **local == origin/main** ✅ (ahead/behind 0/0).
+- Working tree: limpo, além dos mesmos 5 arquivos untracked de sessões
+  anteriores (`hostinger_renovacao_NOVO.html`, `preview_concluido.html`,
+  `preview_historico.html`, `preview_pix.html`,
+  `preview_processando.html`) — inalterados, não commitados.
+- **Produção:** `renovacao-status` **v2**, `renovacao-iniciar` **v9**.
+
 ## CHECKPOINT 2026-09-14 — Portal de Renovação: Tela 7 em produção, TESTE REAL de ponta a ponta validado (ChannelTV); fechamento de sessão para troca de máquina
 
 > **Leia isto primeiro se estiver retomando em outra máquina.** Este
