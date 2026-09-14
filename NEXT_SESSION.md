@@ -1,8 +1,313 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+## CHECKPOINT 2026-09-14 — Portal de Renovação: Tela 7 em produção, TESTE REAL de ponta a ponta validado (ChannelTV); fechamento de sessão para troca de máquina
+
+> **Leia isto primeiro se estiver retomando em outra máquina.** Este
+> checkpoint substitui, para tudo relacionado ao **estado de
+> implementação do Portal de Renovação**, o checkpoint `2026-09-13`
+> logo abaixo (que dizia "NADA IMPLEMENTADO AINDA" — isso deixou de
+> ser verdade). O achado de investigação do checkpoint 2026-09-13
+> sobre `pixrocket.net`/CORS/infraestrutura Hostinger continua válido
+> como registro histórico de como a decisão de arquitetura foi tomada.
+
+### 1. Estado do Git (confirmado nesta sessão, somente leitura)
+
+- Repositório: `inovatv-api-intermediaria`
+- Branch: `main`
+- HEAD local: `a190882c09c9b689a1d6eaada2443ab1339bf96d`
+- `origin/main`: `a190882c09c9b689a1d6eaada2443ab1339bf96d`
+- **local == origin/main** ✅ (ahead/behind 0/0)
+- Working tree: limpo (nenhum arquivo rastreado modificado)
+- Untracked (mockups/rascunhos de sessões anteriores, nunca
+  commitados, não apagados automaticamente):
+  `scripts/testes/renovacao_iniciar/hostinger_renovacao_NOVO.html`,
+  `preview_concluido.html`, `preview_historico.html`, `preview_pix.html`,
+  `preview_processando.html`
+- Commit mais recente: `a190882` — "feat: tela 'Historico da
+  renovacao' (Tela 7) apos a conclusao do Pix"
+- Este próprio fechamento adiciona 1 commit de documentação em cima de
+  `a190882` (`docs: fechamento de sessão...`) — conferir o hash exato
+  com `git log --oneline -3`.
+
+### 2. Estado do Portal — 7 telas — **IMPLEMENTADO e VALIDADO**
+
+O Portal de Renovação Tope TV (`https://topetv.com.br/renovacao/`) tem
+**7 telas**, todas mobile-first, todas com identidade visual aprovada
+e implementadas dentro de **uma única Edge Function**,
+`renovacao-iniciar` (nenhum endpoint novo por tela):
+
+1. **Telefone / identificação** — "Renove sua assinatura"
+2. **Seus acessos** — lista vinda do Rocket (nome, usuário, servidor,
+   plano, vencimento, valor — **nunca senha**)
+3. **Carrinho / seleção** — seleção individual ou múltipla
+4. **Confirmação** — "Confirme sua renovação" (conferência antes do
+   ACEITO)
+5. **Pix** — QR Code + BR Code + link de pagamento hospedado (Woovi)
+6. **Processando / Concluído** — acompanhamento por polling
+   (`renovacao-status`) até o resultado final
+7. **Histórico da renovação** — timeline das 6 etapas do fluxo +
+   cards de recibo por acesso, acessível via "Ver histórico completo"
+   a partir da Tela 6
+
+**Comportamento aprovado e implementado, confirmado por leitura de
+código nesta sessão:**
+- Mobile-first (base = mobile, `@media (min-width: 760px)` = desktop)
+- Nome do cliente exibido normalmente (nunca mascarado — decisão já
+  superada a do checkpoint 2026-09-13, que ainda cogitava mascaramento)
+- Usuário, servidor, plano, vencimento, valor exibidos nas telas de
+  seleção/conferência
+- **Senha NUNCA exibida** (nem o backend Rocket devolve esse campo)
+- Seleção individual ou múltipla (carrinho)
+- **1 acesso selecionado → `tokens_renovacao`** (token individual)
+- **2+ acessos selecionados → `renovacoes_lote`** (1 Pix agregado para
+  N acessos, mesma cobrança)
+- Tela de Processando com badges por item enquanto o resultado não sai
+- Tela de Concluído com contagem "X de Y renovados" + card por acesso
+- Tela 7 (Histórico) é **do fluxo atual em memória**, não um histórico
+  persistente do cliente — ver nota na seção de pendências
+
+**Não existe** (para não inventar funcionalidade): histórico
+persistente entre sessões/visitas, notificação por e-mail, alteração
+de plano dentro do Portal, edição de dados cadastrais.
+
+### 3. TESTE REAL DE PRODUÇÃO — CHANNELTV — **VALIDADO**
+
+Executado hoje (2026-09-14), de ponta a ponta, em produção real:
+
+- Cadastro utilizado: **acesso de teste ChannelTV**
+- Fluxo completo percorrido: Hostinger → identificação por telefone →
+  Rocket → seleção de acesso → carrinho → confirmação → **ACEITO** →
+  cobrança Pix real → pagamento real → processamento → renovação →
+  resultado → histórico (Tela 7)
+- Cobrança Pix real gerada e paga
+- Renovação processada de verdade (Sigma/UniTV, via o workflow
+  `renovacao-sigma.yml`)
+- Resultado final validado na Tela 6 (Concluído) e na Tela 7
+  (Histórico) — as 6 etapas da timeline e o card de recibo do acesso
+  renderizaram corretamente
+- **Nenhuma alteração indevida no cadastro** foi observada
+- Nenhum dado sensível (senha, token, chave, cookie, segredo) foi
+  registrado nesta sessão nem nesta documentação
+
+**Única observação funcional do teste real:**
+
+> **A resposta final do Portal (Tela 6 / Tela 7) não mostra a nova
+> data de vencimento.**
+
+Isso é esperado pelo desenho atual, não é um bug: `renovacao-status`
+só devolve `{ estado, itens: [{ servidor, resultado }] }` — nunca
+vencimento — e a Tela 6/Tela 7 foram implementadas deliberadamente sem
+inventar esse dado (ver §4-G do checkpoint de auditoria desta mesma
+sessão, mais acima na conversa). A data nova **existe** (o Rocket a
+tem, pós-renovação), só não chega ao Portal hoje.
+
+### 4. Estado de produção — Edge Functions confirmado nesta sessão
+
+| Função | Versão em produção | Observação |
+|---|---|---|
+| `renovacao-iniciar` | **v8** | Inclui a Tela 7 (commit `a190882`); **não criou endpoint novo** |
+| `renovacao-status` | **v1** | Sem alteração desde antes deste checkpoint |
+| `renovacao-confirmar` | **v35** | Via WhatsApp (botões), paralela ao Portal |
+| `openpix-webhook` | **v32** | — |
+| `renovacao-sigma-resultado` | **v33** | Callback do workflow GitHub Actions |
+| `renovacao-sigma-watchdog` | **v34** | Janela de 15 min p/ estados travados |
+| `confirmacao-renovacao` | **v30** | Caminho legado (tela hospedada pela própria function, pré-Portal) |
+
+Total de 36 funções ativas no projeto; o deploy de hoje (Tela 7) tocou
+**somente** `renovacao-iniciar` — confirmado comparando `updated_at`
+de todas as 36 no momento do deploy.
+
+### 5. Arquitetura real do fluxo — **IMPLEMENTADO**, confirmado por leitura de código
+
+```
+Hostinger (topetv.com.br/renovacao)
+  → POST renovacao-iniciar (etapa=telefone) → Rocket (identificação)
+  → etapa=carrinho (seleção) → etapa=confirmar (aceitar/cancelar)
+  → confirmarRenovacao() → tokens_renovacao (1 item) OU
+    renovacoes_lote (2+ itens)
+  → criarCobrancaOpenPix() → OpenPix/Woovi → tela Pix (QR/BR Code)
+  → openpix-webhook (assinatura RSA validada, reconsulta real do
+    provedor antes de marcar como pago)
+  → dispara .github/workflows/renovacao-sigma.yml
+  → scripts/renovacao-sigma-workflow.mjs (execução real Sigma/UniTV)
+  → renovacao-sigma-resultado (callback com token interno, idempotente)
+  → renovacao-status (leitura pura, sem escrita, polling do Portal)
+  → Tela Processando → Tela Concluído → Tela 7 (Histórico)
+```
+
+Pontos de arquitetura registrados explicitamente:
+
+- **O Portal não depende do WhatsApp para pagamento.** O caminho
+  Hostinger → `renovacao-iniciar` → Pix → webhook → Sigma é
+  autossuficiente; `renovacao-confirmar` (via botão do WhatsApp) é uma
+  via paralela que compartilha a mesma lógica (`confirmarRenovacao`),
+  não uma dependência do Portal.
+- **WhatsApp não é caminho crítico do Portal.** Mensagens WhatsApp
+  enviadas ao longo do fluxo (preparando pagamento, renovação em
+  andamento, etc.) são best-effort — uma falha de envio não impede o
+  Portal de continuar funcionando via polling de `renovacao-status`.
+- **Rocket não deve se tornar dependência crítica do Portal.** O
+  Portal já funciona hoje até o resultado final sem depender de
+  nenhum comprovante enviado pelo Rocket — essa é uma restrição de
+  desenho a preservar quando o envio do comprovante for reavaliado
+  amanhã (ver §7).
+
+### 6. Decisão para amanhã — **DECISÃO FUTURA, nada implementado hoje**
+
+- **Hoje (2026-09-14) o Rocket NÃO foi reativado, o fluxo de envio de
+  comprovante do Rocket NÃO foi alterado, e nenhum novo deploy
+  funcional foi feito** durante este fechamento (só documentação).
+- O usuário quer avaliar amanhã a **reativação do envio do comprovante
+  pelo Rocket** após a renovação efetivamente concluída, porque esse
+  comprovante deve trazer os dados atualizados — incluindo a nova data
+  de vencimento — resolvendo a observação do §3.
+- **Regra explícita para amanhã: primeiro auditar (somente leitura),
+  só depois decidir.** Ver checklist completo em §7 abaixo.
+
+### 7. PRÓXIMOS PASSOS
+
+#### PRIORIDADE 1 — amanhã: auditar o envio de comprovante pelo Rocket
+
+**Só ler/investigar primeiro. Nenhuma reativação, nenhuma alteração de
+fluxo, nenhum deploy até a auditoria estar completa e decidida com o
+usuário.**
+
+Perguntas a responder na auditoria:
+- Onde está desativado hoje (qual arquivo, qual flag/condição)?
+- Qual flag controla o envio (env var, campo de config, comentário no
+  código)?
+- Em que ponto do fluxo o envio aconteceria (logo após
+  `renovacao-sigma-resultado` marcar sucesso? Outro ponto)?
+- Qual conteúdo é enviado (mensagem fixa? Comprovante real do painel
+  Rocket)?
+- Esse conteúdo contém a nova data de vencimento?
+- Existe risco de duplicidade (com a mensagem de confirmação que já é
+  enviada por `renovacao-sigma-resultado`/`montarMensagemRenovacaoConcluida`
+  hoje)?
+- Qual o comportamento para 1 acesso (`tokens_renovacao`) vs. lote
+  (`renovacoes_lote`, N acessos)?
+- O envio, se reativado, aconteceria **só depois** da confirmação real
+  da renovação (nunca antes, nunca por suposição)?
+
+**Só depois dessa auditoria, decidir se e como reativar** — com
+aprovação explícita do usuário antes do primeiro código, seguindo o
+mesmo ritmo já usado neste projeto (mockup/plano → aprovação → código
+→ teste → aprovação → commit → push → deploy).
+
+#### Outras pendências conhecidas (não bloqueadoras, registradas para não se perderem)
+
+- Rate limit de identificação por telefone (`_shared/portal_rate_limit.ts`)
+  usa SHA-256 puro do telefone, sem HMAC — reversível por força bruta
+  para o espaço pequeno de telefones brasileiros. Risco baixo, já
+  documentado no próprio código como melhoria futura.
+- "Ghost conversation": `buscarOuCriarConversa` (`_shared/conversas_estado.ts`)
+  continua criando uma linha física em `conversas_estado` só para
+  satisfazer a FK de `tokens_renovacao`/`renovacoes_lote`, quando o
+  telefone não tem conversa prévia. **Já mitigado na apresentação**:
+  `painel/app/conversas/layout.tsx` (linhas ~233-246) filtra essas
+  conversas vazias da lista do Painel. A linha continua existindo no
+  banco — limpeza arquitetural de verdade (evitar a criação, não só
+  escondê-la) segue como trabalho futuro, não urgente.
+- A página da Hostinger (`topetv.com.br/renovacao/`) **não está sob
+  controle de versão neste repositório** — confirmado que não existe
+  nenhum arquivo `.html` da Hostinger rastreado pelo git aqui. O único
+  vestígio local é o rascunho untracked `hostinger_renovacao_NOVO.html`.
+  Qualquer alteração futura na Hostinger precisa ser feita e
+  documentada manualmente.
+- Tela 7 ("Histórico") é o histórico **da renovação atual, em memória
+  do navegador** (`ultimoDados`), **não um histórico persistente do
+  cliente** — se a página for recarregada ou fechada após a
+  conclusão, a Tela 7 não fica mais acessível a partir daquele estado.
+- Antes de qualquer novo teste financeiro real, confirmar manualmente
+  (fora do código, o valor do secret é mascarado por segurança) se
+  `OPENPIX_BASE_URL` está apontando para produção, não sandbox — o
+  teste de hoje já rodou com sucesso, mas isso vale como lembrete
+  permanente antes de cada novo ciclo de teste real.
+
+### 8. NÃO REABRIR / JÁ VALIDADO
+
+- Telas 1-7 do Portal: identidade visual aprovada, implementação real
+  testada (104/104 + 35/35 automatizados) e validada em teste real de
+  produção hoje. Não redesenhar sem pedido explícito novo.
+- `renovacao-iniciar` v8, `renovacao-status` v1: em produção,
+  validados. Não redeployar por rotina.
+- A decisão de o Portal ser standalone (HTML + form, sem depender do
+  fluxo conversacional `propor_renovacao` do Plano Mestre) está
+  validada por um teste real completo — não é mais uma hipótese de
+  arquitetura, é o caminho que está em produção hoje.
+
+### 9. COMO RETOMAR O PROJETO EM OUTRO COMPUTADOR
+
+**Layout local conhecido (verificado nesta máquina, 2026-09-14):**
+```
+D:\projetos\inovatv-api-intermediaria   ← este repositório (o Portal vive aqui)
+D:\projetos\inovatv_central             ← CLAUDE.md/AGENTS.md consolidados do ecossistema
+D:\projetos\inovatv_painel              ← Painel de Atendimento (Next.js), fonte separada do painel/ deste repo* 
+```
+\* `painel/` também existe DENTRO deste repositório
+(`inovatv-api-intermediaria/painel/`) — é o Painel de Atendimento
+Next.js referenciado neste checkpoint (filtro da "ghost conversation").
+Não confundir com o repositório irmão `inovatv_painel` (não
+inspecionado nesta sessão).
+
+**GitHub remoto:** `https://github.com/InovaTV/inovatv-api-intermediaria.git`
+**Branch principal:** `main`
+
+**Ordem prática de leitura ao retomar em qualquer máquina:**
+1. `CLAUDE.md` (ou `AGENTS.md`, equivalente) — ponto de entrada deste
+   repositório; aponta para este arquivo (`NEXT_SESSION.md`) como
+   checkpoint de continuidade.
+2. `NEXT_SESSION.md` — **este arquivo, de cima para baixo** (os
+   checkpoints mais recentes ficam no topo; este checkpoint
+   `2026-09-14` é o mais recente sobre o Portal no momento deste
+   fechamento).
+3. `docs/renovacao_automatica/PLANO_MESTRE_IMPLEMENTACAO.md` — **só
+   para a frente conversacional `propor_renovacao` via WhatsApp**, que
+   é uma via diferente e continua não implementada além da Etapa 1a.
+   **Não confundir com o Portal** (que está documentado aqui, não lá).
+4. Estado Git: `git fetch origin && git status && git log --oneline -8`
+   — esperar `main == origin/main` e o commit de fechamento de
+   documentação desta sessão no topo (logo acima de `a190882`).
+5. Estado de produção: `supabase functions list --project-ref nduxsuxkopuvhwugdkqi`
+   — conferir contra a tabela da §4 acima.
+6. Próximos passos: §7 acima (auditoria do comprovante Rocket é a
+   prioridade 1).
+
+**Regras permanentes para qualquer sessão/máquina nova:**
+- **Nunca começar alterando código sem antes fazer um checkpoint** (git
+  + produção) e ler este arquivo — não confiar só na memória da
+  conversa anterior, ela não persiste entre máquinas.
+- **Confirmar o estado de produção antes de modificar** qualquer Edge
+  Function (`supabase functions list`), nunca assumir a versão pela
+  documentação sem checar ao vivo.
+- **Nunca usar a Maridete Souza Silva em nenhum teste** (instrução
+  permanente do usuário).
+- **Nunca usar dados reais de cliente de forma inadequada** — testes
+  reais só com cadastro de teste explicitamente designado para isso
+  (ex.: ChannelTV, usado hoje) e só com autorização explícita para
+  cada ação sensível (ACEITO, cobrança, renovação real).
+- **Nunca colocar segredos (senha, token, chave, cookie, secret) no
+  chat ou em qualquer documentação** — nomes de secrets podem ser
+  citados, valores nunca.
+- Qualquer ação irreversível (commit, push, deploy, ACEITO, cobrança
+  Pix, renovação real) exige autorização explícita da sessão atual —
+  aprovação de uma etapa não autoriza a próxima etapa sensível
+  automaticamente.
+
+---
+
 > **✅ CHECKPOINT 2026-09-13 — ESPECIFICAÇÃO DO PORTAL DE RENOVAÇÃO
 > TOPE TV (`topetv.com.br/renovacao`) FECHADA. NADA IMPLEMENTADO
-> AINDA.** Projeto parado deliberadamente em etapa de especificação,
+> AINDA.**
+>
+> **⚠️ SUPERADO quanto ao status de implementação — ver `##
+> CHECKPOINT 2026-09-14` no topo deste arquivo.** As 7 telas do Portal
+> foram implementadas, testadas e validadas em teste real de produção
+> em 2026-09-14. Os achados de investigação abaixo (pixrocket.net,
+> CORS, infraestrutura Hostinger) continuam válidos como registro
+> histórico de como a decisão de arquitetura foi tomada.
+>
+> Projeto parado deliberadamente em etapa de especificação,
 > por pedido explícito do usuário, justamente para poder ser retomado
 > em outra máquina sem depender desta conversa. Sessão inteira foi
 > investigação/leitura: código lido, painel administrativo do Rocket

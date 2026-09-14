@@ -6,6 +6,10 @@
 > (Central, Painel, esta API), o `AGENTS.md` consolidado vive em
 > `inovatv_central` — este arquivo é o ponto de entrada específico
 > deste repositório, não substitui aquele.
+>
+> **Para o estado mais recente e as pendências em aberto**, leia
+> [`NEXT_SESSION.md`](NEXT_SESSION.md) — checkpoint de continuidade
+> deste repositório, checkpoints mais recentes no topo do arquivo.
 
 ---
 
@@ -78,6 +82,29 @@ A documentação completa desta frente vive em
   migration `supabase/migrations/20260821150000_rocket_session_monitoramento.sql`,
   já aplicada em produção** — é a fonte de contexto real para essa
   peça de infraestrutura.
+
+## Portal de Renovação (`topetv.com.br/renovacao`) — via alternativa, EM PRODUÇÃO
+
+Via **diferente** da frente conversacional descrita no Plano Mestre
+acima (que continua não implementada além da Etapa 1a): um portal
+HTML standalone, servido por **uma única Edge Function nova**,
+`renovacao-iniciar`, reaproveitando sem alteração toda a
+infraestrutura de pagamento/renovação já existente (`tokens_renovacao`,
+`renovacoes_lote`, `openpix_client`, `cobrancas_pix`, `openpix-webhook`,
+`renovacao-sigma-resultado`, o workflow do GitHub Actions).
+
+7 telas mobile-first, implementadas e testadas
+(`scripts/testes/renovacao_iniciar/`), **validadas em teste real de
+produção em 2026-09-14** (ponta a ponta, cobrança Pix real, pagamento
+real, renovação real). `renovacao-iniciar` em produção — confirmar
+versão atual via `supabase functions list` (v8 em 2026-09-14).
+
+**Estado completo, decisões, arquitetura, pendências e instruções de
+retomada em outra máquina:** ver o checkpoint mais recente em
+[`NEXT_SESSION.md`](NEXT_SESSION.md) (topo do arquivo). Não tratar o
+Plano Mestre acima como cobrindo o Portal — são duas vias diferentes
+para o mesmo objetivo (renovação self-service), e só o Portal está em
+produção hoje.
 
 ## Origem desta documentação (reorganização de 2026-08-23)
 
