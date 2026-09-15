@@ -198,9 +198,20 @@ import { buscarTokenAtivoPorPublicId, criarTokenRenovacao } from "../_shared/tok
 import { resolverPrecoLote } from "../_shared/precos_renovacao.ts";
 import {
   criarRenovacaoLote,
-  existeLoteAtivoParaPublicId,
+  // Etapa 4 (2026-09-15): usa a versao que devolve o REGISTRO completo
+  // (nao so' o booleano de existeLoteAtivoParaPublicId) -- necessaria
+  // pra avaliar/fechar um lote vencido. Mesma funcao ja usada pela
+  // Etapa 3 no Portal (renovacao-iniciar/index.ts), contrato inalterado.
+  buscarLoteAtivoParaPublicId,
   ultimaOperacaoRenovacaoEhTerminal,
 } from "../_shared/renovacoes_lote.ts";
+// Etapa 4 (2026-09-15) -- fecha, sob demanda, um token/lote ja vencido
+// (expira_em) mas ainda nao varrido pelo watchdog, antes de decidir
+// bloquear. Ver comentario completo em _shared/renovacao_guard_expiracao.ts.
+import {
+  resolverTokenParaGuardExpiracao,
+  resolverLoteParaGuardExpiracao,
+} from "../_shared/renovacao_guard_expiracao.ts";
 // Etapa 1.5 (Lacuna A, 2026-08-28) -- roteamento por tipo de acesso.
 // UniTV nunca segue o fluxo Sigma (nao cria token tipo='sigma', nao
 // cobra). Ate a Etapa 2, acesso UniTV -> tratamento explicito
@@ -537,14 +548,14 @@ async function processarCobrancaRenovacao(
   // renovacao em andamento" e para -- mesmo texto/comportamento de
   // quando ja existe um token individual ativo (passo 1 abaixo). Feito
   // ANTES de qualquer consulta ao Rocket / criacao de token.
-  let temLoteAtivo = false;
+  let loteAtivo: Awaited<ReturnType<typeof buscarLoteAtivoParaPublicId>> = null;
   try {
-    temLoteAtivo = await existeLoteAtivoParaPublicId(publicId);
+    loteAtivo = await resolverLoteParaGuardExpiracao(publicId, await buscarLoteAtivoParaPublicId(publicId));
   } catch {
     // best-effort: se a checagem falhar, segue o fluxo normal -- o
     // indice unico parcial do banco ainda barra um token duplicado.
   }
-  if (temLoteAtivo) {
+  if (loteAtivo) {
     try {
       await inserirMensagem(conversa.conversation_id, "cliente", conteudo, null);
     } catch {
@@ -568,7 +579,7 @@ async function processarCobrancaRenovacao(
   // unique index parcial em tokens_renovacao)
   let tokenExistente;
   try {
-    tokenExistente = await buscarTokenAtivoPorPublicId(publicId);
+    tokenExistente = await resolverTokenParaGuardExpiracao(publicId, await buscarTokenAtivoPorPublicId(publicId));
   } catch {
     return await transferirPorFalha("renovacao:falha_consultar_token");
   }
@@ -659,7 +670,7 @@ async function processarCobrancaRenovacao(
 
     let tokenAtivoAposFalha = null;
     try {
-      tokenAtivoAposFalha = await buscarTokenAtivoPorPublicId(publicId);
+      tokenAtivoAposFalha = await resolverTokenParaGuardExpiracao(publicId, await buscarTokenAtivoPorPublicId(publicId));
     } catch {
       // ignora -- cai no fallback generico abaixo
     }

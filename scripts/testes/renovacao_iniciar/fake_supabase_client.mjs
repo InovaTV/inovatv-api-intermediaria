@@ -135,9 +135,22 @@ class QB {
 export function getServiceClient() {
   return {
     from: (t) => new QB(t),
-    rpc: async (nome) => {
+    rpc: async (nome, params) => {
       if (nome === "registrar_tentativa_portal_renovacao") {
         return { data: permitirRateLimit, error: null };
+      }
+      // Etapa 4 (2026-09-15, guard de expiracao) -- expirar_lote_autorizado
+      // e' a RPC real de _shared/renovacoes_lote.ts::expirarLoteAutorizado,
+      // agora exercitada por esta suite pela 1a vez. Mesmo CAS da RPC real
+      // (migration 20260829140000_expirar_lote_autorizado.sql): so' fecha
+      // se ainda 'autorizada'; null (0 linhas) = corrida, outro caminho ja
+      // avancou o lote.
+      if (nome === "expirar_lote_autorizado") {
+        const lotes = tabelaDe("renovacoes_lote");
+        const l = lotes.find((r) => r.operacao_id === params.p_operacao_id && r.estado === "autorizada");
+        if (!l) return { data: null, error: null };
+        l.estado = "expirada";
+        return { data: { ...l }, error: null };
       }
       return { data: null, error: { message: "rpc desconhecida no fake: " + nome } };
     },

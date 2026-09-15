@@ -37,6 +37,28 @@ export async function existeLoteAtivoParaPublicId(publicId) {
   return publicIdsComLoteAtivo.has(publicId);
 }
 
+// Etapa 4 (2026-09-15, guard de expiracao) -- orchestrator/index.ts
+// passou a usar esta versao (registro completo) no lugar de
+// existeLoteAtivoParaPublicId no passo 0, para poder avaliar/fechar um
+// lote vencido. Sem `expira_em` no fake (nenhum teste desta suite
+// exercita a janela de expiracao) -- o guard trata isso como "ainda
+// dentro da janela" (fail-safe) e devolve o lote inalterado, mesmo
+// comportamento de bloqueio que existeLoteAtivoParaPublicId(true) ja
+// dava antes desta etapa.
+export async function buscarLoteAtivoParaPublicId(publicId) {
+  if (!publicIdsComLoteAtivo.has(publicId)) return null;
+  return {
+    grupo_id: "grupo-fake-ativo-" + publicId,
+    estado: "aguardando_confirmacao",
+    operacao_id: null,
+    // Deliberadamente SEM expira_em (nunca `null` -- `new Date(null)`
+    // e' epoch, um valor VALIDO que o guard trataria como vencido; a
+    // ausencia do campo vira `NaN`, que o guard trata como "ainda na
+    // janela", fail-safe -- mesmo raciocinio do fail-safe real:
+    // expira_em e' NOT NULL no banco, nunca deveria faltar de verdade).
+  };
+}
+
 export function chamadasCriarLote() {
   return chamadas;
 }

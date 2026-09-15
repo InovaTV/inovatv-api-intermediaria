@@ -35,11 +35,26 @@ const MAPA = {
   // _shared/envio_seguro.ts) -- fakeado so pra suite nao esperar os 7s
   // reais; nao e' o alvo desta suite.
   "_shared/envio_seguro.ts": "fake_envio_seguro.mjs",
+  // Etapa 4 (2026-09-15, guard de expiracao) -- _shared/renovacao_guard_expiracao.ts
+  // (importado por orchestrator/index.ts) importa seus vizinhos como
+  // "./cobrancas_pix.ts" (relativo, sem prefixo "_shared/") -- so'
+  // cobrancas_pix.ts precisa de fake aqui: importa supabase_client.ts
+  // real (npm:@supabase/supabase-js, nao resolvivel neste ambiente de
+  // teste). openpix_client.ts nao importa nada (so' Deno.env/fetch,
+  // ja shimados nesta suite) -- roda real, sem fake. tokens_renovacao.ts
+  // e renovacoes_lote.ts ja tem fake mapeado acima (match por sufixo
+  // "_shared/x.ts", que TAMBEM cobre o import relativo do proprio
+  // guard gracas ao fallback por basename abaixo).
+  "cobrancas_pix.ts": "fake_cobrancas_pix.mjs",
 };
 
 export async function resolve(specifier, context, nextResolve) {
   for (const [sufixo, arquivoFake] of Object.entries(MAPA)) {
-    if (specifier.endsWith(sufixo)) {
+    // Match por sufixo completo (import "../_shared/x.ts" do orchestrator)
+    // OU por basename isolado (import "./x.ts" de dentro de _shared/,
+    // como renovacao_guard_expiracao.ts) -- mesmo padrao ja usado em
+    // scripts/testes/watchdog_lifecycle/mock-loader.mjs.
+    if (specifier.endsWith(sufixo) || specifier.endsWith("/" + sufixo.split("/").pop()) || specifier === sufixo.split("/").pop()) {
       return nextResolve(new URL(arquivoFake, BASE).href, context);
     }
   }

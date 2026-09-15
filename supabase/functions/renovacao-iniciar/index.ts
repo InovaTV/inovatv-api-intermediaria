@@ -45,6 +45,13 @@ import { tentativaDeIdentificacaoPermitida } from "../_shared/portal_rate_limit.
 import { registrarEvento } from "../_shared/renovacao_eventos.ts";
 import { buscarCobrancaPorOperacaoId } from "../_shared/cobrancas_pix.ts";
 import { consultarCobrancaOpenPix } from "../_shared/openpix_client.ts";
+// Etapa 4 (2026-09-15) -- fecha, sob demanda, um token/lote ja vencido
+// (expira_em) mas ainda nao varrido pelo watchdog, antes de decidir
+// bloquear. Ver comentario completo em _shared/renovacao_guard_expiracao.ts.
+import {
+  resolverTokenParaGuardExpiracao,
+  resolverLoteParaGuardExpiracao,
+} from "../_shared/renovacao_guard_expiracao.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -1485,9 +1492,21 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
       return paginaErroGenerico();
     }
 
-    const [tokenAtivo, loteAtivo] = await Promise.all([
+    const [tokenAtivoBruto, loteAtivoBruto] = await Promise.all([
       buscarTokenAtivoPorPublicId(publicId),
       buscarLoteAtivoParaPublicId(publicId),
+    ]);
+    // Etapa 4 (2026-09-15): se o registro encontrado ja passou do
+    // proprio expira_em mas o watchdog ainda nao varreu, fecha aqui
+    // (mesmos CAS/reconciliacao do watchdog/Etapa 3) antes de decidir
+    // bloquear -- nunca so' um filtro de leitura (o indice unico do
+    // banco continua barrando um INSERT novo enquanto o `estado`
+    // antigo nao for fechado). `null` = fechado com sucesso, tratado
+    // exatamente como "nenhum token/lote ativo" pelo resto do bloco,
+    // sem nenhuma outra mudanca de fluxo.
+    const [tokenAtivo, loteAtivo] = await Promise.all([
+      resolverTokenParaGuardExpiracao(publicId, tokenAtivoBruto),
+      resolverLoteParaGuardExpiracao(publicId, loteAtivoBruto),
     ]);
     if (tokenAtivo || loteAtivo) {
       // Etapa 3 (Caso B, 2026-09-15): aqui NUNCA existe tokenBruto (o

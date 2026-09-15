@@ -871,6 +871,76 @@ async function testeR() {
   ok(acionamentosRegistrados().length === 0, "Teste R: nenhuma transferencia");
 }
 
+// ---------------------------------------------------------------------
+// Etapa 4 (2026-09-15, guard de expiracao) -- mesmo guard de
+// _shared/renovacao_guard_expiracao.ts usado pelo Portal, aplicado ao
+// fluxo individual do WhatsApp (buscarTokenAtivoPorPublicId). So' o
+// caso 'aguardando_confirmacao' (fecha via CAS, sem Woovi) e' testado
+// de ponta a ponta aqui -- a logica completa (incluindo Woovi/
+// cobranca) ja esta' coberta exaustivamente em
+// scripts/testes/renovacao_guard_expiracao/teste.mjs; aqui o objetivo
+// e' so' provar a FIACAO real dentro do orchestrator.
+// ---------------------------------------------------------------------
+async function testeEtapa4AguardandoVencidoFechaECriaNovo() {
+  resetarTudo();
+  configurarDoisAcessos();
+  configurarTokenExistente({
+    id: "tk-etapa4-aguardando",
+    estado: "aguardando_confirmacao",
+    operacao_id: null,
+    grupo_id: null,
+    expira_em: new Date(Date.now() - 60 * 1000).toISOString(),
+  });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE.", esclarecimento: false },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
+  await resp.json();
+
+  ok(
+    getMensagensInterativasEnviadas().length === 1,
+    "Etapa4 orchestrator: token 'aguardando_confirmacao' vencido -> fecha e cria proposta nova normalmente",
+  );
+  ok(
+    !getMensagensEnviadas().some((m) => m.texto.includes("Você já tem uma renovação em andamento")),
+    "Etapa4 orchestrator: token vencido -> nunca bloqueia (era o 2o bloqueio real do incidente Flavio)",
+  );
+  ok(chamadasCriarToken() === 1, "Etapa4 orchestrator: exatamente 1 token novo criado");
+  ok(acionamentosRegistrados().length === 0, "Etapa4 orchestrator: nenhuma transferencia");
+}
+async function testeEtapa4EmAndamentoNuncaTocado() {
+  resetarTudo();
+  configurarDoisAcessos();
+  configurarTokenExistente({
+    id: "tk-etapa4-andamento",
+    estado: "renovacao_em_andamento",
+    operacao_id: "op-etapa4-andamento",
+    grupo_id: null,
+    expira_em: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1h atras -- bem vencido
+  });
+  getConversaAtual().intencao_atual = "renovacao";
+  definirProximaRespostaGemini({
+    outcome: "success",
+    data: { tipo: "propor_renovacao", texto: "Vou preparar a renovação do BLAZE.", esclarecimento: false },
+  });
+
+  const resp = await handler(req({ telefone: TELEFONE, conteudo: "quero renovar o BLAZE" }));
+  await resp.json();
+
+  ok(
+    getMensagensInterativasEnviadas().length === 0,
+    "Etapa4 orchestrator: 'renovacao_em_andamento' continua bloqueando mesmo com expira_em bem vencido",
+  );
+  ok(
+    getMensagensEnviadas().some((m) => m.texto.includes("Você já tem uma renovação em andamento")),
+    "Etapa4 orchestrator: mensagem de bloqueio enviada normalmente",
+  );
+  ok(chamadasCriarToken() === 0, "Etapa4 orchestrator: nenhum token novo criado");
+}
+
 // =====================================================================
 // Etapa 1.5 (Lacuna A) -- roteamento por tipo de acesso (Sigma x UniTV)
 // =====================================================================
@@ -1930,6 +2000,8 @@ await testeO();
 await testeP();
 await testeQ();
 await testeR();
+await testeEtapa4AguardandoVencidoFechaECriaNovo();
+await testeEtapa4EmAndamentoNuncaTocado();
 await testeS();
 await testeS2();
 await testeS3();

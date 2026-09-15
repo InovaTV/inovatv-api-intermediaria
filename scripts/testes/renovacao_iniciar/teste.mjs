@@ -1106,5 +1106,152 @@ for (const [outcome, textoEsperado] of casos) {
   ok(html.includes("00020101-BRCODE-RECUPERADO-A4"), "Etapa3 A4 (lote): brCode recuperado aparece na tela Pix");
 }
 
+// =======================================================================
+// Etapa 4 (2026-09-15, guard de expiracao -- incidente real Flavio
+// Augusto Da Silva) -- carrinho() com um token/lote ja vencido
+// (expira_em no passado), estado ainda nao varrido pelo watchdog.
+// Prova, atraves do handler REAL, que o registro antigo e' fechado
+// (mesmos CAS/reconciliacao do watchdog/Etapa 3) e uma renovacao NOVA
+// pode ser criada no MESMO request -- em vez de "Já existe uma
+// renovação em andamento" por ate' ~10min, exatamente o 2o bloqueio
+// real que o Flavio sofreu.
+// =======================================================================
+const VENCIDO_E4 = new Date(Date.now() - 60 * 1000).toISOString();
+{
+  // E4-1 -- 'aguardando_confirmacao' vencido: fecha via CAS (sem
+  // consultar a Woovi -- nunca ha' cobranca nesse estado), prossegue
+  // e cria um token NOVO no mesmo request.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-1", nome: "Cliente E4-1", usuario: "u" }] });
+  respostasDetalhe["pub-e4-1"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-1-antigo", public_id: "pub-e4-1", estado: "aguardando_confirmacao", grupo_id: null, expira_em: VENCIDO_E4 },
+  ]);
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-1"]]));
+  const html = await resp.text();
+  ok(!html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-1: NAO bloqueia -- token antigo vencido foi fechado");
+  const tokens = lerTabela("tokens_renovacao");
+  ok(tokens.find((t) => t.id === "tk-e4-1-antigo")?.estado === "expirada", "Etapa4 E4-1: token antigo fechado no banco (CAS)");
+  ok(tokens.length === 2, "Etapa4 E4-1: exatamente 1 token NOVO criado, alem do antigo (agora fechado)");
+  ok(!urlsChamadas.some((u) => u.includes("/api/v1/charge/")), "Etapa4 E4-1: nunca consultou a Woovi (aguardando_confirmacao nunca tem cobranca)");
+}
+{
+  // E4-2 -- 'autorizada' vencida + Woovi confirma EXPIRED (terminal
+  // sem pagamento): fecha o token antigo, prossegue e cria um token
+  // NOVO -- o fix direto do incidente real do Flavio (2a sessao, 9min
+  // depois do ACEITO, cobranca Woovi ja morta havia minutos).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-2", nome: "Cliente E4-2", usuario: "u" }] });
+  respostasDetalhe["pub-e4-2"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-2-antigo", public_id: "pub-e4-2", estado: "autorizada", operacao_id: "op-e4-2", grupo_id: null, expira_em: VENCIDO_E4 },
+  ]);
+  seed("cobrancas_pix", [{ operacao_id: "op-e4-2", status: "pendente", qr_code_texto: "00020101-BRCODE-MORTO-E4-2" }]);
+  respostasOpenpixConsulta["op-e4-2"] = { status: "EXPIRED" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-2"]]));
+  const html = await resp.text();
+  ok(!html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-2 (fix do incidente real): NAO bloqueia -- cobranca morta confirmada, token fechado");
+  ok(!html.includes("00020101-BRCODE-MORTO-E4-2"), "Etapa4 E4-2: o Pix morto NUNCA reaparece (nao e' recuperacao, e' fechamento)");
+  const tokens = lerTabela("tokens_renovacao");
+  ok(tokens.find((t) => t.id === "tk-e4-2-antigo")?.estado === "expirada", "Etapa4 E4-2: token antigo fechado via expirarAutorizacaoVinculada");
+  ok(tokens.length === 2, "Etapa4 E4-2: exatamente 1 token NOVO criado, alem do antigo (agora fechado)");
+  ok(
+    tokens.find((t) => t.id !== "tk-e4-2-antigo")?.expira_em > new Date().toISOString(),
+    "Etapa4 E4-2: token novo com expira_em fresco (janela nova)",
+  );
+}
+{
+  // E4-3 -- 'autorizada' vencida + Woovi ACTIVE: NAO fecha -- cai no
+  // mesmo caminho de recuperacao da Etapa 3 (coexistencia F).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-3", nome: "Cliente E4-3", usuario: "u" }] });
+  respostasDetalhe["pub-e4-3"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-3", public_id: "pub-e4-3", estado: "autorizada", operacao_id: "op-e4-3", grupo_id: null, expira_em: VENCIDO_E4 },
+  ]);
+  seed("cobrancas_pix", [{ operacao_id: "op-e4-3", status: "pendente", qr_code_texto: "00020101-BRCODE-VIVO-E4-3" }]);
+  respostasOpenpixConsulta["op-e4-3"] = { status: "ACTIVE" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-3"]]));
+  const html = await resp.text();
+  ok(html.includes("00020101-BRCODE-VIVO-E4-3"), "Etapa4 E4-3: ACTIVE mesmo vencido -> Etapa 3 recupera o MESMO Pix");
+  ok(lerTabela("tokens_renovacao").find((t) => t.id === "tk-e4-3")?.estado === "autorizada", "Etapa4 E4-3: token antigo NAO foi fechado");
+  ok(lerTabela("tokens_renovacao").length === 1, "Etapa4 E4-3: nenhum token novo criado");
+}
+{
+  // E4-4 -- 'autorizada' vencida + Woovi indisponivel: permanece
+  // bloqueada, exatamente como hoje (nunca libera sem confirmacao).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-4", nome: "Cliente E4-4", usuario: "u" }] });
+  respostasDetalhe["pub-e4-4"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-4", public_id: "pub-e4-4", estado: "autorizada", operacao_id: "op-e4-4", grupo_id: null, expira_em: VENCIDO_E4 },
+  ]);
+  seed("cobrancas_pix", [{ operacao_id: "op-e4-4", status: "pendente", qr_code_texto: "00020101-BRCODE-E4-4" }]);
+  respostasOpenpixConsulta["op-e4-4"] = "erro";
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-4"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-4: Woovi indisponivel -> permanece bloqueada (nunca libera sem confirmacao)");
+  ok(lerTabela("tokens_renovacao").find((t) => t.id === "tk-e4-4")?.estado === "autorizada", "Etapa4 E4-4: token antigo intocado");
+}
+{
+  // E4-5 -- 'autorizada' vencida + cobranca inexistente na Woovi
+  // (404): permanece bloqueada -- respeita a MESMA politica de dupla
+  // confirmacao do watchdog, nunca libera na hora.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-5", nome: "Cliente E4-5", usuario: "u" }] });
+  respostasDetalhe["pub-e4-5"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-5", public_id: "pub-e4-5", estado: "autorizada", operacao_id: "op-e4-5-fantasma", grupo_id: null, expira_em: VENCIDO_E4 },
+  ]);
+  seed("cobrancas_pix", [{ operacao_id: "op-e4-5-fantasma", status: "pendente", qr_code_texto: "00020101-BRCODE-E4-5" }]);
+  // respostasOpenpixConsulta sem entrada para esta operacao -> fetchPadrao devolve 404
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-5"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-5: cobranca 404 na Woovi -> permanece bloqueada (dupla confirmacao e' so' do watchdog)");
+  ok(lerTabela("tokens_renovacao").find((t) => t.id === "tk-e4-5")?.estado === "autorizada", "Etapa4 E4-5: token antigo intocado (nao e' o guard que libera 404)");
+}
+{
+  // E4-6 -- 'renovacao_em_andamento', mesmo com expira_em MUITO
+  // vencido: NUNCA tocado, continua bloqueando incondicionalmente.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-6", nome: "Cliente E4-6", usuario: "u" }] });
+  respostasDetalhe["pub-e4-6"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  const muitoVencido = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  seed("tokens_renovacao", [
+    { id: "tk-e4-6", public_id: "pub-e4-6", estado: "renovacao_em_andamento", operacao_id: "op-e4-6", grupo_id: null, expira_em: muitoVencido },
+  ]);
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-6"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-6: renovacao_em_andamento bloqueia sempre, independente de expira_em");
+  ok(lerTabela("tokens_renovacao").find((t) => t.id === "tk-e4-6")?.estado === "renovacao_em_andamento", "Etapa4 E4-6: estado intocado");
+  ok(!urlsChamadas.some((u) => u.includes("/api/v1/charge/")), "Etapa4 E4-6: nunca consulta a Woovi para renovacao_em_andamento");
+}
+{
+  // E4-7 -- LOTE 'autorizada' vencido + Woovi terminal sem pagamento:
+  // fecha o lote (mesmo mecanismo, espelho do E4-2), libera uma
+  // renovacao nova pra esse mesmo acesso.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-e4-7", nome: "Cliente E4-7", usuario: "u" }] });
+  respostasDetalhe["pub-e4-7"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [
+    { id: "tk-e4-7-filho", public_id: "pub-e4-7", estado: "autorizada", operacao_id: null, grupo_id: "grupo-e4-7", expira_em: VENCIDO_E4 },
+  ]);
+  seed("renovacoes_lote", [{ grupo_id: "grupo-e4-7", estado: "autorizada", operacao_id: "op-e4-7", expira_em: VENCIDO_E4 }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-e4-7", status: "pendente", qr_code_texto: "00020101-BRCODE-MORTO-E4-7" }]);
+  respostasOpenpixConsulta["op-e4-7"] = { status: "CANCELLED" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-e4-7"]]));
+  const html = await resp.text();
+  ok(!html.includes("Já existe uma renovação em andamento"), "Etapa4 E4-7 (lote): NAO bloqueia -- lote antigo fechado");
+  ok(lerTabela("renovacoes_lote").find((l) => l.grupo_id === "grupo-e4-7")?.estado === "expirada", "Etapa4 E4-7 (lote): lote antigo fechado via expirarLoteAutorizado");
+  ok(lerTabela("tokens_renovacao").length === 2, "Etapa4 E4-7 (lote): 1 token NOVO (individual) criado para o mesmo acesso");
+}
+
 console.log(`\n${total - falhas}/${total} passaram`);
 if (falhas > 0) process.exit(1);

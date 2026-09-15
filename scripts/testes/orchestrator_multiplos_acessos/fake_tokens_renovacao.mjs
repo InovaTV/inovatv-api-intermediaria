@@ -43,6 +43,24 @@ export async function buscarTokenAtivoPorPublicId() {
   return tokenExistenteConfigurado;
 }
 
+// Etapa 4 (2026-09-15, guard de expiracao) -- usadas por
+// _shared/renovacao_guard_expiracao.ts (importado por orchestrator/
+// index.ts) para fechar um token vencido antes de decidir bloquear.
+// Nenhum teste pre-existente desta suite seta expira_em no passado
+// (configurarTokenExistente nunca inclui esse campo) -- o guard trata
+// isso como "ainda dentro da janela" (fail-safe) e nunca chama estas
+// funcoes; ficam aqui so' para os novos testes de wiring da Etapa 4.
+export async function expirarSeVencido(reg) {
+  if (reg?.estado !== "aguardando_confirmacao") return reg;
+  tokenExistenteConfigurado = null; // "fechado" -- proxima leitura nao encontra mais nada ativo
+  return { ...reg, estado: "expirada" };
+}
+export async function expirarAutorizacaoVinculada(_id, _motivo) {
+  const fechado = tokenExistenteConfigurado ? { ...tokenExistenteConfigurado, estado: "expirada" } : null;
+  tokenExistenteConfigurado = null;
+  return fechado;
+}
+
 export async function criarTokenRenovacao(params) {
   contadorCriarToken += 1;
   argsCriarTokenRegistrados.push(params);
