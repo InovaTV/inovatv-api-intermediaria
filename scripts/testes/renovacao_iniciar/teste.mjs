@@ -19,12 +19,22 @@ register("./mock-loader.mjs", import.meta.url);
 const { resetar: resetarDb, seed, lerTabela, configurarRateLimit, configurarFalhaInsert } = await import("./fake_supabase_client.mjs");
 const { resetar: resetarConfirmacao, configurar: configurarConfirmacao, chamadas: chamadasConfirmacao } =
   await import("./fake_renovacao_confirmacao.mjs");
+// Etapa 3 (2026-09-15, recuperacao de Pix existente, Caso A) -- hashToken
+// e' a funcao REAL (nao mockada nesta suite) -- precisa calcular o hash
+// de verdade pra popular tokens_renovacao.token_hash/renovacoes_lote.token_hash
+// de um jeito que buscarTokenPorHash/buscarLotePorTokenHash (tambem reais)
+// encontrem a linha certa a partir do tokenBruto usado no POST.
+const { hashToken } = await import("../../../supabase/functions/_shared/tokens_renovacao.ts");
 
 const ENV = {
   ROCKET_BASE_URL: "https://rocket.example.test",
   ROCKET_API_KEY: "api-key-de-teste",
   SUPABASE_URL: "https://supabase.example.test",
   RENOVACAO_SIGMA_CALLBACK_TOKEN: "callback-token-de-teste",
+  // Etapa 3 (2026-09-15, recuperacao de Pix existente) -- OPENPIX_APPID
+  // precisa existir pra authHeader() de _shared/openpix_client.ts nao
+  // devolver 'unavailable' antes mesmo de chamar fetch.
+  OPENPIX_APPID: "appid-de-teste",
 };
 
 let handler;
@@ -32,6 +42,10 @@ let respostasLista = [];
 let respostasDetalhe = {};
 let respostasUnitvConta = {}; // sn -> resposta de renovacao-unitv-conta
 let urlsChamadas = [];
+// Etapa 3 (2026-09-15, recuperacao de Pix existente) -- operacaoId ->
+// resposta simulada de GET /api/v1/charge/{operacaoId} (consultarCobrancaOpenPix).
+// null/ausente = 404 (not_found); "erro" = excecao de rede (unavailable).
+let respostasOpenpixConsulta = {};
 
 globalThis.Deno = {
   serve: (fn) => { handler = fn; },
@@ -68,6 +82,15 @@ function fetchPadrao() {
       // (ver override especifico abaixo, quando precisamos do sn).
       return { ok: true, status: 200, json: async () => ({ outcome: "indisponivel" }) };
     }
+    // Etapa 3 (2026-09-15) -- GET /api/v1/charge/{operacaoId}, chamado
+    // por consultarCobrancaOpenPix() dentro de tentarRecuperarPix().
+    if (u.includes("/api/v1/charge/")) {
+      const operacaoId = decodeURIComponent(u.split("/api/v1/charge/")[1]);
+      const config = respostasOpenpixConsulta[operacaoId];
+      if (config === "erro") throw new Error("Woovi indisponivel (simulado)");
+      if (!config) return { ok: true, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ charge: config }) };
+    }
     throw new Error("URL inesperada no fake: " + u);
   };
 }
@@ -88,6 +111,7 @@ function resetar() {
   respostasDetalhe = {};
   respostasUnitvConta = {};
   urlsChamadas = [];
+  respostasOpenpixConsulta = {};
   resetarDb();
   resetarConfirmacao();
   globalThis.fetch = fetchPadrao();
@@ -907,6 +931,179 @@ for (const [outcome, textoEsperado] of casos) {
   ok(html.includes("Não foi possível continuar"), "Fase3 carrinho erro: corrida ainda cai na pagina de erro generico (comportamento inalterado)");
   const eventos = lerTabela("renovacao_eventos");
   ok(eventos.length === 1 && eventos[0].codigo === "carrinho_erro_corrida", "Fase3 carrinho erro: carrinho_erro_corrida registrado");
+}
+
+// =======================================================================
+// Etapa 3 (2026-09-15, recuperacao de Pix existente) -- Caso B: cliente
+// reentra pelo carrinho SEM tokenBruto (telefone -> acessos -> seleciona
+// de novo). Testa tentarRecuperarPix() + buscarLoteAtivoParaPublicId()
+// via processarEtapaCarrinho() real.
+// =======================================================================
+{
+  // B1 -- recuperacao bem-sucedida, avulsa: token 'autorizada' + cobranca
+  // 'pendente' + Woovi confirma ACTIVE -> mostra o MESMO Pix, sem criar
+  // token novo, sem polling (tela estatica, token=null no HTML).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b1", nome: "Cliente B1", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b1"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b1", estado: "autorizada", operacao_id: "op-rec-b1", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-b1", status: "pendente", qr_code_texto: "00020101-BRCODE-RECUPERADO-B1", valor_esperado_centavos: 3500 }]);
+  respostasOpenpixConsulta["op-rec-b1"] = { status: "ACTIVE", value: 3500, correlationID: "op-rec-b1" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b1"]]));
+  const html = await resp.text();
+  ok(html.includes("00020101-BRCODE-RECUPERADO-B1"), "Etapa3 B1: brCode recuperado aparece na tela Pix");
+  ok(html.includes("Pague com Pix"), "Etapa3 B1: tela e' a de pagamento (nao a mensagem generica)");
+  ok(!html.includes("Já existe uma renovação em andamento"), "Etapa3 B1: NAO mostra a mensagem sem saida");
+  ok(html.includes("var token = null;"), "Etapa3 B1: sem tokenBruto -> tela estatica (token=null, sem polling)");
+  ok(lerTabela("tokens_renovacao").length === 1, "Etapa3 B1: nenhum token novo criado (so' o existente)");
+  ok(lerTabela("cobrancas_pix").length === 1, "Etapa3 B1: nenhuma cobranca nova criada (so' a existente)");
+  await aguardarEventos();
+  const eventos = lerTabela("renovacao_eventos");
+  ok(eventos.length === 1 && eventos[0].codigo === "carrinho_ja_existe_renovacao", "Etapa3 B1: catalogo de eventos inalterado (mesmo codigo de sempre)");
+}
+{
+  // B2 -- Woovi confirma EXPIRED -> NAO recupera, mensagem generica de sempre.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b2", nome: "Cliente B2", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b2"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b2", estado: "autorizada", operacao_id: "op-rec-b2", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-b2", status: "pendente", qr_code_texto: "00020101-BRCODE-B2" }]);
+  respostasOpenpixConsulta["op-rec-b2"] = { status: "EXPIRED" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b2"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa3 B2: Woovi EXPIRED -> NAO recupera, mensagem generica");
+  ok(!html.includes("00020101-BRCODE-B2"), "Etapa3 B2: brCode morto NUNCA aparece");
+}
+{
+  // B3 -- cobranca local ja' 'pago' -> nem reconsulta a Woovi (corta antes).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b3", nome: "Cliente B3", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b3"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b3", estado: "autorizada", operacao_id: "op-rec-b3", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-b3", status: "pago", qr_code_texto: "00020101-BRCODE-B3" }]);
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b3"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa3 B3: cobranca local 'pago' -> NAO recupera");
+  ok(!urlsChamadas.some((u) => u.includes("/api/v1/charge/")), "Etapa3 B3: nem chegou a reconsultar a Woovi (cortado antes, status local ja' resolve)");
+}
+{
+  // B4 -- Woovi indisponivel (excecao de rede) -> comportamento SEGURO:
+  // nao recupera, nao cria nada novo (nunca uma decisao destrutiva).
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b4", nome: "Cliente B4", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b4"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b4", estado: "autorizada", operacao_id: "op-rec-b4", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-b4", status: "pendente", qr_code_texto: "00020101-BRCODE-B4" }]);
+  respostasOpenpixConsulta["op-rec-b4"] = "erro";
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b4"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa3 B4: Woovi indisponivel -> NAO recupera (seguro)");
+  ok(lerTabela("tokens_renovacao").length === 1, "Etapa3 B4: nenhum token novo criado mesmo com Woovi fora do ar");
+}
+{
+  // B5 -- cobranca inexistente localmente (operacao_id aponta pra nada em
+  // cobrancas_pix) -> NAO recupera, nem chega a chamar a Woovi.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b5", nome: "Cliente B5", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b5"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b5", estado: "autorizada", operacao_id: "op-fantasma-b5", grupo_id: null }]);
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b5"]]));
+  const html = await resp.text();
+  ok(html.includes("Já existe uma renovação em andamento"), "Etapa3 B5: cobranca inexistente localmente -> NAO recupera");
+  ok(!urlsChamadas.some((u) => u.includes("/api/v1/charge/")), "Etapa3 B5: nem chegou a reconsultar a Woovi");
+}
+{
+  // B6 -- recuperacao bem-sucedida, LOTE: buscarLoteAtivoParaPublicId()
+  // encontra o grupo_id certo a partir do filho, recupera a cobranca da
+  // CAPA do lote.
+  resetar();
+  respostasLista.push({ paginacao: { total: 1 }, itens: [{ id: "pub-rec-b6", nome: "Cliente B6", usuario: "u" }] });
+  respostasDetalhe["pub-rec-b6"] = clienteDetalhe({ servidor: { nome: "BLAZE" } });
+  seed("tokens_renovacao", [{ public_id: "pub-rec-b6", estado: "autorizada", operacao_id: null, grupo_id: "grupo-rec-b6" }]);
+  seed("renovacoes_lote", [{ grupo_id: "grupo-rec-b6", estado: "autorizada", operacao_id: "op-rec-b6" }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-b6", status: "pendente", qr_code_texto: "00020101-BRCODE-RECUPERADO-B6" }]);
+  respostasOpenpixConsulta["op-rec-b6"] = { status: "ACTIVE" };
+
+  const resp = await handler(reqPostForm([["etapa", "carrinho"], ["telefone", "5517999999999"], ["publicId", "pub-rec-b6"]]));
+  const html = await resp.text();
+  ok(html.includes("00020101-BRCODE-RECUPERADO-B6"), "Etapa3 B6 (lote): brCode da capa do lote recuperado");
+  ok(lerTabela("renovacoes_lote").length === 1, "Etapa3 B6 (lote): nenhum lote novo criado");
+}
+
+// =======================================================================
+// Etapa 3 -- Caso A: cliente reenvia o formulario de confirmacao (ja
+// decidido) COM tokenBruto disponivel. Testa a mesma tentarRecuperarPix()
+// dentro de processarEtapaConfirmar(), via fake_renovacao_confirmacao
+// configurado pra sempre devolver 'ja_decidido'.
+// =======================================================================
+{
+  // A1 -- recuperacao bem-sucedida, avulsa: com tokenBruto, a tela
+  // recuperada e' a MESMA paginaPix() de sempre, com polling ao vivo
+  // (token real embutido no HTML).
+  resetar();
+  configurarConfirmacao({ outcome: "ja_decidido" });
+  const tokenBrutoA1 = "token-bruto-caso-a1";
+  const hashA1 = await hashToken(tokenBrutoA1);
+  seed("tokens_renovacao", [{ token_hash: hashA1, estado: "autorizada", operacao_id: "op-rec-a1", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-a1", status: "pendente", qr_code_texto: "00020101-BRCODE-RECUPERADO-A1" }]);
+  respostasOpenpixConsulta["op-rec-a1"] = { status: "ACTIVE" };
+
+  const resp = await handler(reqPostForm([["etapa", "confirmar"], ["token", tokenBrutoA1], ["acao", "aceitar"]]));
+  const html = await resp.text();
+  ok(html.includes("00020101-BRCODE-RECUPERADO-A1"), "Etapa3 A1: brCode recuperado aparece na tela Pix");
+  ok(!html.includes("Já decidido"), "Etapa3 A1: NAO mostra mais a mensagem sem saida");
+  ok(html.includes(JSON.stringify(tokenBrutoA1)), "Etapa3 A1: COM tokenBruto -> polling ao vivo habilitado (token real no HTML)");
+}
+{
+  // A2 -- Woovi confirma COMPLETED (ja pago) -> NAO recupera, continua
+  // mostrando "Já decidido" (nunca reexibe um Pix ja' pago).
+  resetar();
+  configurarConfirmacao({ outcome: "ja_decidido" });
+  const tokenBrutoA2 = "token-bruto-caso-a2";
+  const hashA2 = await hashToken(tokenBrutoA2);
+  seed("tokens_renovacao", [{ token_hash: hashA2, estado: "autorizada", operacao_id: "op-rec-a2", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-a2", status: "pendente", qr_code_texto: "00020101-BRCODE-A2" }]);
+  respostasOpenpixConsulta["op-rec-a2"] = { status: "COMPLETED" };
+
+  const resp = await handler(reqPostForm([["etapa", "confirmar"], ["token", tokenBrutoA2], ["acao", "aceitar"]]));
+  const html = await resp.text();
+  ok(html.includes("Já decidido"), "Etapa3 A2: Woovi COMPLETED -> NAO recupera, mensagem 'Já decidido' mantida");
+  ok(!html.includes("00020101-BRCODE-A2"), "Etapa3 A2: brCode ja pago NUNCA reaparece");
+}
+{
+  // A3 -- token em 'renovacao_em_andamento' (pagamento ja confirmado,
+  // processando) -> NAO tenta recuperar Pix nenhum (nao ha' mais Pix a
+  // mostrar), mantem "Já decidido".
+  resetar();
+  configurarConfirmacao({ outcome: "ja_decidido" });
+  const tokenBrutoA3 = "token-bruto-caso-a3";
+  const hashA3 = await hashToken(tokenBrutoA3);
+  seed("tokens_renovacao", [{ token_hash: hashA3, estado: "renovacao_em_andamento", operacao_id: "op-rec-a3", grupo_id: null }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-a3", status: "pago", qr_code_texto: "00020101-BRCODE-A3" }]);
+
+  const resp = await handler(reqPostForm([["etapa", "confirmar"], ["token", tokenBrutoA3], ["acao", "aceitar"]]));
+  const html = await resp.text();
+  ok(html.includes("Já decidido"), "Etapa3 A3: estado 'renovacao_em_andamento' -> NAO tenta recuperar");
+  ok(!urlsChamadas.some((u) => u.includes("/api/v1/charge/")), "Etapa3 A3: nem chegou a reconsultar a Woovi (estado ja barra antes)");
+}
+{
+  // A4 -- recuperacao bem-sucedida, LOTE (Caso A).
+  resetar();
+  configurarConfirmacao({ outcome: "ja_decidido" });
+  const tokenBrutoA4 = "token-bruto-caso-a4";
+  const hashA4 = await hashToken(tokenBrutoA4);
+  seed("renovacoes_lote", [{ token_hash: hashA4, estado: "autorizada", operacao_id: "op-rec-a4" }]);
+  seed("cobrancas_pix", [{ operacao_id: "op-rec-a4", status: "pendente", qr_code_texto: "00020101-BRCODE-RECUPERADO-A4" }]);
+  respostasOpenpixConsulta["op-rec-a4"] = { status: "ACTIVE" };
+
+  const resp = await handler(reqPostForm([["etapa", "confirmar"], ["token", tokenBrutoA4], ["acao", "aceitar"]]));
+  const html = await resp.text();
+  ok(html.includes("00020101-BRCODE-RECUPERADO-A4"), "Etapa3 A4 (lote): brCode recuperado aparece na tela Pix");
 }
 
 console.log(`\n${total - falhas}/${total} passaram`);

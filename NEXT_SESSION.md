@@ -1,5 +1,171 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+## CHECKPOINT 2026-09-15 (d) — Incidente real Flavio Augusto Da Silva: diagnosticado, corrigido (Etapa 1 + Etapa 2), commitado (`c050952`), deployado e VALIDADO EM PRODUÇÃO com teste real. Etapa 3 (recuperação de Pix existente) e Etapa 4 (guard de token expirado) permanecem planejadas, não implementadas.
+
+> **Leia isto primeiro para a frente "Portal de Renovação — robustez do
+> fluxo ACEITO/Pix".** Continuação direta do checkpoint `(c)` logo
+> abaixo (que fechou o Painel de Monitoramento) — esta entrada cobre
+> tudo que aconteceu depois, na mesma data, primeiro incidente real
+> observado pelo próprio Painel recém-criado.
+
+### 1. O incidente real (primeiro teste real pós-instrumentação, 15/09/2026 07:04-07:13 BRT)
+
+Cliente real **Flavio Augusto Da Silva** (telefone `5517991404619`)
+confirmou ACEITO para um acesso UNITV avulso (R$ 35,00). O Pix foi
+criado com sucesso no backend (`cobranca_pix_criada` às 07:04:51,
+`operacao_id f13c5309-...`, Woovi `1383b53eacd548a0a7813c476510100d`),
+mas o cliente **nunca visualizou a tela de pagamento** — print real
+enviado pelo cliente mostrou a mensagem **"Já existe uma renovação em
+andamento"** (tela de `carrinho`, não a de confirmação).
+
+**Diagnóstico completo, com evidência de banco (timestamps exatos) e
+leitura de código, sem alterar nada:**
+- **Causa raiz nº 1:** `aguardarIntervaloSeguroEntreEnvios()`
+  (`_shared/envio_seguro.ts`, `INTERVALO_SEGURO_ENTRE_ENVIOS_MS =
+  15000`) — um `setTimeout` de **15 segundos, bloqueante**, no meio do
+  handler HTTP de `confirmarRenovacao()`, entre os dois envios
+  WhatsApp legado (Wasender está desativado, os dois sempre falham) —
+  segurava a resposta HTTP (e a tela Pix) por ~16s no caminho crítico.
+- **Causa raiz nº 2:** `paginaConferencia()` (`renovacao-iniciar/index.ts`)
+  tinha **zero proteção contra duplo clique** — dois `<form
+  method="POST">` com botões `<button type="submit">` simples, sem
+  `disabled`, sem `onclick`, sem nenhum `<script>` de bloqueio.
+- **Mecânica exata do incidente:** cliente clicou ACEITO → servidor
+  reivindicou o token e criou o Pix rapidamente (confirmado por
+  evento), mas ficou ~16s "mudo" preparando as mensagens WhatsApp
+  legadas → cliente, sem feedback visual, clicou ACEITO de novo (3×,
+  eventos `confirmacao_ja_decidida` às 07:04:54/07:05:11/07:05:35) →
+  cada clique adicional iniciou uma NOVA navegação no navegador,
+  cancelando a espera pela resposta do clique anterior → o cliente
+  nunca chegou a ver a resposta do PRIMEIRO clique (que teria sido a
+  tela Pix) — viu, em vez disso, a resposta rápida de uma tentativa
+  posterior (`ja_decidido`) → depois, numa sessão NOVA (07:13,
+  `sessao_id` diferente), tentou de novo do zero e esbarrou no guard
+  `buscarTokenAtivoPorPublicId` (`_shared/tokens_renovacao.ts`), que
+  **não verifica `expira_em`** — bloqueou a nova tentativa mesmo com o
+  token antigo já tecnicamente vencido, mostrando "Já existe uma
+  renovação em andamento" (`paginaJaExisteRenovacao`,
+  `renovacao-iniciar/index.ts`).
+- Confirmado por evidência: **nenhum erro técnico depois da criação da
+  cobrança** — o Pix foi criado corretamente, o cliente só nunca
+  conseguiu vê-lo. `cobrancas_pix.status` permaneceu `pendente`, sem
+  nenhum webhook da Woovi (cliente nunca pagou, consistente com nunca
+  ter visto o QR Code/Pix Copia e Cola).
+
+Detalhe completo da investigação (linha do tempo evento a evento,
+citações de código, timestamps): transcrito na conversa da sessão —
+não duplicado aqui, este checkpoint é o resumo executivo.
+
+### 2. Plano de correção aprovado — 5 etapas, execução por checkpoints isolados
+
+1. **Etapa 1** — remover o bloqueio de 15s do caminho crítico
+   (mover envio legado + delay para `EdgeRuntime.waitUntil`).
+2. **Etapa 2** — proteção mínima contra duplo clique em
+   `paginaConferencia()` (desabilita botão + troca texto no `submit`,
+   sem `preventDefault`, sem virar SPA).
+3. **Etapa 3** — recuperação de Pix existente quando o cliente perde a
+   tela (**análise técnica registrada abaixo nesta mesma sessão,
+   implementação NÃO iniciada**).
+4. **Etapa 4** — corrigir `buscarTokenAtivoPorPublicId`/
+   `existeLoteAtivoParaPublicId` para não bloquear por token já
+   tecnicamente expirado (**NÃO iniciada**).
+5. **Etapa 5** — resiliência geral (resultado combinado de 1-4 + teste
+   de aceitação dedicado, **NÃO iniciada**).
+
+### 3. Etapa 1 + Etapa 2 — implementadas, testadas, revisadas, commitadas, deployadas e VALIDADAS EM PRODUÇÃO
+
+**Arquivos alterados (commit `c050952936e664bca0af9761acdadb09899035aa`,
+`origin/main`, push feito):**
+- `supabase/functions/_shared/renovacao_confirmacao.ts` — nova função
+  `enviarSequenciaLegadoPix()`, despachada via `EdgeRuntime.waitUntil()`
+  **depois** que a cobrança Woovi já foi criada, persistida em
+  `cobrancas_pix` e vinculada por `operacao_id` (nos dois caminhos,
+  avulsa e lote). Nenhuma lógica de pagamento alterada.
+- `supabase/functions/renovacao-iniciar/index.ts` — script inline em
+  `paginaConferencia()` (desabilita botão + "Processando…"/
+  "Cancelando…" no `submit`, POST nativo preservado, sem
+  `preventDefault`) + regra CSS `.btn-secundario:disabled` nova.
+- `scripts/testes/vinculo_operacao_renovacao/teste.mjs` e
+  `scripts/testes/notificacao_transferencia_humana/teste.mjs` —
+  2 testes pré-existentes que assumiam envio síncrono do Pix, ajustados
+  para aguardar corretamente o trabalho em background (mecanismo
+  robusto contra aninhamento de `waitUntil` — acumula todas as
+  promises despachadas numa fila, nunca só "a última").
+
+**Regressão:** 17 suítes relacionadas, todas verdes (incluindo as 2
+corrigidas). `tsc --noEmit` e `next build` (`painel/`) limpos —
+confirmado que o `painel/` não foi tocado por esta frente.
+
+**Revisão final de código dedicada** (antes do commit, sem alterar
+nada): confirmou linha a linha a ordem de execução (cobrança criada →
+persistida → vinculada → só então `waitUntil` → só então `return`),
+que nada em background pode lançar exceção que afete a resposta
+(`enviarMensagemWhatsApp`/`registrarEvento`/`aguardarIntervaloSeguroEntreEnvios`
+todos comprovadamente sem caminho de rejeição), e que a proteção de
+duplo clique preserva o POST nativo exatamente como antes (sem
+`preventDefault`, sem alterar `name`/`action`/`method`).
+
+**Deploy — só as 2 functions que de fato importam
+`_shared/renovacao_confirmacao.ts`:** `renovacao-iniciar` v10→**v11**,
+`renovacao-confirmar` v36→**v37** (a function real chamada assim, não
+"renovacao-confirmacao" — esclarecido nesta sessão). `verify_jwt`
+permaneceu `false` nas duas (inalterado). Confirmado por
+`updated_at`/contagem de functions "atualizadas recentemente" que
+**nenhuma outra function** foi tocada pelo deploy. `Docker is not
+running` foi o único warning, inofensivo (padrão de sempre neste
+ambiente).
+
+**Validação real em produção, mesmo perfil do incidente do Flavio**
+(cliente de teste "Js Informática Rp", telefone `5517981625486`,
+acesso UNITV avulso, Mensal, R$ 35,00 — via `www.topetv.com.br/renovacao`,
+duplo clique **nativo** no botão ACEITO, nenhum pagamento real feito):
+
+```
+09:04:25  identificacao_sucesso
+09:04:26  acessos_apresentados
+09:04:48  carrinho_token_criado
+09:09:26,14  confirmacao_aceita          ← clique em ACEITO (duplo clique)
+09:09:26,36  cobranca_pix_criada         ← +216ms (ANTES: ~16s de silêncio)
+             [tela Pix já renderizada no navegador, QR Code + Pix Copia e Cola]
+09:09:26,90  whatsapp_legado_falhou (preparando_pagamento)   [background]
+09:09:42,04  whatsapp_legado_falhou (pix)                    [background, +15,7s, SEM afetar a resposta já entregue]
+```
+
+- **Zero eventos `confirmacao_ja_decidida`** — o duplo clique nativo
+  não gerou nem uma segunda requisição ao servidor (a proteção
+  client-side, Etapa 2, já bastou sozinha — a trava atômica do
+  servidor nem precisou agir).
+- **Uma única linha em `tokens_renovacao`** (`id da793d32-...`,
+  `operacao_id 670400ec-...`) e **uma única linha correspondente em
+  `cobrancas_pix`** (mesmo `operacao_id`, `status: pendente`) — sem
+  duplicidade.
+- **Painel `/renovacoes` confirmado mostrando a timeline completa** —
+  primeira vez, desde que o Painel existe, que isso acontece com dado
+  real (todos os registros anteriores eram de antes do deploy da
+  trilha de auditoria de 14/09).
+- Token de teste (`da793d32-...`) deixado para expirar sozinho
+  (`expira_em` 09:09:48 BRT) — nenhum pagamento feito, nenhuma
+  intervenção manual.
+
+**Conclusão: Etapa 1 + Etapa 2 CONCLUÍDAS, validadas com evidência real
+de produção — não apenas testes locais.** Resolvem exatamente a causa
+raiz nº 1 e nº 2 do incidente. A causa raiz nº 3 (guard de
+`expira_em`, o que bloqueou a 2ª sessão do Flavio às 07:13) e a
+ausência de recuperação de Pix continuam sem correção — são,
+respectivamente, as Etapas 4 e 3, ainda não implementadas.
+
+### 4. Próximo passo — Etapa 3 (análise técnica, sem implementação)
+
+Análise de código completa da Etapa 3 (recuperação de Pix existente)
+foi conduzida nesta mesma sessão, logo após este checkpoint — ver
+`docs/etapa3_recuperacao_pix/` (se already criado nesta sessão) ou a
+seção correspondente deste próprio arquivo, mais abaixo, se a análise
+foi anexada aqui em vez de em documento separado. **Nenhum código foi
+alterado por essa análise.** Aguardando autorização explícita do
+usuário antes de qualquer implementação de Etapa 3 ou Etapa 4.
+
+---
+
 ## CHECKPOINT 2026-09-15 — Verificação visual real do `/renovacoes` em produção CONCLUÍDA (pendências 1 e 3 do checkpoint `(c)` abaixo fechadas)
 
 **Feito, outra máquina, sessão de retomada.** As duas pendências não-financeiras

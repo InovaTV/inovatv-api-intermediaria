@@ -122,6 +122,15 @@ export interface ConsultaCobrancaOpenPix {
   transactionId: string | null;
   endToEndId: string | null;
   paidAt: string | null;
+  // Etapa 3 (2026-09-15, recuperacao de Pix existente): campo ADITIVO,
+  // best-effort -- so' extraido de charge.paymentLinkUrl SE a Woovi
+  // devolver esse campo no GET (confirmado presente no POST de
+  // criacao, nunca confirmado empiricamente no GET). NULL nunca impede
+  // nada -- a tela Pix recuperada funciona plenamente so' com o
+  // brCode/qr_code_texto ja persistido. Nenhum consumidor existente
+  // (openpix-webhook, watchdog) le este campo -- adicionar aqui nao
+  // muda nada do comportamento deles.
+  paymentLinkUrl: string | null;
 }
 
 export type ConsultarCobrancaResultado =
@@ -170,6 +179,7 @@ export async function consultarCobrancaOpenPix(
       // nada no fluxo depende deste campo, so' status/amount.
       endToEndId: charge?.pix?.endToEndId ?? charge?.paymentMethods?.pix?.endToEndId ?? null,
       paidAt: charge?.paidAt ?? null,
+      paymentLinkUrl: typeof charge?.paymentLinkUrl === "string" ? charge.paymentLinkUrl : null,
     };
   } catch (erro) {
     console.log("[openpix_client] excecao ao consultar", String(erro));

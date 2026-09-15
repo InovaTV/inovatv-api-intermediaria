@@ -175,6 +175,38 @@ export async function existeLoteAtivoParaPublicId(publicId: string): Promise<boo
   return !!(data && (data as { grupo_id: string | null }).grupo_id != null);
 }
 
+// Etapa 3 (2026-09-15, recuperacao de Pix existente): mesma consulta de
+// existeLoteAtivoParaPublicId, mas devolve o REGISTRO COMPLETO do lote
+// em vez de so' um booleano -- necessario pra recuperar operacao_id do
+// lote que esta' bloqueando uma nova tentativa. NAO substitui nem
+// altera existeLoteAtivoParaPublicId (contrato/comportamento continuam
+// 100% inalterados para os chamadores existentes -- orchestrator/
+// index.ts e renovacao-iniciar/index.ts) -- funcao nova e dedicada,
+// escolhida deliberadamente em vez de mudar o tipo de retorno da
+// funcao existente (analise de chamadores feita antes desta mudanca).
+export async function buscarLoteAtivoParaPublicId(publicId: string): Promise<RenovacaoLote | null> {
+  const client = getServiceClient();
+  const { data: linhaToken, error } = await client
+    .from("tokens_renovacao")
+    .select("grupo_id")
+    .eq("public_id", publicId)
+    .in("estado", ["aguardando_confirmacao", "autorizada", "renovacao_em_andamento"])
+    .order("criado_em", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  const grupoId = (linhaToken as { grupo_id: string | null } | null)?.grupo_id;
+  if (!grupoId) return null;
+
+  const { data: lote, error: erroLote } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .eq("grupo_id", grupoId)
+    .maybeSingle();
+  if (erroLote) throw erroLote;
+  return (lote as RenovacaoLote) ?? null;
+}
+
 export async function buscarLotePorTokenHash(tokenHash: string): Promise<RenovacaoLote | null> {
   const client = getServiceClient();
   const { data, error } = await client

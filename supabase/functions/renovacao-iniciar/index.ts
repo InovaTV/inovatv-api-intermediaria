@@ -26,13 +26,25 @@ import { buscarClientesPorTelefone } from "../_shared/rocket_identificar_cliente
 import { consultarClienteCompletoRocket } from "../_shared/rocket_valor_cliente.ts";
 import { formatarValorBRL, paraCentavos } from "../_shared/mensagens_fixas.ts";
 import { buscarOuCriarConversa } from "../_shared/conversas_estado.ts";
-import { criarTokenRenovacao, buscarTokenAtivoPorPublicId, hashToken } from "../_shared/tokens_renovacao.ts";
-import { criarRenovacaoLote, existeLoteAtivoParaPublicId, type FilhoLote } from "../_shared/renovacoes_lote.ts";
+import {
+  criarTokenRenovacao,
+  buscarTokenAtivoPorPublicId,
+  buscarTokenPorHash,
+  hashToken,
+} from "../_shared/tokens_renovacao.ts";
+import {
+  criarRenovacaoLote,
+  buscarLoteAtivoParaPublicId,
+  buscarLotePorTokenHash,
+  type FilhoLote,
+} from "../_shared/renovacoes_lote.ts";
 import { classificarTipoAcesso } from "../_shared/tipo_acesso.ts";
 import { chamarResolverContaUnitv } from "../_shared/unitv_conta_client.ts";
 import { confirmarRenovacao } from "../_shared/renovacao_confirmacao.ts";
 import { tentativaDeIdentificacaoPermitida } from "../_shared/portal_rate_limit.ts";
 import { registrarEvento } from "../_shared/renovacao_eventos.ts";
+import { buscarCobrancaPorOperacaoId } from "../_shared/cobrancas_pix.ts";
+import { consultarCobrancaOpenPix } from "../_shared/openpix_client.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -923,9 +935,17 @@ function paginaConferencia(
 // endpoint relativo /functions/v1/renovacao-status, mesmo fetch, mesmo
 // mapeamento de estados, mesmo token embutido so' no corpo/JS (nunca
 // href/URL), mesmo paymentLinkUrl como alternativa.
-function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): Response {
+// Etapa 3 (2026-09-15, recuperacao de Pix existente): tokenBruto e
+// paymentLinkUrl passam a ser OPCIONAIS (null), usados pelos dois casos
+// de recuperacao (Caso A tem tokenBruto -- veio da propria requisicao
+// de confirmacao; Caso B NUNCA tem, o cliente reentrou so' pelo
+// telefone). Chamada existente (fluxo feliz normal, "confirmada") passa
+// os dois sempre preenchidos -- comportamento 100% inalterado nesse
+// caso, confirmado abaixo (ver comentarios "byte a byte" nos 2 pontos
+// que mudam).
+function paginaPix(tokenBruto: string | null, brCode: string, paymentLinkUrl: string | null): Response {
   const brCodeJs = JSON.stringify(brCode).replaceAll("<", "\\u003c");
-  const tokenJs = JSON.stringify(tokenBruto).replaceAll("<", "\\u003c");
+  const tokenJs = tokenBruto != null ? JSON.stringify(tokenBruto).replaceAll("<", "\\u003c") : "null";
 
   return new Response(
     paginaHtmlClaro(
@@ -956,7 +976,7 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
 
        <div class="status-pagamento"><span class="status-ponto"></span> <span id="status-pagamento">Aguardando pagamento…</span></div>
        <p class="rodape-ajuda">Assim que o pagamento for identificado, sua renovação será processada automaticamente.</p>
-       <p style="text-align:center;margin-top:4px;"><a href="${escapeHtml(paymentLinkUrl)}" target="_blank" rel="noopener" style="color:var(--ink-fraco);font-size:12.5px;">ou abra a página de pagamento</a></p>
+       ${paymentLinkUrl ? `<p style="text-align:center;margin-top:4px;"><a href="${escapeHtml(paymentLinkUrl)}" target="_blank" rel="noopener" style="color:var(--ink-fraco);font-size:12.5px;">ou abra a página de pagamento</a></p>` : ""}
        </div>
 
        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -1167,11 +1187,20 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
          // recriado a cada innerHTML novo. Reaproveita ultimoDados (o
          // mesmo resultado ja' recebido do polling): nenhuma consulta
          // nova a' renovacao-status so' pra mostrar o historico.
-         conteudoEl.addEventListener("click", function (ev) {
-           var btn = ev.target.closest ? ev.target.closest("#ver-historico") : null;
-           if (btn && ultimoDados) conteudoEl.innerHTML = telaHistorico(ultimoDados);
-         });
-         var intervalo = setInterval(sondar, 4000);
+         // Etapa 3 (recuperacao de Pix sem tokenBruto, Caso B): sem
+         // token nao ha' como consultar renovacao-status (exige posse
+         // do token, nunca operacao_id no navegador) -- a tela fica
+         // estatica, so' QR Code/Copia e Cola, sem polling nem telas de
+         // processamento/conclusao. Com token (fluxo normal e Caso A):
+         // comportamento 100% inalterado.
+         if (token) {
+           conteudoEl.addEventListener("click", function (ev) {
+             var btn = ev.target.closest ? ev.target.closest("#ver-historico") : null;
+             if (btn && ultimoDados) conteudoEl.innerHTML = telaHistorico(ultimoDados);
+           });
+           var intervalo = setInterval(sondar, 4000);
+           sondar();
+         }
          async function sondar() {
            try {
              var resp = await fetch("/functions/v1/renovacao-status", {
@@ -1192,11 +1221,58 @@ function paginaPix(tokenBruto: string, brCode: string, paymentLinkUrl: string): 
              }
            } catch (e) {}
          }
-         sondar();
        </script>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
+}
+
+interface PixRecuperado {
+  brCode: string;
+  paymentLinkUrl: string | null;
+}
+
+// Etapa 3 (2026-09-15, recuperacao de Pix existente) -- tenta recuperar
+// uma cobranca Pix ja criada e ainda valida, em vez de deixar o cliente
+// preso numa mensagem sem saida (achado real, incidente Flavio Augusto
+// Da Silva). Operacao PURAMENTE DE LEITURA/REEXIBICAO -- nenhum
+// caminho desta funcao chama criarCobrancaOpenPix(). So' recupera se
+// TODAS as condicoes abaixo forem verdadeiras, nesta ordem, cada uma
+// interrompendo com `return null` (nunca uma decisao otimista):
+//  1. `alvo` existe (token ou lote encontrado pelo chamador);
+//  2. alvo.estado === 'autorizada' (nunca 'renovacao_em_andamento' --
+//     ai' o pagamento ja foi confirmado, nao ha' Pix pra mostrar --
+//     nem qualquer estado terminal);
+//  3. alvo.operacao_id preenchido;
+//  4. existe uma linha correspondente em cobrancas_pix;
+//  5. essa linha tem status === 'pendente' (nunca reexibe um Pix ja
+//     pago/expirado/divergente/cancelado do lado local);
+//  6. a Woovi, RECONSULTADA AGORA (nunca confia so' no status local --
+//     mesma disciplina ja usada por openpix-webhook/watchdog: "webhook
+//     e' so' o gatilho, reconsulta e' a fonte de verdade"), confirma
+//     status === 'ACTIVE'.
+// Qualquer excecao (Woovi indisponivel, banco indisponivel, etc.) e'
+// tratada como "nao recuperar" -- nunca uma decisao destrutiva, nunca
+// libera criacao de cobranca nova automaticamente (isso continua
+// exigindo o cliente reiniciar o fluxo do zero, tratado em outro
+// lugar -- Etapa 4, fora de escopo aqui).
+async function tentarRecuperarPix(
+  alvo: { estado: string; operacao_id: string | null } | null,
+): Promise<PixRecuperado | null> {
+  if (!alvo || alvo.estado !== "autorizada" || !alvo.operacao_id) return null;
+
+  try {
+    const cobranca = await buscarCobrancaPorOperacaoId(alvo.operacao_id);
+    if (!cobranca || cobranca.status !== "pendente") return null;
+
+    const consulta = await consultarCobrancaOpenPix(alvo.operacao_id);
+    if (consulta.outcome !== "success" || consulta.status !== "ACTIVE") return null;
+
+    return { brCode: cobranca.qr_code_texto, paymentLinkUrl: consulta.paymentLinkUrl };
+  } catch (erro) {
+    console.log("[renovacao-iniciar] tentarRecuperarPix: excecao, tratada como nao-recuperavel", String(erro));
+    return null;
+  }
 }
 
 function formatarVencimento(vencimento: string): string {
@@ -1411,9 +1487,17 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
 
     const [tokenAtivo, loteAtivo] = await Promise.all([
       buscarTokenAtivoPorPublicId(publicId),
-      existeLoteAtivoParaPublicId(publicId),
+      buscarLoteAtivoParaPublicId(publicId),
     ]);
     if (tokenAtivo || loteAtivo) {
+      // Etapa 3 (Caso B, 2026-09-15): aqui NUNCA existe tokenBruto (o
+      // cliente reentrou so' pelo telefone) -- tenta recuperar a
+      // cobranca existente e, se conseguir, mostra a MESMA tela Pix,
+      // so' que estatica (paginaPix(null, ...) -- ver comentario em
+      // paginaPix sobre sem polling/sem operacao_id no navegador).
+      // Mesmo evento de sempre (carrinho_ja_existe_renovacao) nos dois
+      // desfechos -- catalogo de eventos intocado nesta etapa.
+      const recuperado = await tentarRecuperarPix(tokenAtivo ?? loteAtivo);
       EdgeRuntime.waitUntil(
         registrarEvento({
           codigo: "carrinho_ja_existe_renovacao",
@@ -1422,6 +1506,9 @@ async function processarEtapaCarrinho(form: FormData): Promise<Response> {
           detalhe: { servidor: dados.servidorNome },
         }),
       );
+      if (recuperado) {
+        return paginaPix(null, recuperado.brCode, recuperado.paymentLinkUrl);
+      }
       return paginaJaExisteRenovacao(dados.servidorNome);
     }
 
@@ -1596,8 +1683,22 @@ async function processarEtapaConfirmar(form: FormData): Promise<Response> {
       );
     case "token_expirado":
       return paginaMensagem("Link expirado", "Essa renovação não é mais válida. Volte ao início e comece de novo.");
-    case "ja_decidido":
+    case "ja_decidido": {
+      // Etapa 3 (Caso A, 2026-09-15): antes de mostrar o beco sem
+      // saida de sempre, tenta recuperar a cobranca ja existente --
+      // aqui o tokenBruto ja esta disponivel (veio na propria
+      // requisicao), entao a recuperacao usa a MESMA paginaPix() com
+      // polling ao vivo funcionando normalmente. Mesma ordem lote ->
+      // avulsa ja usada dentro de confirmarRenovacao().
+      const alvo =
+        (await buscarLotePorTokenHash(tokenHash).catch(() => null)) ??
+        (await buscarTokenPorHash(tokenHash).catch(() => null));
+      const recuperado = await tentarRecuperarPix(alvo);
+      if (recuperado) {
+        return paginaPix(tokenBruto, recuperado.brCode, recuperado.paymentLinkUrl);
+      }
       return paginaMensagem("Já decidido", "Essa renovação já foi confirmada ou cancelada anteriormente.");
+    }
     case "token_inexistente":
     case "telefone_nao_confere":
     default:
