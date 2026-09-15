@@ -1,5 +1,48 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+## CHECKPOINT 2026-09-15 — Verificação visual real do `/renovacoes` em produção CONCLUÍDA (pendências 1 e 3 do checkpoint `(c)` abaixo fechadas)
+
+**Feito, outra máquina, sessão de retomada.** As duas pendências não-financeiras
+deixadas pelo checkpoint `(c)` foram fechadas:
+
+1. **Verificação visual real, com sessão de operador já autenticada, em
+   `https://inovatv-api-intermediaria.vercel.app/renovacoes`:**
+   - **Tela 1 (lista):** carregou com dados reais — 52 tentativas, pills
+     de filtro corretas (Todas 52 / Concluídas 18 / Não concluídas 13 /
+     Parciais 2 / Canceladas 19), paginação (3 páginas) funcionando.
+   - **Tela 2 (detalhe), avulsa concluída:** banner "RENOVAÇÃO CONCLUÍDA",
+     dados do cliente/servidor/plano/valor/acessos corretos,
+     "Informações técnicas" expande Token/Operação.
+   - **Tela 2 (detalhe), lote cancelado (4 acessos):** banner "RENOVAÇÃO
+     CANCELADA" correto, valor/acessos corretos.
+   - **Tela 2 (detalhe), lote parcial (2 acessos, 1 concluído):** banner
+     "RENOVAÇÃO PARCIAL — 1 de 2 acessos concluídos" bate exatamente com
+     a lista; "Informações técnicas" mostra Lote/Operação.
+   - **Achado, não é bug:** em nenhum dos 3 detalhes abertos apareceram
+     "Histórico de eventos" nem "Processamento por acesso" preenchidos —
+     **confirmado por leitura do código** (`app/renovacoes/[id]/page.tsx`,
+     `grupos`/`compartilhados` derivam exclusivamente de `resp.eventos`)
+     que isso é esperado: **todos os 52 registros reais no banco são
+     anteriores ao deploy da trilha `renovacao_eventos` (14/09 19:00)**,
+     então não existe nenhum evento para popular essas seções. A primeira
+     renovação real feita depois desse deploy será a primeira vez que
+     essas duas seções aparecem preenchidas — continua sendo a mesma
+     observação pendente nº 4 do checkpoint `(c)` (nenhuma renovação
+     real executada ainda).
+2. **Versões confirmadas via `supabase functions list`:** `renovacao-iniciar`
+   **v10** ACTIVE, `renovacao-status` **v2** ACTIVE, `renovacao-eventos-listar`
+   **v1** ACTIVE, `renovacao-eventos-detalhe` **v1** ACTIVE — todas batendo
+   com o que os checkpoints `(b)`/`(c)` esperavam.
+
+**Nada mais foi alterado** — sessão só leu produção (nenhuma renovação,
+cobrança, pagamento ou escrita). Pendência real que segue aberta: a
+primeira renovação de ponta a ponta depois do deploy da trilha de
+auditoria, para ver a timeline/cards por acesso populados de verdade
+(mesmo item 4 do checkpoint `(c)`, não decidido nesta sessão porque
+envolve dinheiro real).
+
+---
+
 ## CHECKPOINT 2026-09-14 (c) — Painel de Monitoramento de Renovações: Fase 1/2/3 (trilha de auditoria `renovacao_eventos`) + módulo `/renovacoes` (backend + frontend) implementados, testados, deployados, commitados e publicados. Fim de sessão para troca de máquina.
 
 > **Leia isto primeiro — é o checkpoint mais recente.** Este checkpoint
