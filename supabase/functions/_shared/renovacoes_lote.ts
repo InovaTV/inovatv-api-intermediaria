@@ -533,3 +533,19 @@ export async function limparLoteCobrancaAusente(grupoId: string): Promise<Renova
   if (error) throw error;
   return (data as RenovacaoLote) ?? null;
 }
+
+// ---------------------------------------------------------------------
+// Painel de Monitoramento de Renovacoes (2026-09-14) -- leitura pura,
+// mesmo espirito de listarTokensAvulsosRecentes (tokens_renovacao.ts):
+// sem offset, volume baixo, quem pagina de verdade e' a Edge Function
+// que une isto com a lista de avulsas (renovacao-eventos-listar).
+export async function listarLotesRecentes(limite: number): Promise<RenovacaoLote[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacoes_lote")
+    .select("*")
+    .order("criado_em", { ascending: false })
+    .limit(limite);
+  if (error) throw error;
+  return (data as RenovacaoLote[]) ?? [];
+}

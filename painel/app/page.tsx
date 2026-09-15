@@ -7,7 +7,7 @@ export default function RootPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace("/conversas");
+    router.replace("/renovacoes");
   }, [router]);
 
   return null;

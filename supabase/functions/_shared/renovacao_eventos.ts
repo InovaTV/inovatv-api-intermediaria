@@ -185,11 +185,16 @@ export const CATALOGO_EVENTOS: Record<CodigoEvento, { etapa: EtapaRenovacao; niv
 
 // Nunca gravar segredo/dado sensivel em `detalhe` -- lista negativa
 // (defesa em profundidade, alem da disciplina no ponto de chamada):
-// senha, token bruto/hash, QR Code/BR Code completo, cookies/sessao de
-// Rocket-Sigma-UniTV, chaves de API, dealer token. Casada com a mesma
-// lista descrita na Fase 2 (secao 7).
+// senha, token bruto/hash, QR Code/BR Code completo, link de pagamento,
+// cookies/sessao de Rocket-Sigma-UniTV, chaves de API, dealer token.
+// Casada com a mesma lista descrita na Fase 2 (secao 7). `paymentlink`
+// adicionado 2026-09-14 junto com a camada de leitura defensiva de
+// buscarEventosPorCorrelacao (auditoria do Painel de Monitoramento) --
+// mesmo mecanismo de sempre, so' fechando um campo que a lista ja
+// deveria cobrir (equivalente a brCode: outro dado que sozinho permite
+// mover a cobranca).
 const PADRAO_CAMPO_PROIBIDO =
-  /senha|password|qrcode|qr[_-]?code|brcode|br[_-]?code|cookie|sessionid|csrftoken|token(?!_id)|chave|api[_-]?key|apikey|service[_-]?role|dealer[_-]?token|authorization|secret/i;
+  /senha|password|qrcode|qr[_-]?code|brcode|br[_-]?code|payment[_-]?link|cookie|sessionid|csrftoken|token(?!_id)|chave|api[_-]?key|apikey|service[_-]?role|dealer[_-]?token|authorization|secret/i;
 
 const TAMANHO_MAX_STRING = 500;
 
@@ -284,4 +289,76 @@ export async function registrarEvento(params: RegistrarEventoParams): Promise<vo
       erro instanceof Error ? erro.message : erro,
     );
   }
+}
+
+// ---------------------------------------------------------------------
+// Painel de Monitoramento de Renovacoes (2026-09-14) -- leitura pura.
+// Unico consumidor: renovacao-eventos-detalhe. Nunca chamada por nenhum
+// dos pontos de instrumentacao (renovacao-iniciar, openpix-webhook,
+// renovacao-sigma-resultado, renovacao-sigma-workflow, renovacao_confirmacao)
+// -- aqueles so' fazem INSERT via registrarEvento(), nunca leem esta
+// tabela de volta.
+export interface RenovacaoEventoRegistro {
+  id: string;
+  criado_em: string;
+  sessao_id: string | null;
+  token_id: string | null;
+  grupo_id: string | null;
+  operacao_id: string | null;
+  etapa: EtapaRenovacao;
+  codigo: string;
+  nivel: NivelEvento;
+  servidor: ServidorRenovacao | null;
+  origem: string;
+  detalhe: Record<string, unknown>;
+}
+
+// Reconstroi a timeline de UMA renovacao (avulsa ou lote) juntando pelos
+// 4 identificadores possiveis (ver Fase 2 -- o unico que existe do
+// inicio ao fim e' token_id/grupo_id; sessao_id cobre as etapas ANTES
+// do carrinho criar esse identificador; operacao_id cobre eventos
+// gravados so' com a correlacao da cobranca/callback -- ex.:
+// openpix-webhook registra pagamento_reconsulta_falhou/
+// pagamento_sem_registro_local so' com operacaoId quando o
+// correlation_id do webhook ainda nao resolveu nenhum token/lote
+// naquele instante; sem este filtro esses eventos ficavam invisiveis
+// na timeline mesmo com o mesmo operacao_id ja' vinculado ao
+// token/lote -- achado da auditoria de testes de 2026-09-14). Pelo
+// menos um precisa ser informado -- devolve [] sem consultar o banco se
+// nenhum vier (mesma disciplina defensiva de registrarEvento, nunca uma
+// query sem filtro nenhum nesta tabela).
+export async function buscarEventosPorCorrelacao(params: {
+  tokenId?: string | null;
+  grupoId?: string | null;
+  sessaoId?: string | null;
+  operacaoId?: string | null;
+}): Promise<RenovacaoEventoRegistro[]> {
+  const filtros: string[] = [];
+  if (params.tokenId) filtros.push(`token_id.eq.${params.tokenId}`);
+  if (params.grupoId) filtros.push(`grupo_id.eq.${params.grupoId}`);
+  if (params.sessaoId) filtros.push(`sessao_id.eq.${params.sessaoId}`);
+  if (params.operacaoId) filtros.push(`operacao_id.eq.${params.operacaoId}`);
+  if (filtros.length === 0) return [];
+
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("renovacao_eventos")
+    .select("*")
+    .or(filtros.join(","))
+    .order("criado_em", { ascending: true });
+
+  if (error) throw error;
+  // Camada de leitura defensiva (2026-09-14, pedido explicito do
+  // usuario): reaplica sanitizarDetalhe -- a MESMA politica ja usada na
+  // escrita (registrarEvento), nunca uma politica nova -- em cima de
+  // `detalhe` antes de devolver ao Painel. registrarEvento ja sanitiza
+  // no INSERT; isto e' so' uma segunda camada pro caso de um evento
+  // antigo/futuro ter sido gravado por algum caminho que nao passou por
+  // registrarEvento (migracao manual, bug futuro, etc.) -- o painel
+  // nunca deve devolver senha/credencial/token/API key/QR-BRCode/link
+  // de pagamento mesmo nesse cenario.
+  return ((data as RenovacaoEventoRegistro[]) ?? []).map((linha) => ({
+    ...linha,
+    detalhe: sanitizarDetalhe(linha.detalhe),
+  }));
 }

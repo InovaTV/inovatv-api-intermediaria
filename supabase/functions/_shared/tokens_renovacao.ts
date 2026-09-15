@@ -655,3 +655,24 @@ export async function marcarAutorizacaoIndeterminada(
   if (error) throw error;
   return (data as TokenRenovacao) ?? null;
 }
+
+// ---------------------------------------------------------------------
+// Painel de Monitoramento de Renovacoes (2026-09-14) -- leitura pura,
+// nunca chamada por nenhum caminho de escrita/decisao existente. Lista
+// so' renovacao AVULSA (grupo_id IS NULL) -- o lote tem sua propria
+// listagem em renovacoes_lote.ts. Mais recentes primeiro, sem offset:
+// o volume real e' baixo (Painel de uso interno, dezenas de operacoes),
+// entao a function que consome isto pagina em memoria sobre o
+// resultado ja unido com renovacoes_lote (ver renovacao-eventos-listar).
+export async function listarTokensAvulsosRecentes(limite: number): Promise<TokenRenovacao[]> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("tokens_renovacao")
+    .select("*")
+    .is("grupo_id", null)
+    .order("criado_em", { ascending: false })
+    .limit(limite);
+
+  if (error) throw error;
+  return (data as TokenRenovacao[]) ?? [];
+}

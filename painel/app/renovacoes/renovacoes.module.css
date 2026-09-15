@@ -1,0 +1,944 @@
+/* Painel de Monitoramento de Renovacoes (2026-09-14) -- CSS Modules de
+   proposito: /conversas ja define .filtros (e outras classes) com
+   estilo DIFERENTE no globals.css compartilhado. CSS Modules garante
+   que as classes daqui (hash unico por build) nunca colidem com as de
+   /conversas nem com o .token-* de /unitv-token -- zero risco de um
+   quebrar o outro, sem precisar tocar em nenhum dos dois.
+
+   Paleta/tipografia identica ao Portal de Renovacao (topetv.com.br/
+   renovacao, funcao paginaHtmlClaro em renovacao-iniciar/index.ts) --
+   mesmos tokens, nao recriados. */
+
+:root {
+  --ren-paper: #f1f4fa;
+  --ren-card: #ffffff;
+  --ren-line: #e7e9f1;
+  --ren-line-forte: #b9bfcf;
+  --ren-ink: #141a2c;
+  --ren-ink-suave: #5a6178;
+  --ren-ink-fraco: #939aae;
+
+  --ren-verde: #0ea047;
+  --ren-verde-escuro: #087a36;
+  --ren-verde-tinta: #e3f7ea;
+
+  --ren-azul: #2f6fed;
+  --ren-azul-tinta: #e8f0fe;
+
+  --ren-marinho-1: #0b1e3f;
+  --ren-marinho-2: #17305c;
+  --ren-marinho-3: #234c8c;
+
+  --ren-ambar: #b4740e;
+  --ren-ambar-tinta: #fbf0dc;
+
+  --ren-erro: #d23b47;
+  --ren-erro-tinta: #fceaec;
+
+  --ren-cinza-tinta: #eceef3;
+
+  --ren-sombra: 0 1px 2px rgba(15, 20, 40, 0.05), 0 12px 28px -18px rgba(15, 20, 40, 0.28);
+}
+
+.pagina {
+  min-height: 100vh;
+  background: var(--ren-paper);
+  background-image: radial-gradient(900px 320px at 50% -60px, rgba(232, 240, 254, 0.55), transparent);
+  color: var(--ren-ink);
+  line-height: 1.5;
+}
+
+.largura {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* ============ CABECALHO ============ */
+.topo {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(165deg, var(--ren-marinho-1) 0%, var(--ren-marinho-2) 55%, var(--ren-marinho-3) 100%);
+  border-radius: 0 0 22px 22px;
+}
+.topo::before {
+  content: "";
+  position: absolute;
+  right: -60px;
+  top: -90px;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--ren-azul), transparent 72%);
+  opacity: 0.35;
+  filter: blur(6px);
+  pointer-events: none;
+}
+.topoFaixa {
+  position: relative;
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.topoMarca {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topoLogo {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  flex: none;
+  display: block;
+  object-fit: cover;
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.55);
+}
+.topoTitulo {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+.topoTitulo strong {
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+}
+.topoTitulo span {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11.5px;
+}
+.topoNav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.navPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 100px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.78);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+.navPillAtivo {
+  background: #fff;
+  color: var(--ren-marinho-1);
+  border-color: #fff;
+}
+.navPillDesabilitado {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.conteudo {
+  padding: 22px 0 60px;
+}
+
+.telaCabecalho {
+  margin-bottom: 4px;
+}
+.telaCabecalho h1 {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  margin: 0 0 4px;
+}
+.telaCabecalho p {
+  font-size: 13px;
+  color: var(--ren-ink-suave);
+  margin: 0 0 18px;
+  max-width: 62ch;
+}
+
+/* ============ FILTROS ============ */
+.filtros {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.filtroPill {
+  border: 1.5px solid var(--ren-line);
+  background: var(--ren-card);
+  color: var(--ren-ink-suave);
+  border-radius: 100px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.filtroPillAtivo {
+  border-color: var(--ren-azul);
+  background: var(--ren-azul-tinta);
+  color: var(--ren-azul);
+}
+.filtroPill:hover {
+  border-color: var(--ren-line-forte);
+}
+.filtroPillN {
+  font-variant-numeric: tabular-nums;
+  color: var(--ren-ink-fraco);
+}
+.filtroPillAtivo .filtroPillN {
+  color: var(--ren-azul);
+}
+
+/* ============ TABELA-CARD ============ */
+.listaShell {
+  background: var(--ren-card);
+  border: 1px solid var(--ren-line);
+  border-radius: 18px;
+  box-shadow: var(--ren-sombra);
+  overflow: hidden;
+}
+.listaScroll {
+  overflow-x: auto;
+}
+.grade {
+  display: grid;
+  grid-template-columns: 100px 1.4fr 0.9fr 70px 92px 150px 1.6fr;
+  min-width: 920px;
+}
+.gradeCab,
+.linhaRenov {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+}
+.gradeCab > div {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ren-ink-fraco);
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--ren-line);
+}
+.linhaRenov {
+  border: none;
+  background: none;
+  text-align: left;
+  width: 100%;
+  border-bottom: 1px solid var(--ren-line);
+  transition: background 0.12s ease;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  padding: 0;
+  text-decoration: none;
+}
+.linhaRenov:last-child {
+  border-bottom: none;
+}
+.linhaRenov:hover {
+  background: rgba(232, 240, 254, 0.45);
+}
+.linhaRenov > div {
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.colQuando {
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 1px;
+}
+.colQuandoHora {
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+  font-variant-numeric: tabular-nums;
+}
+.colCliente {
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 1px;
+}
+.colClienteNome {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ren-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.colClienteSub {
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+}
+.chipServidor {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--ren-cinza-tinta);
+  color: var(--ren-ink-suave);
+  white-space: nowrap;
+}
+.colAcessos {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--ren-ink-suave);
+  justify-content: center !important;
+}
+.colValor {
+  font-variant-numeric: tabular-nums;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ren-ink);
+}
+.colDiagnostico {
+  font-size: 12px;
+  color: var(--ren-ink-suave);
+  line-height: 1.4;
+}
+.diagOk {
+  color: var(--ren-verde-escuro);
+  font-weight: 600;
+}
+.diagFalha {
+  color: var(--ren-erro);
+  font-weight: 600;
+}
+
+.badgeResultado {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 100px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badgeResultado .ponto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+/* Cor+fundo do badge da lista sao SEMPRE compostos com .badgeResultado
+   (nunca .ok/.falha/etc sozinhos) -- de proposito: essas mesmas 5
+   classes tambem sao aplicadas em .veredito e .acessoResultado (ver
+   abaixo), cada um com seu proprio par de regras compostas. Se .ok
+   tivesse "background" como regra solta aqui, vazaria fundo verde pra
+   qualquer elemento que so' precisa da COR (ex.: .acessoResultado.ok). */
+.badgeResultado.ok {
+  color: var(--ren-verde-escuro);
+  background: var(--ren-verde-tinta);
+}
+.badgeResultado.falha {
+  color: var(--ren-erro);
+  background: var(--ren-erro-tinta);
+}
+.badgeResultado.parcial {
+  color: var(--ren-ambar);
+  background: var(--ren-ambar-tinta);
+}
+.badgeResultado.cancel {
+  color: var(--ren-ink-fraco);
+  background: var(--ren-cinza-tinta);
+}
+.badgeResultado.espera {
+  color: var(--ren-ink-suave);
+  background: var(--ren-cinza-tinta);
+  font-weight: 600;
+}
+
+.estadoVazio {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--ren-ink-fraco);
+  font-size: 13.5px;
+}
+
+.paginacao {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--ren-ink-suave);
+}
+.paginacaoBtn {
+  border: 1.5px solid var(--ren-line);
+  background: var(--ren-card);
+  color: var(--ren-ink-suave);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.paginacaoBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============ DETALHE ============ */
+.voltarLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: var(--ren-ink-suave);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.voltarLink:hover {
+  color: var(--ren-ink);
+}
+
+.veredito {
+  border-radius: 18px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
+  box-shadow: var(--ren-sombra);
+  border: 1px solid var(--ren-line);
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.veredito.ok {
+  background: linear-gradient(155deg, var(--ren-verde-tinta) 0%, var(--ren-card) 70%);
+  border-color: #bfe9cd;
+}
+.veredito.falha {
+  background: linear-gradient(155deg, var(--ren-erro-tinta) 0%, var(--ren-card) 70%);
+  border-color: #f3c6ca;
+}
+.veredito.parcial {
+  background: linear-gradient(155deg, var(--ren-ambar-tinta) 0%, var(--ren-card) 70%);
+  border-color: #f0dcb0;
+}
+.veredito.cancel,
+.veredito.espera {
+  background: var(--ren-card);
+}
+.veredicoIcone {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.veredicoIcone svg {
+  width: 22px;
+  height: 22px;
+}
+.veredito.ok .veredicoIcone {
+  background: var(--ren-verde);
+}
+.veredito.falha .veredicoIcone {
+  background: var(--ren-erro);
+}
+.veredito.parcial .veredicoIcone {
+  background: var(--ren-ambar);
+}
+.veredito.cancel .veredicoIcone,
+.veredito.espera .veredicoIcone {
+  background: var(--ren-ink-fraco);
+}
+.veredicoCorpo {
+  flex: 1;
+  min-width: 0;
+}
+.veredicoTitulo {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+  margin: 0 0 2px;
+}
+.veredito.ok .veredicoTitulo {
+  color: var(--ren-verde-escuro);
+}
+.veredito.falha .veredicoTitulo {
+  color: var(--ren-erro);
+}
+.veredito.parcial .veredicoTitulo {
+  color: var(--ren-ambar);
+}
+.veredicoSub {
+  font-size: 13px;
+  color: var(--ren-ink-suave);
+  margin: 0;
+}
+.veredicoLinhas {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.veredicoLinha {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.veredicoRotulo {
+  font-weight: 700;
+  color: var(--ren-ink);
+  flex: none;
+}
+.veredicoValor {
+  color: var(--ren-ink-suave);
+}
+.veredicoDestaque {
+  color: var(--ren-erro);
+  font-weight: 600;
+}
+.chipOrigem {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #fbe3e5;
+  color: var(--ren-erro);
+}
+.veredito.parcial .chipOrigem {
+  background: #f7e6c7;
+  color: var(--ren-ambar);
+}
+
+.resumoDetalhe {
+  background: var(--ren-card);
+  border: 1px solid var(--ren-line);
+  border-radius: 18px;
+  box-shadow: var(--ren-sombra);
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.resumoTopo {
+  margin-bottom: 14px;
+}
+.resumoNome {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  margin: 0 0 3px;
+}
+.resumoSub {
+  font-size: 12.5px;
+  color: var(--ren-ink-fraco);
+}
+.resumoGrade {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ren-line);
+}
+.resumoCampoRotulo {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--ren-ink-fraco);
+  margin-bottom: 4px;
+}
+.resumoCampoValor {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ren-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.tecnico {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ren-line);
+}
+.tecnico summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ren-ink-fraco);
+  list-style: none;
+}
+.tecnico summary::-webkit-details-marker {
+  display: none;
+}
+.tecnico summary:hover {
+  color: var(--ren-ink-suave);
+}
+.tecnicoCorpo {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.idInterno {
+  font-size: 11px;
+  color: var(--ren-ink-fraco);
+}
+.idInterno b {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ren-ink-suave);
+  font-weight: 600;
+}
+
+.blocoTitulo {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ren-ink-suave);
+  margin: 22px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.blocoTitulo::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--ren-line);
+}
+
+.acessosGrade {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.acessoCard {
+  background: var(--ren-card);
+  border: 1px solid var(--ren-line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--ren-sombra);
+}
+.acessoCard.falhou {
+  border-color: #f3c6ca;
+  background: linear-gradient(180deg, var(--ren-erro-tinta) 0%, var(--ren-card) 55%);
+}
+.acessoCardCab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.acessoCardTitulo {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ren-ink-fraco);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.acessoChain {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ren-ink-suave);
+  margin-bottom: 10px;
+}
+.acessoPasso {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.acessoPasso .pt {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.acessoPassoOk .pt {
+  background: var(--ren-verde);
+}
+.acessoPassoErro {
+  color: var(--ren-erro);
+  font-weight: 600;
+}
+.acessoPassoErro .pt {
+  background: var(--ren-erro);
+}
+.acessoSeta {
+  color: var(--ren-ink-fraco);
+  font-size: 11px;
+}
+.acessoResultado {
+  font-size: 13px;
+  font-weight: 700;
+  padding-top: 9px;
+  border-top: 1px solid var(--ren-line);
+}
+.acessoCard.falhou .acessoResultado {
+  border-top-color: #f3c6ca;
+}
+.acessoResultado.ok {
+  color: var(--ren-verde-escuro);
+}
+.acessoResultado.falha {
+  color: var(--ren-erro);
+}
+.acessoDetalhes summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+  margin-top: 8px;
+}
+.acessoDetalhes summary:hover {
+  color: var(--ren-ink-suave);
+}
+.acessoDetalhes .linhaTempo {
+  margin-top: 10px;
+}
+.acessoDetalhes .eventoMarcador {
+  width: 24px;
+  height: 24px;
+}
+.acessoDetalhes .linhaTempo::before {
+  left: 11px;
+}
+
+.timelineCabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.timelineCabecalho h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.timelineLegenda {
+  display: flex;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+}
+.timelineLegenda span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legendaPonto {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.linhaTempo {
+  position: relative;
+  margin: 4px 0 0;
+}
+.linhaTempo::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--ren-line);
+}
+.evento {
+  display: flex;
+  gap: 14px;
+  position: relative;
+  padding-bottom: 14px;
+}
+.evento:last-child {
+  padding-bottom: 0;
+}
+.eventoMarcador {
+  flex: none;
+  width: 31px;
+  height: 31px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 0 0 4px var(--ren-paper);
+  color: #fff;
+}
+.evento.info .eventoMarcador {
+  background: var(--ren-verde);
+}
+.evento.erro .eventoMarcador {
+  background: var(--ren-erro);
+}
+.evento.pendente .eventoMarcador {
+  background: var(--ren-card);
+  border: 2px solid var(--ren-line-forte);
+  color: var(--ren-ink-fraco);
+}
+.eventoMarcador svg {
+  width: 14px;
+  height: 14px;
+}
+.eventoCorpo {
+  flex: 1;
+  min-width: 0;
+  background: var(--ren-card);
+  border: 1px solid var(--ren-line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  box-shadow: var(--ren-sombra);
+}
+.evento.erro .eventoCorpo {
+  border-color: #f3c6ca;
+  background: linear-gradient(180deg, var(--ren-erro-tinta) 0%, var(--ren-card) 65%);
+}
+.evento.pendente .eventoCorpo {
+  border-style: dashed;
+  box-shadow: none;
+}
+.eventoLinha1 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.eventoTitulo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.eventoEtapa {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--ren-ink-fraco);
+}
+.eventoCodigo {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ren-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.evento.erro .eventoCodigo {
+  color: var(--ren-erro);
+}
+.eventoHora {
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.eventoMeta {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.tagMeta {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ren-cinza-tinta);
+  color: var(--ren-ink-suave);
+}
+.tagMetaOrigem {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.tagMetaLegado {
+  background: var(--ren-ambar-tinta);
+  color: var(--ren-ambar);
+}
+.eventoDetalhe {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--ren-ink-suave);
+}
+.eventoDetalhe dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+.eventoDetalhe dt {
+  color: var(--ren-ink-fraco);
+}
+.eventoDetalhe dd {
+  margin: 0;
+  color: var(--ren-ink-suave);
+  font-variant-numeric: tabular-nums;
+}
+.evento.erro .eventoDetalhe dd {
+  color: var(--ren-erro);
+  font-weight: 600;
+}
+
+.rodape {
+  max-width: 1180px;
+  margin: 30px auto 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ren-ink-fraco);
+  padding: 0 16px;
+}
+
+.carregando,
+.erroCarregar {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--ren-ink-fraco);
+  font-size: 13.5px;
+}
+
+@media (min-width: 760px) {
+  .largura {
+    padding: 0 32px;
+  }
+  .topoFaixa {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 32px;
+  }
+  .conteudo {
+    padding: 28px 0 60px;
+  }
+  .resumoTopo {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+}
