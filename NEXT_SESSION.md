@@ -1,6 +1,238 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
-## CHECKPOINT 2026-09-15 (d) — Incidente real Flavio Augusto Da Silva: diagnosticado, corrigido (Etapa 1 + Etapa 2), commitado (`c050952`), deployado e VALIDADO EM PRODUÇÃO com teste real. Etapa 3 (recuperação de Pix existente) e Etapa 4 (guard de token expirado) permanecem planejadas, não implementadas.
+## CHECKPOINT 2026-09-15 (e) — Etapa 3 + Etapa 4 CONCLUÍDAS + fix adicional "reconcilia cobrança Pix pendente antes de criar cobrança nova" implementado, testado, commitado (`e1e487c`) e VALIDADO EM PRODUÇÃO. Sessão encerrada — próxima ação é AUDITAR uma tentativa natural de cliente, não implementar nada novo.
+
+> **Corrige o registro do checkpoint `(d)` logo abaixo.** Aquele
+> checkpoint foi commitado (como parte do próprio commit `00ff09f`,
+> "Etapa 3") dizendo que "Etapa 3 e Etapa 4 permanecem planejadas, não
+> implementadas" — mas o código de Etapa 3 já estava no MESMO commit, e
+> Etapa 4 foi implementada e commitada logo em seguida (`3bd5ea3`). Essa
+> frase do checkpoint `(d)` está desatualizada desde então. Esta entrada
+> `(e)` é a continuação direta de `(d)` (mesmo incidente real do Flavio
+> Augusto Da Silva, mesmo plano de 5 etapas) e documenta o estado
+> **realmente final** desta sessão, incluindo um problema adicional
+> descoberto durante a validação pós-deploy da Etapa 4 (colisão de
+> cobrança Pix pendente) que não estava no plano original de 5 etapas.
+
+### 1. Problema investigado (3 frentes, mesma sessão)
+
+1. **Por que o guard de "renovação em andamento" não respeita
+   `expira_em`.** `buscarTokenAtivoPorPublicId`/`existeLoteAtivoParaPublicId`
+   (`_shared/tokens_renovacao.ts`/`_shared/renovacoes_lote.ts`) tratam
+   qualquer token/lote com `estado` não-terminal como "ativo", mesmo que
+   `expira_em` já tenha passado e o watchdog ainda não tenha varrido —
+   bloqueando uma nova tentativa legítima do cliente com "Já existe uma
+   renovação em andamento" (causa raiz nº 3 do incidente do Flavio,
+   sessão de 07:13 BRT).
+2. **Dois incidentes reais de produção pós-deploy da Etapa 4**, ambos
+   com `falha_vincular_operacao` — investigados com IDs reais fornecidos
+   pelo usuário, comparando contra o comportamento anterior à Etapa 4
+   (nunca presumindo que a Etapa 4 fosse a culpada só por o erro ter
+   ocorrido depois do deploy dela).
+3. **Causa raiz real dos dois incidentes, achada nessa investigação:**
+   uma cobrança Pix (`cobrancas_pix.status = 'pendente'`) já expirada de
+   verdade na Woovi (Caso C do watchdog fecha o TOKEN quando a Woovi
+   confirma terminal-sem-pagamento, mas deliberadamente deixa a
+   `cobrancas_pix.status` como `pendente` — "fica pendente pro Caso D
+   conciliar", housekeeping só roda depois de 24h) segurava o índice
+   único parcial (`cobrancas_pix_pendente_unica_por_acesso_idx`/
+   `_por_lote_idx`) e colidia com a criação de uma cobrança nova quando
+   o cliente tentava renovar de novo antes das 24h de carência.
+
+### 2. Causa raiz e solução implementada
+
+- **Etapa 3** (`00ff09f2a0b21f57bf149e5cd5a9f36145dca3c2`, "recupera Pix
+  existente em vez de bloquear o cliente") — quando o carrinho encontra
+  um token/lote ainda tecnicamente ativo com Pix já criado, recupera e
+  mostra o mesmo Pix (`_shared/openpix_client.ts`,
+  `_shared/renovacoes_lote.ts`, `renovacao-iniciar/index.ts`).
+- **Etapa 4** (`3bd5ea3e172f146e4bb9ed2b439a1ee849b685be`, "guard de
+  expiração para renovação presa") — novo módulo
+  `_shared/renovacao_guard_expiracao.ts`
+  (`resolverTokenParaGuardExpiracao`/`resolverLoteParaGuardExpiracao`),
+  reusa os fechadores CAS já existentes (`expirarSeVencido`,
+  `expirarAutorizacaoVinculada`, `expirarLoteSeVencido`,
+  `expirarLoteAutorizado`) para fechar um token/lote cujo `expira_em`
+  já passou mas o `estado` ainda não é terminal — **escopado
+  estritamente** ao carrinho do Portal (`renovacao-iniciar`) e ao fluxo
+  individual do WhatsApp (`orchestrator`), **excluindo deliberadamente**
+  o fluxo de lote "renovar todos", o watchdog,
+  `_shared/reconciliacao_renovacao.ts` e `_shared/renovacao_confirmacao.ts`
+  (nesta etapa), migrations/índices, UniTV e o painel — por instrução
+  explícita do usuário.
+- **Fix adicional** (`e1e487c36c23253e10d9a6a99eb56adac3c4735d`, "fix:
+  reconcilia cobranca Pix pendente antes de criar cobranca nova") —
+  resolve a causa raiz real dos 2 incidentes: nova função
+  `reconciliarCobrancaPendenteAntesDeNovaCobranca` (extensão do mesmo
+  `_shared/renovacao_guard_expiracao.ts`), chamada **antes** de
+  `criarCobrancaOpenPix()` nos fluxos de confirmação (individual e
+  lote, `_shared/renovacao_confirmacao.ts`) e no fluxo legado
+  (`confirmacao-renovacao/index.ts`):
+  - busca a cobrança `pendente` mais recente por `public_id`/`grupo_id`
+    (`buscarCobrancaPendente`/`buscarCobrancaPendentePorGrupo`, novo em
+    `_shared/cobrancas_pix.ts`);
+  - consulta a Woovi (GET, somente leitura) via
+    `avaliarCobrancaParaFechamento` (já existente, reaproveitado);
+  - **terminal-sem-pagamento** (`EXPIRED/CANCELLED/CANCELED/REFUNDED/REFUND`)
+    → fecha a cobrança local (`expirarCobrancaPendente`) → permite criar
+    a nova cobrança normalmente (`outcome: "pendente_fechada"`);
+  - **`ACTIVE`** → **NUNCA chama `criarCobrancaOpenPix()`** — garantia
+    estrutural via `return` antecipado no controle de fluxo (não por
+    convenção) — reutiliza `brCode`/`paymentLinkUrl` já existentes
+    (`outcome: "pendente_ativa"`);
+  - **404/indisponível/status desconhecido** → fail-safe, mantém o
+    bloqueio, nunca fecha às cegas (`outcome: "pendente_bloqueando"`).
+
+### 3. Commits desta sessão (ordem cronológica, todos em `origin/main`)
+
+```
+00ff09f2a0b21f57bf149e5cd5a9f36145dca3c2  feat: recupera Pix existente em vez de bloquear o cliente (Etapa 3)
+3bd5ea3e172f146e4bb9ed2b439a1ee849b685be  feat: guard de expiracao para renovacao presa (Etapa 4)
+e1e487c36c23253e10d9a6a99eb56adac3c4735d  fix: reconcilia cobranca Pix pendente antes de criar cobranca nova  ← HEAD, commit principal desta sessão
+```
+
+### 4. Funções Supabase efetivamente redeployadas nesta correção (`e1e487c`) e versão final confirmada agora (2026-09-15, `supabase functions list`, somente leitura)
+
+| Função | Versão | Status | verify_jwt | Redeployada por `e1e487c`? |
+|---|---|---|---|---|
+| `confirmacao-renovacao` | **v31** | ACTIVE | false | Sim |
+| `renovacao-iniciar` | **v13** | ACTIVE | false | Sim |
+| `renovacao-confirmar` | **v38** | ACTIVE | false | Sim |
+| `orchestrator` | **v91** | ACTIVE | false | **Não** — já estava nesta versão desde o deploy da Etapa 4; não redeployado só por consistência visual, pois a mudança relevante do fix ficou nos fluxos de confirmação e nos helpers de cobrança, não no orchestrator |
+
+Confirmado batendo exatamente com o esperado, sem nenhuma outra função
+tocada por engano.
+
+### 5. Testes realizados e resultados (já executados e registrados durante a implementação, não re-executados neste fechamento por serem só documentação)
+
+- `renovacao_guard_expiracao` (Etapa 4 + extensão do fix): **97/97**
+- `vinculo_operacao_renovacao` (roda o código REAL de produção
+  `renovacao_confirmacao.ts`/`tokens_renovacao.ts`/`cobrancas_pix.ts`
+  contra um banco fake com FK real — maior prova disponível de que o
+  fix funciona ponta a ponta): **40/40**
+- `renovacao_iniciar`: **186/186**
+- `orchestrator_multiplos_acessos`: 100%
+- `notificacao_transferencia_humana`: **97/97**
+- `watchdog_lifecycle`: 100%
+- `renovacoes_lote`: 100%
+- `conhecimento_suporte`: **13/13**
+- `renovacao_status`: **33/33**
+- `renovacao_eventos`/listar/detalhe: **36/36**, **71/71**, **91/91**
+- `painel/` — `tsc --noEmit`: limpo · `next build`: limpo
+- **Falha pré-existente, não relacionada, não corrigida:**
+  `saudacao_inicial` — erro preexistente de resolução do pacote
+  `@supabase/supabase-js` no ambiente de teste, confirmado por
+  `git stash` como já presente antes desta sessão. **Não tentar
+  corrigir isso na próxima sessão** — é ruído conhecido, fora de
+  escopo.
+
+### 6. Validação real em produção
+
+- **Cenário exato que causava os 2 incidentes reais** (cobrança local
+  `pendente` + cobrança Woovi já `EXPIRED` + nova tentativa de
+  renovação) foi **reproduzido em produção depois do deploy** e
+  validado com sucesso: a nova tentativa identificou a cobrança
+  pendente antiga, confirmou `EXPIRED` na Woovi, fechou a cobrança
+  local antiga, criou uma nova cobrança legítima, sem
+  `cobranca_pix_registro_falhou`, sem `cobranca_pix_falhou`, sem
+  `falha_vincular_operacao`. **Ramo `pendente_fechada`: VALIDADO EM
+  PRODUÇÃO com evidência real de banco.**
+- **Duas auditorias adicionais de produção**, com timestamps corrigidos
+  pelo usuário entre uma e outra, tentaram (sem sucesso, por razão
+  arquitetural, não erro de teste) validar também o ramo `pendente_ativa`
+  — em ambos os casos o mecanismo pré-existente de recuperação de Pix
+  no carrinho (Etapa 3, `tentarRecuperarPix`) interceptou a segunda
+  tentativa **antes** dela chegar a um segundo `confirmarRenovacao()`,
+  então o ramo `pendente_ativa` nunca foi exercitado por esses dois
+  testes sequenciais — achado estrutural, não falha de teste, relatado
+  ao usuário com total transparência (dados de banco, sem forçar a
+  conclusão que o usuário esperava).
+
+### 7. O que foi deliberadamente NÃO testado em produção e por quê
+
+- **Ramo `pendente_ativa` (cobrança Pix antiga ainda `ACTIVE` no
+  momento do ACEITO de um token novo) nunca foi validado com uma
+  tentativa real de produção — decisão deliberada, não pendência
+  esquecida.** Análise de código conduzida nesta sessão (última
+  pergunta do usuário antes deste fechamento) concluiu que **não existe
+  sequência de cliques/ações de usuário que force esse cenário de forma
+  confiável**: o índice único de token
+  (`tokens_renovacao_ativo_unico_por_acesso_idx`) impede duas abas
+  criarem dois tokens simultâneos para o mesmo acesso (uma delas sempre
+  cai em erro genérico de corrida, nunca chega a criar cobrança); e todo
+  mecanismo que fecha um token (watchdog Caso C, guard da Etapa 4) só
+  fecha **depois** de confirmar na própria Woovi que a cobrança morreu
+  sem pagamento — ou seja, por construção, quando um token fecha, sua
+  cobrança quase nunca ainda está `ACTIVE`. Forçar esse cenário exigiria
+  alterar código/banco para simular uma falha real e não-reproduzível de
+  `vincularOperacaoAoToken`, o que o usuário explicitamente pediu para
+  não fazer.
+- **Cobertura do ramo `pendente_ativa` vem inteiramente de testes
+  automatizados**, considerados suficientes e mais confiáveis que uma
+  tentativa manual de corrida: 8 asserções dedicadas em
+  `renovacao_guard_expiracao` (isolando a função) + Teste 5 de
+  `vinculo_operacao_renovacao` (roda o `confirmarRenovacao()` **real**
+  de produção contra um banco fake com FK real — prova mais forte que
+  qualquer teste manual).
+- **Recomendação explícita dada ao usuário nesta sessão (antes deste
+  fechamento): não tentar fabricar uma corrida genuína em produção.**
+  O risco (criar cobranças órfãs de propósito, sem garantia de
+  sucesso, mexendo com dinheiro real) supera o valor de uma confirmação
+  que os testes automatizados já dão com mais precisão. **Esta
+  recomendação está registrada e vale para a próxima sessão também —
+  não reabrir essa tentativa.**
+
+### 8. Estado atual
+
+- Código em produção, funcionando, validado no cenário real que
+  motivou a correção (`pendente_fechada`).
+- `pendente_ativa` coberto só por teste automatizado — sem validação de
+  produção, e a análise desta sessão concluiu que uma validação de
+  produção genuína não é praticável nem recomendável.
+- `pendente_bloqueando` (COMPLETED/404/indisponível/status desconhecido)
+  — comportamento inalterado de antes (índice único como backstop),
+  coberto só por teste automatizado, sem necessidade de validação real
+  adicional (não é lógica nova).
+- Nenhuma alteração pendente de commit/push no momento deste fechamento
+  (ver Etapa 3/Etapa 6 abaixo, confirmado por `git status`).
+
+### 9. Próxima ação — a próxima sessão NÃO deve implementar nada
+
+**A próxima sessão deve começar lendo esta documentação e checando o
+estado do repositório (`git fetch origin && git status`), não
+implementando.** Quando um cliente real fizer uma nova tentativa
+natural de renovação (qualquer cenário — `pendente_fechada` de novo,
+ou por acaso `pendente_ativa`, ou qualquer outro), a próxima sessão deve
+**apenas auditar o resultado real** (ler eventos/banco, comparar com o
+comportamento esperado) — **nunca**:
+- induzir o cliente a pagar ou não pagar;
+- manipular banco;
+- criar corrida artificial;
+- tentar fabricar `pendente_ativa` de propósito.
+
+### 10. Arquivos/projetos que NÃO devem ser mexidos sem autorização explícita nova
+
+Herdado do escopo já protegido desde a Etapa 4 (ainda vigente, este fix
+não abriu exceção nova): fluxo de lote "renovar todos" (além do que já
+foi tocado por este fix nos helpers de cobrança), o **watchdog**
+(`renovacao-sigma-watchdog`), `_shared/reconciliacao_renovacao.ts`
+(usado pelo watchdog — diferente do `_shared/renovacao_guard_expiracao.ts`
+criado nesta sessão), migrations/índices (nenhum tocado, nenhum índice
+único alterado), UniTV, e o Painel de Atendimento/Painel de
+Monitoramento de Renovações (`/renovacoes`).
+
+### 11. Estado do Git ao final desta sessão
+
+```
+branch: main
+working tree: clean
+HEAD:         e1e487c36c23253e10d9a6a99eb56adac3c4735d
+origin/main:  e1e487c36c23253e10d9a6a99eb56adac3c4735d  (idêntico, push já feito)
+```
+
+---
+
+## CHECKPOINT 2026-09-15 (d) — Incidente real Flavio Augusto Da Silva: diagnosticado, corrigido (Etapa 1 + Etapa 2), commitado (`c050952`), deployado e VALIDADO EM PRODUÇÃO com teste real. Etapa 3 (recuperação de Pix existente) e Etapa 4 (guard de token expirado) permanecem planejadas, não implementadas. **⚠️ Esta última frase está DESATUALIZADA — ver checkpoint `(e)` acima, que corrige e substitui esta afirmação.**
 
 > **Leia isto primeiro para a frente "Portal de Renovação — robustez do
 > fluxo ACEITO/Pix".** Continuação direta do checkpoint `(c)` logo
