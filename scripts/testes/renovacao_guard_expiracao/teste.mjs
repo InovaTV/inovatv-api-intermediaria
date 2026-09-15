@@ -317,6 +317,103 @@ async function concorrenciaLoteAutorizadoVencidoTerminal() {
   ok(L._all().filter((l) => l.grupo_id === "g-conc-3").length === 1, "concorrencia lote: nenhum lote duplicado");
 }
 
+// =======================================================================
+// reconciliarCobrancaPendenteAntesDeNovaCobranca -- correcao de
+// cobranca pendente bloqueando nova tentativa (2026-09-15).
+// =======================================================================
+async function reconciliacaoSemPendente() {
+  resetarTudo();
+  const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r1" });
+  ok(r.outcome === "sem_pendente", "reconciliacao: sem cobranca pendente -> sem_pendente");
+  ok(OP.consultasRegistradas().length === 0, "reconciliacao: sem pendente -> zero chamada a Woovi");
+}
+async function reconciliacaoSemParametros() {
+  resetarTudo();
+  const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({});
+  ok(r.outcome === "sem_pendente", "reconciliacao: sem publicId nem grupoId -> sem_pendente (nunca busca as cegas)");
+}
+async function reconciliacaoTerminalFecha() {
+  for (const status of ["EXPIRED", "CANCELLED", "CANCELED", "REFUNDED", "REFUND"]) {
+    resetarTudo();
+    C._seed([{ operacao_id: "op-r2", public_id: "pub-r2", status: "pendente", qr_code_texto: "00020101-BRCODE-R2", criado_em: new Date().toISOString() }]);
+    OP._definir("op-r2", { outcome: "success", status });
+    const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r2" });
+    ok(r.outcome === "pendente_fechada", `reconciliacao: pendente + Woovi ${status} -> pendente_fechada`);
+    ok(C._all().find((c) => c.operacao_id === "op-r2").status === "expirada", `reconciliacao: pendente + ${status} -> fechada no banco`);
+  }
+}
+async function reconciliacaoAtivaDevolveDadosENuncaFecha() {
+  resetarTudo();
+  C._seed([{ operacao_id: "op-r3", public_id: "pub-r3", status: "pendente", qr_code_texto: "00020101-BRCODE-R3", criado_em: new Date().toISOString() }]);
+  OP._definir("op-r3", { outcome: "success", status: "ACTIVE", paymentLinkUrl: "https://openpix.com.br/pay/r3" });
+  const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r3" });
+  ok(r.outcome === "pendente_ativa", "reconciliacao: pendente + Woovi ACTIVE -> pendente_ativa");
+  ok(r.outcome === "pendente_ativa" && r.operacaoId === "op-r3", "reconciliacao: pendente_ativa devolve o operacaoId da cobranca ANTIGA");
+  ok(r.outcome === "pendente_ativa" && r.brCode === "00020101-BRCODE-R3", "reconciliacao: pendente_ativa devolve o brCode (qr_code_texto) da cobranca antiga");
+  ok(r.outcome === "pendente_ativa" && r.paymentLinkUrl === "https://openpix.com.br/pay/r3", "reconciliacao: pendente_ativa devolve o paymentLinkUrl da MESMA consulta (sem 2a chamada)");
+  ok(OP.consultasRegistradas().length === 1, "reconciliacao: ACTIVE -> exatamente 1 consulta a Woovi (nao 2)");
+  ok(C._all().find((c) => c.operacao_id === "op-r3").status === "pendente", "reconciliacao: ACTIVE -> cobranca antiga NUNCA fechada");
+}
+async function reconciliacaoBloqueandoNosCasosFailSafe() {
+  const casos = [
+    ["COMPLETED", { outcome: "success", status: "COMPLETED" }],
+    ["404", { outcome: "not_found" }],
+    ["indisponivel", { outcome: "unavailable" }],
+    ["desconhecido", { outcome: "success", status: "ALGO_NOVO" }],
+  ];
+  for (const [nome, resposta] of casos) {
+    resetarTudo();
+    C._seed([{ operacao_id: "op-r4", public_id: "pub-r4", status: "pendente", qr_code_texto: "00020101-BRCODE-R4", criado_em: new Date().toISOString() }]);
+    OP._definir("op-r4", resposta);
+    const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r4" });
+    ok(r.outcome === "pendente_bloqueando", `reconciliacao: pendente + ${nome} -> pendente_bloqueando (fail-safe, nunca fecha nem libera)`);
+    ok(C._all().find((c) => c.operacao_id === "op-r4").status === "pendente", `reconciliacao: ${nome} -> cobranca antiga intocada`);
+  }
+}
+async function reconciliacaoCobrancaLocalJaNaoPendenteNaoConsultaWoovi() {
+  resetarTudo();
+  C._seed([{ operacao_id: "op-r5", public_id: "pub-r5", status: "pago", qr_code_texto: "00020101-BRCODE-R5", criado_em: new Date().toISOString() }]);
+  const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r5" });
+  // 'pago' nunca aparece pra buscarCobrancaPendente (so' busca status='pendente') -> sem_pendente, correto.
+  ok(r.outcome === "sem_pendente", "reconciliacao: cobranca local ja 'pago' nao conta como pendente -> sem_pendente");
+  ok(OP.consultasRegistradas().length === 0, "reconciliacao: cobranca ja paga -> zero chamada a Woovi");
+}
+async function reconciliacaoLoteEspelho() {
+  resetarTudo();
+  L._seed([{ grupo_id: "g-r6", publicId: "pub-r6-nao-usado", estado: "aguardando_confirmacao", expira_em: FUTURO }]); // presenca so' pra confirmar isolamento entre modulos
+  C._seed([{ operacao_id: "op-r6", grupo_id: "grupo-r6", status: "pendente", qr_code_texto: "00020101-BRCODE-R6", criado_em: new Date().toISOString() }]);
+  OP._definir("op-r6", { outcome: "success", status: "ACTIVE", paymentLinkUrl: "https://openpix.com.br/pay/r6" });
+  const r = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ grupoId: "grupo-r6" });
+  ok(r.outcome === "pendente_ativa" && r.brCode === "00020101-BRCODE-R6", "reconciliacao (lote): grupoId + Woovi ACTIVE -> pendente_ativa com dados corretos");
+
+  resetarTudo();
+  C._seed([{ operacao_id: "op-r7", grupo_id: "grupo-r7", status: "pendente", qr_code_texto: "00020101-BRCODE-R7", criado_em: new Date().toISOString() }]);
+  OP._definir("op-r7", { outcome: "success", status: "CANCELLED" });
+  const r2 = await guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ grupoId: "grupo-r7" });
+  ok(r2.outcome === "pendente_fechada", "reconciliacao (lote): grupoId + Woovi CANCELLED -> pendente_fechada");
+  ok(C._all().find((c) => c.operacao_id === "op-r7").status === "expirada", "reconciliacao (lote): fechada no banco");
+}
+async function reconciliacaoConcorrenciaTerminal() {
+  resetarTudo();
+  C._seed([{ operacao_id: "op-r8", public_id: "pub-r8", status: "pendente", qr_code_texto: "00020101-BRCODE-R8", criado_em: new Date().toISOString() }]);
+  OP._definir("op-r8", { outcome: "success", status: "EXPIRED" });
+  const [r1, r2] = await Promise.all([
+    guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r8" }),
+    guard.reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: "pub-r8" }),
+  ]);
+  ok(r1.outcome === "pendente_fechada" && r2.outcome === "pendente_fechada", "reconciliacao: concorrencia -- as 2 chamadas concordam (pendente_fechada)");
+  ok(C._all().filter((c) => c.operacao_id === "op-r8" && c.status === "expirada").length === 1, "reconciliacao: concorrencia -- fechada EXATAMENTE 1 vez, sem duplicidade");
+}
+
+await reconciliacaoSemPendente();
+await reconciliacaoSemParametros();
+await reconciliacaoTerminalFecha();
+await reconciliacaoAtivaDevolveDadosENuncaFecha();
+await reconciliacaoBloqueandoNosCasosFailSafe();
+await reconciliacaoCobrancaLocalJaNaoPendenteNaoConsultaWoovi();
+await reconciliacaoLoteEspelho();
+await reconciliacaoConcorrenciaTerminal();
+
 await semRegistroAtivo();
 await loteSemRegistroAtivo();
 await tokenAindaDentroDaJanela();

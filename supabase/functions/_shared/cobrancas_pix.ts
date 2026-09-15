@@ -47,6 +47,25 @@ export async function buscarCobrancaPendente(publicId: string): Promise<Cobranca
   return (data as CobrancaPix) ?? null;
 }
 
+// Espelho lote de buscarCobrancaPendente (correcao de cobranca pendente
+// bloqueando nova tentativa, 2026-09-15) -- mesma garantia do lado do
+// banco via cobrancas_pix_pendente_por_lote_idx (unique em grupo_id
+// onde status='pendente').
+export async function buscarCobrancaPendentePorGrupo(grupoId: string): Promise<CobrancaPix | null> {
+  const client = getServiceClient();
+  const { data, error } = await client
+    .from("cobrancas_pix")
+    .select("*")
+    .eq("grupo_id", grupoId)
+    .eq("status", "pendente")
+    .order("criado_em", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as CobrancaPix) ?? null;
+}
+
 export async function buscarCobrancaPorOperacaoId(
   operacaoId: string,
 ): Promise<CobrancaPix | null> {

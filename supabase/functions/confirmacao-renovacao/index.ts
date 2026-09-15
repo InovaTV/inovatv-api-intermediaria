@@ -24,6 +24,9 @@ import {
 } from "../_shared/tokens_renovacao.ts";
 import { criarCobrancaOpenPix } from "../_shared/openpix_client.ts";
 import { criarCobrancaPixRegistro } from "../_shared/cobrancas_pix.ts";
+// Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15) --
+// ver comentario completo em _shared/renovacao_guard_expiracao.ts.
+import { reconciliarCobrancaPendenteAntesDeNovaCobranca } from "../_shared/renovacao_guard_expiracao.ts";
 import { enviarMensagemWhatsApp } from "../_shared/wasender_client.ts";
 import { acionarTransferenciaHumana } from "../_shared/conversas_estado.ts";
 import { inserirMensagem } from "../_shared/mensagens_atendimento.ts";
@@ -152,6 +155,42 @@ Deno.serve(async (req: Request) => {
       } catch {
         // best-effort
       }
+    }
+
+    // Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15):
+    // mesma protecao do caminho principal (_shared/renovacao_confirmacao.ts)
+    // -- ANTES de criar cobranca nova, verifica se ja existe uma pendente
+    // pra este acesso. Se ACTIVE, reaproveita o Pix existente e NUNCA
+    // chama criarCobrancaOpenPix() (retorno antecipado).
+    const reconciliacao = await reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: autorizado.public_id });
+    // Caminho legado (WhatsApp): a mensagem SEMPRE precisa de uma URL
+    // concreta (montarMensagemPixRenovacao nao aceita null, diferente
+    // de paginaPix no Portal). Se a consulta (GET) nao trouxe
+    // paymentLinkUrl -- caso raro, best-effort, ja documentado em
+    // ConsultaCobrancaOpenPix -- nao reaproveita aqui; segue pro fluxo
+    // normal abaixo (indice unico como backstop, igual hoje).
+    if (reconciliacao.outcome === "pendente_ativa" && reconciliacao.paymentLinkUrl) {
+      await marcarAutorizacaoComoFalha(autorizado.id, "renovacao:pix_recuperado_cobranca_ativa").catch((erro) => {
+        console.log(
+          "[confirmacao-renovacao] falha ao encerrar token apos reaproveitar Pix existente",
+          JSON.stringify({ tokenId: autorizado.id, erro: String(erro) }),
+        );
+      });
+      const valorFormatadoRecuperado = formatarValorBRL(autorizado.valor_esperado_centavos / 100) ?? "0,00";
+      const textoPixRecuperado = montarMensagemPixRenovacao(
+        valorFormatadoRecuperado,
+        `Plano: ${autorizado.plano_nome}`,
+        reconciliacao.paymentLinkUrl,
+      );
+      const envioPixRecuperado = await enviarMensagemWhatsApp(autorizado.telefone, textoPixRecuperado);
+      if (envioPixRecuperado.outcome === "success") {
+        try {
+          await inserirMensagem(autorizado.conversation_id, "ia", textoPixRecuperado, null);
+        } catch {
+          // best-effort
+        }
+      }
+      return paginaMensagem("Confirmado!", "Prontinho! Te mandei o Pix pelo WhatsApp. Assim que o pagamento for confirmado, sua renovação será feita automaticamente.");
     }
 
     const operacaoId = crypto.randomUUID();

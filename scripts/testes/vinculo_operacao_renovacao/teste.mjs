@@ -296,11 +296,123 @@ async function teste4() {
   );
 }
 
+// ---------------------------------------------------------------------
+// Teste 5 -- correcao de cobranca pendente bloqueando nova tentativa
+// (2026-09-15): cobranca ANTIGA do mesmo public_id ainda 'pendente' +
+// Woovi confirma ACTIVE -> ACEITO do token NOVO reaproveita o Pix
+// antigo, NUNCA chama criarCobrancaOpenPix() de novo.
+// ---------------------------------------------------------------------
+async function teste5() {
+  resetarEstado();
+  resetarOpenpix();
+  limparRegistros();
+
+  const operacaoIdAntigo = crypto.randomUUID();
+  inserirDireto("cobrancas_pix", {
+    operacao_id: operacaoIdAntigo,
+    conversation_id: CONVERSATION_ID,
+    public_id: PUBLIC_ID,
+    grupo_id: null,
+    servidor_nome: "ServidorTeste",
+    plano_nome: "Mensal",
+    valor_esperado_centavos: 3500,
+    transaction_id_provedor: "tx-antiga-ativa",
+    qr_code_texto: "00020101-BRCODE-ANTIGO-ATIVO",
+    status: "pendente",
+    criado_em: new Date(Date.now() - 60 * 1000).toISOString(),
+    atualizado_em: new Date(Date.now() - 60 * 1000).toISOString(),
+  });
+  configurarOpenpix({
+    consultar: () => ({ outcome: "success", status: "ACTIVE", amountCentavos: 3500, paymentLinkUrl: "https://openpix.com.br/pay/antigo-ativo" }),
+  });
+
+  const { tokenHash, id } = await criarTokenDeTeste();
+  const resultado = await confirmarRenovacao({ tokenHash, acao: "aceitar", telefoneOrigem: TELEFONE, origem: "whatsapp" });
+
+  ok(resultado.outcome === "confirmada", "Teste 5: ACEITO com pendente antiga ACTIVE ainda retorna 'confirmada' (reaproveitando o Pix)");
+  ok(
+    resultado.outcome === "confirmada" && resultado.operacaoId === operacaoIdAntigo,
+    "Teste 5: operacaoId do retorno e' o da cobranca ANTIGA, nao um novo",
+  );
+  ok(
+    resultado.outcome === "confirmada" && resultado.brCode === "00020101-BRCODE-ANTIGO-ATIVO",
+    "Teste 5: brCode do retorno e' o da cobranca antiga (mesmo Pix reapresentado)",
+  );
+  ok(
+    resultado.outcome === "confirmada" && resultado.paymentLinkUrl === "https://openpix.com.br/pay/antigo-ativo",
+    "Teste 5: paymentLinkUrl do retorno e' o da consulta a Woovi feita na reconciliacao",
+  );
+  ok(chamadasOpenpix.criarCobrancaOpenPix.length === 0, "Teste 5: criarCobrancaOpenPix NUNCA foi chamado (regra critica)");
+
+  const tokenNovo = lerTabela("tokens_renovacao").find((t) => t.id === id);
+  ok(tokenNovo?.estado === "renovacao_falhou", "Teste 5: token novo (nao usado) termina 'renovacao_falhou'");
+  ok(
+    tokenNovo?.motivo_falha === "renovacao:pix_recuperado_cobranca_ativa",
+    "Teste 5: motivo_falha do token novo identifica a recuperacao (nao e' uma falha real)",
+  );
+  ok(tokenNovo?.operacao_id == null, "Teste 5: token novo nunca recebe operacao_id (nenhuma cobranca nova foi vinculada a ele)");
+
+  const cobrancasDoAcesso = lerTabela("cobrancas_pix").filter((c) => c.public_id === PUBLIC_ID);
+  ok(cobrancasDoAcesso.length === 1, "Teste 5: continua existindo EXATAMENTE 1 cobranca para este acesso (nenhuma nova criada)");
+  const cobrancaAntiga = cobrancasDoAcesso.find((c) => c.operacao_id === operacaoIdAntigo);
+  ok(cobrancaAntiga?.status === "pendente", "Teste 5: cobranca antiga permanece 'pendente', intocada");
+}
+
+// ---------------------------------------------------------------------
+// Teste 6 -- pendente antiga + Woovi EXPIRED: fecha a antiga, cria a
+// nova normalmente (regressao explicita do outro ramo do mesmo bug).
+// ---------------------------------------------------------------------
+async function teste6() {
+  resetarEstado();
+  resetarOpenpix();
+  limparRegistros();
+
+  const operacaoIdAntigo = crypto.randomUUID();
+  inserirDireto("cobrancas_pix", {
+    operacao_id: operacaoIdAntigo,
+    conversation_id: CONVERSATION_ID,
+    public_id: PUBLIC_ID,
+    grupo_id: null,
+    servidor_nome: "ServidorTeste",
+    plano_nome: "Mensal",
+    valor_esperado_centavos: 3500,
+    transaction_id_provedor: "tx-antiga-expirada",
+    qr_code_texto: "00020101-BRCODE-ANTIGO-MORTO",
+    status: "pendente",
+    criado_em: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    atualizado_em: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+  });
+  configurarOpenpix({
+    consultar: () => ({ outcome: "success", status: "EXPIRED", amountCentavos: null }),
+  });
+
+  const { tokenHash, id } = await criarTokenDeTeste();
+  const resultado = await confirmarRenovacao({ tokenHash, acao: "aceitar", telefoneOrigem: TELEFONE, origem: "whatsapp" });
+
+  ok(resultado.outcome === "confirmada", "Teste 6: ACEITO com pendente antiga EXPIRED cria a nova cobranca e confirma normalmente");
+  ok(
+    resultado.outcome === "confirmada" && resultado.operacaoId !== operacaoIdAntigo,
+    "Teste 6: operacaoId do retorno e' NOVO, diferente da cobranca antiga",
+  );
+  ok(chamadasOpenpix.criarCobrancaOpenPix.length === 1, "Teste 6: criarCobrancaOpenPix foi chamado exatamente 1 vez (a nova cobranca)");
+
+  const tokenNovo = lerTabela("tokens_renovacao").find((t) => t.id === id);
+  ok(tokenNovo?.estado === "autorizada" && tokenNovo?.operacao_id === resultado.operacaoId,
+    "Teste 6: token novo vinculado normalmente a cobranca nova");
+
+  const cobrancaAntiga = lerTabela("cobrancas_pix").find((c) => c.operacao_id === operacaoIdAntigo);
+  ok(cobrancaAntiga?.status === "expirada", "Teste 6: cobranca antiga foi fechada ('expirada') pela reconciliacao");
+  const cobrancaNova = lerTabela("cobrancas_pix").find((c) => c.operacao_id === resultado.operacaoId);
+  ok(cobrancaNova?.status === "pendente", "Teste 6: cobranca nova criada normalmente, 'pendente'");
+}
+
 await teste1();
 await teste1b();
 await teste2();
 await teste3();
 await teste4();
+await teste5();
+await teste6();
 
 console.log("");
 console.log(`Resultado: ${total - falhas}/${total} passando`);

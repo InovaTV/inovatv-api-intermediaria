@@ -9,3 +9,19 @@
 export async function buscarCobrancaPorOperacaoId() {
   return null;
 }
+
+// Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15):
+// reconciliarCobrancaPendenteAntesDeNovaCobranca (_shared/renovacao_guard_expiracao.ts)
+// tambem importa estas 2 -- nenhum teste desta suite exercita o fluxo
+// de ACEITO/cobranca (isso e' testado a fundo em
+// scripts/testes/vinculo_operacao_renovacao/), so' precisam existir
+// para o import nao quebrar.
+export async function buscarCobrancaPendente() {
+  return null;
+}
+export async function buscarCobrancaPendentePorGrupo() {
+  return null;
+}
+export async function expirarCobrancaPendente() {
+  return null;
+}

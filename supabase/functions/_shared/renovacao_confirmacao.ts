@@ -21,6 +21,9 @@ import {
 } from "./renovacoes_lote.ts";
 import { criarCobrancaOpenPix } from "./openpix_client.ts";
 import { criarCobrancaPixRegistro } from "./cobrancas_pix.ts";
+// Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15) --
+// ver comentario completo em _shared/renovacao_guard_expiracao.ts.
+import { reconciliarCobrancaPendenteAntesDeNovaCobranca } from "./renovacao_guard_expiracao.ts";
 import { enviarMensagemWhatsApp } from "./wasender_client.ts";
 import { aguardarIntervaloSeguroEntreEnvios } from "./envio_seguro.ts";
 import { acionarTransferenciaHumana } from "./conversas_estado.ts";
@@ -118,7 +121,13 @@ export type ResultadoConfirmacaoRenovacao =
   // devolvidos por criarCobrancaOpenPix() nesta mesma chamada -- nenhuma
   // cobranca nova, nenhum segundo operacaoId. Callers existentes (o
   // caminho WhatsApp, via renovacao-confirmar) simplesmente ignoram.
-  | { outcome: "confirmada"; operacaoId: string; brCode: string; paymentLinkUrl: string }
+  // paymentLinkUrl aceita null desde a correcao de cobranca pendente
+  // bloqueando nova tentativa (2026-09-15): quando este outcome vem de
+  // reaproveitar uma cobranca ACTIVE ja existente (reconciliarCobrancaPendenteAntesDeNovaCobranca),
+  // o valor vem de uma consulta (GET) a Woovi, que nunca garante o
+  // campo (best-effort, mesmo criterio ja usado em ConsultaCobrancaOpenPix/
+  // PixRecuperado) -- nunca mais garantido non-null como na criacao (POST).
+  | { outcome: "confirmada"; operacaoId: string; brCode: string; paymentLinkUrl: string | null }
   | { outcome: "cancelada" }
   | { outcome: "token_inexistente" | "token_expirado" | "ja_decidido" | "telefone_nao_confere" }
   | { outcome: "falha_cobranca" };
@@ -200,6 +209,28 @@ export async function confirmarRenovacao(params: {
     }),
   );
   await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao ${sufixoOrigem}.`, null).catch(() => {});
+
+  // Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15):
+  // ANTES de criar uma cobranca nova na Woovi, verifica se ja existe uma
+  // pendente para este acesso (sobra de uma tentativa anterior nao
+  // conciliada pelo watchdog ainda). Se estiver ACTIVE, reaproveita o Pix
+  // existente e encerra este token -- NUNCA chama criarCobrancaOpenPix()
+  // nesse caso (retorno antecipado, garantia estrutural, nao convencao).
+  const reconciliacao = await reconciliarCobrancaPendenteAntesDeNovaCobranca({ publicId: autorizado.public_id });
+  if (reconciliacao.outcome === "pendente_ativa") {
+    await marcarAutorizacaoComoFalha(autorizado.id, "renovacao:pix_recuperado_cobranca_ativa").catch((erro) => {
+      console.log(
+        "[renovacao_confirmacao] falha ao encerrar token apos reaproveitar Pix existente",
+        JSON.stringify({ tokenId: autorizado.id, erro: String(erro) }),
+      );
+    });
+    return {
+      outcome: "confirmada",
+      operacaoId: reconciliacao.operacaoId,
+      brCode: reconciliacao.brCode,
+      paymentLinkUrl: reconciliacao.paymentLinkUrl,
+    };
+  }
 
   const operacaoId = crypto.randomUUID();
   const descricaoItem = `Renovacao Tope TV - Plano ${autorizado.plano_nome}`.trim();
@@ -409,6 +440,24 @@ async function confirmarRenovacaoLote(
     }),
   );
   await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao em lote ${sufixoOrigem}.`, null).catch(() => {});
+
+  // Correcao de cobranca pendente bloqueando nova tentativa (2026-09-15) --
+  // espelho lote do bloco equivalente no fluxo individual, acima.
+  const reconciliacaoLote = await reconciliarCobrancaPendenteAntesDeNovaCobranca({ grupoId: autorizado.grupo_id });
+  if (reconciliacaoLote.outcome === "pendente_ativa") {
+    await marcarLoteComoFalha(autorizado.grupo_id, "renovacao_lote:pix_recuperado_cobranca_ativa").catch((erro) => {
+      console.log(
+        "[renovacao_confirmacao] falha ao encerrar lote apos reaproveitar Pix existente",
+        JSON.stringify({ grupoId: autorizado.grupo_id, erro: String(erro) }),
+      );
+    });
+    return {
+      outcome: "confirmada",
+      operacaoId: reconciliacaoLote.operacaoId,
+      brCode: reconciliacaoLote.brCode,
+      paymentLinkUrl: reconciliacaoLote.paymentLinkUrl,
+    };
+  }
 
   const operacaoId = crypto.randomUUID();
   const descricaoItem = `Renovacao Tope TV - ${qtd} acessos`;
