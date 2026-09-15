@@ -60,6 +60,58 @@ function registrarEnvioWhatsappLegado(params: {
   );
 }
 
+// Etapa 1 (correcao real, 2026-09-15, incidente Flavio Augusto Da
+// Silva -- diagnostico completo em NEXT_SESSION.md/CLAUDE.md): os dois
+// envios WhatsApp legado + o intervalo de seguranca entre eles rodam
+// em BACKGROUND (EdgeRuntime.waitUntil), fora do caminho que o
+// navegador espera. Eram eles -- Wasender desativado, canal morto,
+// mas o codigo nao sabia disso -- que seguravam a resposta HTTP por
+// ~16s no caminho critico da confirmacao, criando a janela em que um
+// segundo clique/reenvio do cliente "vencia a corrida" da navegacao e
+// ele nunca chegava a ver a tela Pix (o Pix, em si, ja tinha sido
+// criado com sucesso). NUNCA bloqueia o retorno de
+// confirmarRenovacao()/confirmarRenovacaoLote() -- so' e' despachado
+// DEPOIS que a cobranca Pix ja foi criada, persistida e vinculada com
+// sucesso. Reaproveita exatamente as mesmas funcoes/eventos/textos de
+// sempre, so' muda QUANDO rodam -- nenhuma logica de pagamento tocada.
+async function enviarSequenciaLegadoPix(params: {
+  telefone: string;
+  conversationId: string;
+  tokenId?: string | null;
+  grupoId?: string | null;
+  contextoPreparando: string;
+  contextoPix: string;
+  textoPix: string;
+}): Promise<void> {
+  const preparando = await enviarMensagemWhatsApp(params.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
+  registrarEnvioWhatsappLegado({
+    sucesso: preparando.outcome === "success",
+    contexto: params.contextoPreparando,
+    tokenId: params.tokenId,
+    grupoId: params.grupoId,
+  });
+  if (preparando.outcome === "success") {
+    await inserirMensagem(params.conversationId, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
+  }
+
+  // Mesma folga de sempre entre os dois envios (ver
+  // _shared/envio_seguro.ts) -- preservada aqui dentro do background,
+  // pra manter a "Account Protection" do Wasender respeitada se/quando
+  // o canal voltar a ficar ativo. So' deixou de bloquear o navegador.
+  await aguardarIntervaloSeguroEntreEnvios();
+
+  const envioPix = await enviarMensagemWhatsApp(params.telefone, params.textoPix);
+  registrarEnvioWhatsappLegado({
+    sucesso: envioPix.outcome === "success",
+    contexto: params.contextoPix,
+    tokenId: params.tokenId,
+    grupoId: params.grupoId,
+  });
+  if (envioPix.outcome === "success") {
+    await inserirMensagem(params.conversationId, "ia", params.textoPix, null).catch(() => {});
+  }
+}
+
 export type AcaoConfirmacaoRenovacao = "aceitar" | "cancelar";
 export type ResultadoConfirmacaoRenovacao =
   // Campos aditivos (Portal de Renovacao, Checkpoint 3): mesmos dados ja
@@ -148,12 +200,6 @@ export async function confirmarRenovacao(params: {
     }),
   );
   await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao ${sufixoOrigem}.`, null).catch(() => {});
-
-  const preparando = await enviarMensagemWhatsApp(autorizado.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
-  registrarEnvioWhatsappLegado({ sucesso: preparando.outcome === "success", contexto: "preparando_pagamento", tokenId: autorizado.id });
-  if (preparando.outcome === "success") {
-    await inserirMensagem(autorizado.conversation_id, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
-  }
 
   const operacaoId = crypto.randomUUID();
   const descricaoItem = `Renovacao Tope TV - Plano ${autorizado.plano_nome}`.trim();
@@ -267,16 +313,19 @@ export async function confirmarRenovacao(params: {
   // gravado em cobrancas_pix acima, so' nao vai ao WhatsApp. plano_nome
   // ja esta no token (reivindicarAceite), sem consulta nova.
   const textoPix = montarMensagemPixRenovacao(valor, `Plano: ${autorizado.plano_nome}`, cobranca.paymentLinkUrl);
-  // MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO (acima) e o Pix abaixo vao
-  // pro mesmo cliente em sequencia -- folga deliberada aqui pra manter
-  // a "Account Protection" do Wasender ativa sem bloquear o 2o envio
-  // (ver _shared/envio_seguro.ts).
-  await aguardarIntervaloSeguroEntreEnvios();
-  const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
-  registrarEnvioWhatsappLegado({ sucesso: envioPix.outcome === "success", contexto: "pix", tokenId: autorizado.id });
-  if (envioPix.outcome === "success") {
-    await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
-  }
+  // Etapa 1 (2026-09-15): envio legado + intervalo de seguranca rodam
+  // em background (enviarSequenciaLegadoPix, acima) -- nunca mais
+  // atrasam a resposta que devolve a tela Pix ao navegador.
+  EdgeRuntime.waitUntil(
+    enviarSequenciaLegadoPix({
+      telefone: autorizado.telefone,
+      conversationId: autorizado.conversation_id,
+      tokenId: autorizado.id,
+      contextoPreparando: "preparando_pagamento",
+      contextoPix: "pix",
+      textoPix,
+    }),
+  );
   // Aditivo (Checkpoint 3): mesmos operacaoId/brCode/paymentLinkUrl ja
   // calculados acima, sem chamada nova -- ver comentario no tipo.
   return { outcome: "confirmada", operacaoId, brCode: cobranca.qrCodeTexto, paymentLinkUrl: cobranca.paymentLinkUrl };
@@ -361,12 +410,6 @@ async function confirmarRenovacaoLote(
   );
   await inserirMensagem(autorizado.conversation_id, "sistema", `Cliente confirmou (ACEITO) a renovacao em lote ${sufixoOrigem}.`, null).catch(() => {});
 
-  const preparando = await enviarMensagemWhatsApp(autorizado.telefone, MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO);
-  registrarEnvioWhatsappLegado({ sucesso: preparando.outcome === "success", contexto: "preparando_pagamento_lote", grupoId: autorizado.grupo_id });
-  if (preparando.outcome === "success") {
-    await inserirMensagem(autorizado.conversation_id, "ia", MENSAGEM_PREPARANDO_PAGAMENTO_RENOVACAO, null).catch(() => {});
-  }
-
   const operacaoId = crypto.randomUUID();
   const descricaoItem = `Renovacao Tope TV - ${qtd} acessos`;
   const cobranca = await criarCobrancaOpenPix(operacaoId, autorizado.valor_total_centavos, descricaoItem);
@@ -431,14 +474,19 @@ async function confirmarRenovacaoLote(
 
   const valorTotal = formatarValorBRL(autorizado.valor_total_centavos / 100) ?? "0,00";
   const textoPix = montarMensagemPixRenovacao(valorTotal, `${qtd} acessos`, cobranca.paymentLinkUrl);
-  // Mesma folga do caminho individual acima, mesmo motivo (ver
-  // _shared/envio_seguro.ts).
-  await aguardarIntervaloSeguroEntreEnvios();
-  const envioPix = await enviarMensagemWhatsApp(autorizado.telefone, textoPix);
-  registrarEnvioWhatsappLegado({ sucesso: envioPix.outcome === "success", contexto: "pix_lote", grupoId: autorizado.grupo_id });
-  if (envioPix.outcome === "success") {
-    await inserirMensagem(autorizado.conversation_id, "ia", textoPix, null).catch(() => {});
-  }
+  // Etapa 1 (2026-09-15): mesmo motivo do caminho individual acima --
+  // envio legado + intervalo de seguranca em background, nunca mais
+  // atrasam a resposta que devolve a tela Pix ao navegador.
+  EdgeRuntime.waitUntil(
+    enviarSequenciaLegadoPix({
+      telefone: autorizado.telefone,
+      conversationId: autorizado.conversation_id,
+      grupoId: autorizado.grupo_id,
+      contextoPreparando: "preparando_pagamento_lote",
+      contextoPix: "pix_lote",
+      textoPix,
+    }),
+  );
   // Aditivo (Checkpoint 3): mesmos operacaoId/brCode/paymentLinkUrl ja
   // calculados acima, sem chamada nova -- ver comentario no tipo.
   return { outcome: "confirmada", operacaoId, brCode: cobranca.qrCodeTexto, paymentLinkUrl: cobranca.paymentLinkUrl };

@@ -38,7 +38,24 @@ let handlerWebhook;
 // notificarTransferenciaHumana, gate ja coberto pela suite dedicada
 // scripts/testes/notificacao_transferencia_humana/).
 globalThis.Deno = { serve: (fn) => { handlerWebhook = fn; }, env: { get: () => undefined } };
-globalThis.EdgeRuntime = { waitUntil: (p) => { globalThis.__ultimoWaitUntil = p; } };
+// Etapa 1 (2026-09-15): enviarSequenciaLegadoPix (o envio legado do
+// Pix, agora despachado via EdgeRuntime.waitUntil) TAMBEM despacha
+// OUTRAS chamadas de EdgeRuntime.waitUntil de dentro da propria
+// execucao (registrarEnvioWhatsappLegado -> registrarEvento). Um mock
+// que so' guarda "a ultima" promise e' sobrescrito por esse
+// aninhamento e pode resolver cedo demais. Acumula TODAS as promises
+// despachadas numa fila; aguardarTodoBackground() esgota a fila ate'
+// ela parar de crescer -- cobre qualquer profundidade de
+// aninhamento, sem depender de ordem/timing.
+globalThis.__waitUntilPromises = [];
+globalThis.EdgeRuntime = { waitUntil: (p) => { globalThis.__waitUntilPromises.push(p); } };
+globalThis.aguardarTodoBackground = async function () {
+  let i = 0;
+  while (i < globalThis.__waitUntilPromises.length) {
+    await globalThis.__waitUntilPromises[i];
+    i++;
+  }
+};
 await import("../../../supabase/functions/openpix-webhook/index.ts");
 
 const TELEFONE = "5511999990000";
@@ -105,6 +122,12 @@ async function teste1() {
 
   const { tokenHash, id } = await criarTokenDeTeste();
   const resultado = await confirmarRenovacao({ tokenHash, acao: "aceitar", telefoneOrigem: TELEFONE, origem: "whatsapp" });
+  // Etapa 1 (2026-09-15): o envio legado do Pix agora roda em
+  // background (EdgeRuntime.waitUntil), fora do await de
+  // confirmarRenovacao() -- precisa esperar essa tarefa (e o que ela
+  // despacha por dentro) terminar antes de checar mensagensEnviadas
+  // mais abaixo.
+  await globalThis.aguardarTodoBackground();
   ok(resultado.outcome === "confirmada", "Teste 1: ACEITO com a ordem corrigida retorna outcome 'confirmada'");
 
   const token = lerTabela("tokens_renovacao").find((t) => t.id === id);
@@ -185,7 +208,11 @@ async function teste2() {
   const resposta = await handlerWebhook(requisicao);
   ok(resposta.status === 200, "Teste 2: openpix-webhook responde 200 pro evento CHARGE_COMPLETED");
 
-  if (globalThis.__ultimoWaitUntil) await globalThis.__ultimoWaitUntil;
+  // Etapa 1 (2026-09-15): migrado do antigo "__ultimoWaitUntil" (uma
+  // unica promise, sobrescrita por qualquer waitUntil aninhado) para o
+  // helper robusto que esgota TODAS as tarefas despachadas por
+  // openpix-webhook (iniciarRenovacaoSigma -> dispararWorkflowRenovacaoSigma).
+  await globalThis.aguardarTodoBackground();
 
   const cobranca = lerTabela("cobrancas_pix").find((c) => c.operacao_id === operacaoId);
   ok(cobranca?.status === "pago", "Teste 2: cobranca marcada como 'pago' apos reconsulta real ao provedor");

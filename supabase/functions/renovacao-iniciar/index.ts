@@ -289,7 +289,8 @@ function paginaHtmlClaro(titulo: string, corpo: string): string {
     font-size: 15px; font-weight: 700; font-family: inherit; color: var(--ink-suave);
     background: #fff; cursor: pointer; transition: background .15s ease, border-color .15s ease;
   }
-  .btn-secundario:hover { background: var(--paper); border-color: var(--ink-fraco); }
+  .btn-secundario:hover:not(:disabled) { background: var(--paper); border-color: var(--ink-fraco); }
+  .btn-secundario:disabled { color: var(--ink-fraco); cursor: not-allowed; opacity: .6; }
 
   /* ---------- CONFIRMACAO ---------- */
   .acesso.estatico { cursor: default; }
@@ -882,7 +883,26 @@ function paginaConferencia(
            <input type="hidden" name="acao" value="cancelar">
            <button class="btn-secundario" type="submit">CANCELAR</button>
          </form>
-       </div>`,
+       </div>
+       <script>
+         // Etapa 2 (correcao real, 2026-09-15, incidente Flavio Augusto Da
+         // Silva): proteção mínima contra duplo clique/duplo envio. NÃO
+         // usa preventDefault() -- o POST nativo continua exatamente como
+         // antes, só o botão fica desabilitado e muda de texto DEPOIS que
+         // o navegador já capturou o clique e iniciou a navegação, então
+         // um segundo clique no mesmo botão não dispara uma segunda
+         // requisição concorrente. Página continua 100% funcional sem
+         // JavaScript (degrada para o comportamento de antes).
+         document.querySelectorAll('.acoes-confirmacao form').forEach(function (form) {
+           form.addEventListener('submit', function () {
+             var botao = form.querySelector('button[type="submit"]');
+             var campoAcao = form.querySelector('input[name="acao"]');
+             if (!botao) return;
+             botao.disabled = true;
+             botao.textContent = (campoAcao && campoAcao.value === 'cancelar') ? 'Cancelando…' : 'Processando…';
+           });
+         });
+       </script>`,
     ),
     { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );

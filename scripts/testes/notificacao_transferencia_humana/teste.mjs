@@ -64,7 +64,25 @@ globalThis.Deno = {
 // Trilha de auditoria (Fase 3, 2026-09-14) -- _shared/renovacao_confirmacao.ts
 // agora chama registrarEvento() via EdgeRuntime.waitUntil; mesmo shim de
 // scripts/testes/renovacao_em_andamento/teste.mjs.
-globalThis.EdgeRuntime = { waitUntil: () => {} };
+// Etapa 1 (2026-09-15): desde a Etapa 1, enviarSequenciaLegadoPix (o
+// envio legado do Pix) roda via EdgeRuntime.waitUntil, fora do await
+// de confirmarRenovacao() -- e ELA MESMA despacha OUTRAS chamadas de
+// EdgeRuntime.waitUntil de dentro da propria execucao
+// (registrarEnvioWhatsappLegado -> registrarEvento). Um mock que so'
+// guarda "a ultima" promise e' sobrescrito por esse aninhamento e
+// resolve cedo demais (a tarefa externa ainda nao terminou). Acumula
+// TODAS as promises despachadas numa fila; aguardarTodoBackground()
+// esgota a fila ate' ela parar de crescer -- cobre qualquer
+// profundidade de aninhamento, sem depender de ordem/timing.
+globalThis.__waitUntilPromises = [];
+globalThis.EdgeRuntime = { waitUntil: (p) => { globalThis.__waitUntilPromises.push(p); } };
+globalThis.aguardarTodoBackground = async function () {
+  let i = 0;
+  while (i < globalThis.__waitUntilPromises.length) {
+    await globalThis.__waitUntilPromises[i];
+    i++;
+  }
+};
 
 await import("../../../supabase/functions/renovacao-sigma-resultado/index.ts");
 const handlerResultado = ultimoHandlerRegistrado;
@@ -253,6 +271,10 @@ async function grupo2() {
     paymentLinkUrl: "https://woovi-sandbox.com/pay/conv20-link",
   }));
   const r0 = await confirmarRenovacao({ tokenHash: tokenHash0, acao: "aceitar", telefoneOrigem: TELEFONE, origem: "whatsapp" });
+  // Etapa 1 (2026-09-15): o envio do Pix agora roda em background
+  // (EdgeRuntime.waitUntil) -- precisa terminar antes de checar
+  // mensagensEnviadas/mensagensHistorico abaixo.
+  await globalThis.aguardarTodoBackground();
   ok(r0.outcome === "confirmada", "G2 Ponto 0: ACEITO com cobranca ok retorna 'confirmada'");
   const pix = mensagensEnviadas.find((m) => m.texto.includes("PAGAMENTO DA RENOVA"));
   ok(!!pix, "G2 Ponto 0: mensagem do Pix foi enviada ao cliente");
