@@ -1,5 +1,194 @@
 # NEXT_SESSION.md — Checkpoint de continuidade
 
+## CHECKPOINT 2026-09-14 (c) — Painel de Monitoramento de Renovações: Fase 1/2/3 (trilha de auditoria `renovacao_eventos`) + módulo `/renovacoes` (backend + frontend) implementados, testados, deployados, commitados e publicados. Fim de sessão para troca de máquina.
+
+> **Leia isto primeiro — é o checkpoint mais recente.** Este checkpoint
+> cobre TUDO que aconteceu depois do checkpoint `(b)` logo abaixo
+> (novo vencimento nas Telas 6/7) na mesma sessão longa de
+> 2026-09-14/15: a Wasender foi definitivamente desativada como canal
+> (ver `painel_atendimento_wasender_desativado.md` na memória), o
+> Painel de Atendimento (`/conversas`) foi confirmado como código morto
+> operacionalmente (só `/unitv-token` continua vivo), e a partir daí o
+> painel atual foi transformado num **Painel Interno de Monitoramento e
+> Diagnóstico de Renovações** (`/renovacoes`), isolado do legado. O
+> checkpoint `(b)` e tudo abaixo dele (arquitetura das 7 telas do
+> Portal, decisões anteriores) continua válido e não é repetido aqui.
+
+### 1. Trilha de auditoria `renovacao_eventos` (Fase 1/2/3) — já em produção
+
+- Nova tabela `renovacao_eventos` (append-only, RLS ativo sem policy —
+  só `service_role`/backend acessa; auditoria de segurança read-only
+  feita e aprovada antes de aplicar) + colunas `sessao_id` em
+  `tokens_renovacao`/`renovacoes_lote`. Migration
+  `20260914190000_renovacao_eventos.sql` **aplicada em produção**.
+- `_shared/renovacao_eventos.ts` (Deno) + `scripts/lib/renovacao-eventos.mjs`
+  (Node, usado só pelo `renovacao-sigma-workflow.mjs` que roda fora do
+  Deno) — catálogo de 58 códigos de evento (`CATALOGO_EVENTOS`,
+  etapa+nível derivados do código, nunca passados pelo chamador),
+  `sanitizarDetalhe()` (lista negativa de campos proibidos),
+  `registrarEvento()` (nunca lança, timeout 3s, fire-and-forget via
+  `EdgeRuntime.waitUntil`, só chamado DEPOIS da mutação real confirmada).
+  Catálogos Deno/Node sincronizados por teste dedicado
+  (`teste_catalogos_sincronizados.mjs`).
+- Instrumentado (só aditivo, lógica de negócio byte-idêntica): `renovacao-iniciar`
+  (17 pontos + geração/propagação de `sessao_id`), `openpix-webhook` (12),
+  `renovacao-sigma-resultado` (17), `_shared/renovacao_confirmacao.ts` (29),
+  `scripts/renovacao-sigma-workflow.mjs` (18, cobre Sigma denso + UniTV no
+  executor "congelado").
+- **Deploy das 4 functions instrumentadas** (rodada anterior, já
+  confirmado então): `renovacao-iniciar` v9→v10 (depois v9 já tinha
+  ido pro checkpoint `(b)`... conferir versão atual real via
+  `supabase functions list`, não confiar em número fixo aqui),
+  `openpix-webhook`, `renovacao-sigma-resultado`, e o commit da
+  instrumentação (`ee98fd4`, "feat: trilha de auditoria da renovacao
+  automatica (renovacao_eventos)") já estavam publicados **antes**
+  deste checkpoint.
+
+### 2. Módulo `/renovacoes` (Painel Interno de Monitoramento) — NOVO nesta sessão
+
+**Regra absoluta que guiou tudo (exigida explicitamente pelo usuário,
+repetir em qualquer sessão futura que toque este painel):** a
+validação do token UniTV (`/unitv-token`, 3 Edge Functions
+`painel-unitv-token-*`) **não podia ser tocada, refatorada,
+reorganizada nem ter nenhum código/rota compartilhado sem aprovação
+prévia**. Em caso de dúvida entre reaproveitar algo do UniTV ou criar
+separado, a instrução era **sempre criar separado**. Isso foi seguido à
+risca — ver seção 4.
+
+Fluxo seguido, cada etapa aprovada explicitamente antes da próxima:
+**Auditoria (A–J) → Mockup HTML (Tela 1 lista + Tela 2 detalhe, 4
+rodadas até aprovação da v4, usando a logo real da Tope TV) →
+Implementação real → Revisão → Testes → Deploy → Commit.**
+
+#### Backend (Edge Functions)
+
+- `_shared/tokens_renovacao.ts`: `+listarTokensAvulsosRecentes(limite)`.
+- `_shared/renovacoes_lote.ts`: `+listarLotesRecentes(limite)`.
+- `_shared/renovacao_eventos.ts`: `+RenovacaoEventoRegistro`,
+  `+buscarEventosPorCorrelacao({tokenId?, grupoId?, sessaoId?, operacaoId?})`
+  — correlaciona pelos **4** identificadores (união OR), incluindo
+  `operacao_id` (adicionado numa 2ª rodada depois que os testes
+  descobriram que sem isso eventos gravados só com `operacaoId` — ex.:
+  `openpix-webhook` quando o `correlation_id` do webhook ainda não
+  resolveu nenhum token/lote — ficavam invisíveis na timeline). A
+  leitura agora também reaplica `sanitizarDetalhe()` em cada evento
+  (camada de leitura defensiva, mesma política da escrita, pedida
+  explicitamente pelo usuário) — e `PADRAO_CAMPO_PROIBIDO` ganhou
+  `payment[_-]?link` (cobre `paymentLinkUrl`, usado de verdade em
+  `renovacao_confirmacao.ts`).
+- **`supabase/functions/renovacao-eventos-listar/index.ts`** (NOVO) —
+  GET, `verificarOperador`, lista paginada (20/página) e filtrável por
+  `?resultado=` (`ok|falha|parcial|cancel|espera`, nunca um 6º estado
+  "ao vivo"), `?pagina=`, mescla `tokens_renovacao` (avulsa) +
+  `renovacoes_lote` em memória (sem UNION no banco).
+- **`supabase/functions/renovacao-eventos-detalhe/index.ts`** (NOVO) —
+  GET, `verificarOperador`, recebe `token_id` XOR `grupo_id`, devolve
+  resumo + `ids` (técnico, discreto) + `filhos` (só lote) + timeline
+  completa de `renovacao_eventos`. **Nunca decide o veredito/causa-raiz**
+  — só entrega dado cru, em ordem cronológica; quem decide é o
+  frontend (`encontrarRaiz()`).
+- **Deployadas** (commit `6882413`): `renovacao-eventos-listar` v1,
+  `renovacao-eventos-detalhe` v1, ambas `ACTIVE`, `verify_jwt=false`
+  (mesmo padrão de `painel-atendimento-*`/`painel-unitv-token-*`).
+  Bundle de `renovacao-eventos-detalhe` confirmado incluindo o
+  `_shared/renovacao_eventos.ts` atualizado. Verificação pós-deploy
+  (sem auth → 401; OPTIONS → 200; POST → 405; sem tocar
+  renovação/cobrança/Rocket/Sigma/UniTV) OK.
+
+#### Frontend (`painel/`, Next.js 16.3.1, App Router, 100% Client Components)
+
+- `app/renovacoes/page.tsx` (Tela 1 — lista, pills de filtro por
+  resultado, paginação), `app/renovacoes/[id]/page.tsx` (Tela 2 —
+  detalhe: banner de veredito CONCLUÍDA/NÃO CONCLUÍDA/PARCIAL/CANCELADA/
+  AGUARDANDO PAGAMENTO, causa-raiz via `encontrarRaiz()` — pega o
+  último evento de erro cuja etapa **não** é `callback_resultado`,
+  nunca aponta `resultado_gravado_falha` como origem quando existe um
+  erro real antes dele —, timeline compartilhada + cards por acesso
+  pro lote via `agruparPorAcesso()`, IDs técnicos discretos num
+  `<details>`), `app/renovacoes/layout.tsx` (header com logo real da
+  Tope TV extraída do Portal + link funcional pro `/unitv-token`, nunca
+  o contrário), `renovacoes.module.css` (CSS Modules — zero colisão de
+  classe com `/conversas`, um bug real de vazamento de classe entre
+  `.badgeResultado.ok`/`.veredito.ok`/`.acessoResultado.ok` encontrado e
+  corrigido ANTES do usuário ver), `lib/types-renovacoes.ts`,
+  `lib/api-renovacoes.ts` (helper HTTP duplicado de propósito, nunca
+  compartilhado com `lib/api.ts`, por instrução explícita "prefira
+  criar separado").
+- `app/page.tsx`: redirect raiz trocado de `/conversas` para
+  `/renovacoes` (única alteração num arquivo pré-existente, além do
+  próprio `_shared/`).
+- **Publicado no Vercel pela integração Git** — o push do commit
+  `6882413` para `origin/main` deve ter disparado o deploy automático
+  de sempre. Confirmado **parcialmente** nesta sessão: `curl -I
+  https://inovatv-api-intermediaria.vercel.app/renovacoes` devolveu
+  `HTTP 200`, `X-Matched-Path: /renovacoes`, `X-Nextjs-Prerender: 1`
+  (rota existe e foi pré-renderizada) — mas **nenhuma verificação
+  visual real no navegador, com login de operador de verdade, foi
+  feita** (nem da Tela 1 nem da Tela 2 contra dados reais). Ver seção 3.
+
+#### Testes (todos novos, nenhuma suíte antiga alterada em contrato)
+
+- `scripts/testes/renovacao_eventos_listar/` — **71/71**.
+- `scripts/testes/renovacao_eventos_detalhe/` — **91/91** (inclui
+  cenários de causa-raiz pra Rocket/Sigma/UniTV/Woovi + callback
+  genuíno, cenário de lote parcial com agrupamento por acesso sem
+  duplicar pagamento compartilhado, e a bateria de sanitização
+  defensiva com todos os campos sensíveis pedidos pelo usuário).
+- Regressão completa rodada e confirmada verde: `renovacao_eventos`
+  (36+21+3), `renovacoes_lote` (37), `painel_unitv_token` (100%),
+  `renovacao_status` (33), `renovacao_iniciar` (139+46),
+  `openpix_paymentlink` (16), `vinculo_operacao_renovacao` (24),
+  `notificacao_transferencia_humana` (97),
+  `renovacao_sigma_resultado_unitv` (100%). `tsc --noEmit` e `next
+  build` do painel limpos.
+- **`renovacao-sigma-workflow-leitura` continua com as mesmas 31
+  falhas pré-existentes** (confirmado via `git stash` numa rodada
+  anterior desta sessão que já existiam ANTES de qualquer mudança
+  desta frente) — não tocado, não é regressão, não tentar corrigir sem
+  o usuário pedir explicitamente.
+
+### 3. Pendências reais para a próxima sessão (nesta ordem de prioridade)
+
+1. **Verificação visual real do `/renovacoes` em produção** — abrir a
+   URL com um login de operador de verdade, conferir Tela 1 (lista com
+   dados reais) e Tela 2 (detalhe de pelo menos 1 avulsa e 1 lote reais,
+   se existirem) no navegador. Isso nunca foi feito — só testes
+   automatizados locais + um `curl -I` confirmando que a rota existe e
+   está pré-renderizada. Não é bloqueante (o backend e o build estão
+   verificados), mas é o único elo da cadeia ainda não observado
+   diretamente.
+2. **Os 5 arquivos `.html` soltos e não rastreados** em
+   `scripts/testes/renovacao_iniciar/` (`hostinger_renovacao_NOVO.html`,
+   `preview_concluido.html`, `preview_historico.html`, `preview_pix.html`,
+   `preview_processando.html`) continuam **fora do git** por instrução
+   explícita repetida em várias rodadas — **não existem em nenhuma
+   outra máquina/clone deste repositório**, só na máquina onde foram
+   criados. Se precisar deles em outra máquina, terão que ser copiados
+   manualmente (não é um "pendente" a resolver, é só um lembrete pra
+   não estranhar a ausência deles).
+3. Confirmar a versão atual publicada de `renovacao-iniciar` via
+   `supabase functions list` antes de assumir qualquer número — este
+   checkpoint deliberadamente não fixa um número exato pra essa function
+   porque ela foi tocada em mais de uma rodada desta mesma sessão longa.
+4. Nenhuma renovação real, cobrança ou pagamento foi executado durante
+   toda esta frente (only leituras/testes/curl de auth) — a primeira
+   renovação real que passar pelo `/renovacoes` novo ainda vai ser a
+   primeira observação de ponta a ponta do painel contra um caso
+   genuíno.
+
+### 4. Estado do repositório ao fechar esta sessão
+
+- **Commit mais recente:** `6882413686ffb42c7169be3b242ca7348bf96719`
+  ("feat: implement renewal diagnostics panel backend") — **local ==
+  origin/main**, push confirmado com sucesso.
+- **Working tree:** limpo, exceto os 5 `.html` da seção 3.2 (sempre
+  intocados, nunca staged).
+- **`/unitv-token`, `/conversas`, `painel-atendimento-*`,
+  `painel-unitv-token-*`, `scripts/renovacao-sigma-workflow.mjs`:
+  zero diff** em toda esta frente inteira (confirmado repetidas vezes
+  via `git diff --stat`) — a regra do usuário (seção 2) foi cumprida
+  sem exceção.
+
 ## CHECKPOINT 2026-09-14 (b) — Novo vencimento nas Telas 6/7 do Portal: implementado, testado, commitado e publicado (renovacao-status v2 / renovacao-iniciar v9)
 
 > **Leia isto primeiro.** Este checkpoint é posterior, na mesma data,
